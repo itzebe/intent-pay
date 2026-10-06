@@ -88,11 +88,17 @@ export function buildPaymentPlan(
   const inputIsNative = payToken.native;
 
   const symbols = route.path;
-  const tokens = symbols.map((s) => {
-    const t = getToken(s);
-    if (!t) throw new Error(`Unknown token in route: ${s}`);
-    return poolTokenAddress(t);
-  });
+  // Prefer the route's own token configs — a discovered intermediate token may
+  // not be resolvable by symbol, and must still produce a valid plan.
+  const pathTokens: TokenConfig[] =
+    route.tokens && route.tokens.length === symbols.length
+      ? route.tokens
+      : symbols.map((s) => {
+          const t = getToken(s);
+          if (!t) throw new Error(`Unknown token in route: ${s}`);
+          return t;
+        });
+  const tokens = pathTokens.map((t) => poolTokenAddress(t));
   const fees = route.hops.map((h) => h.fee);
 
   const swapRecipient: Address = outputIsNative ? sender : recipient;

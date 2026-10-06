@@ -1,14 +1,18 @@
 import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
-import { getToken } from "@/lib/config/tokens";
+import { getToken, type TokenConfig } from "@/lib/config/tokens";
 import type { Quote, QuoteResult, QuoteRequest } from "@/lib/domain/intent";
 import { validateRecipient, validateUsdAmount } from "@/lib/domain/validation";
 import { estimateNetworkCost } from "./gas";
 
 /**
  * Intent layer -> quote layer orchestration.
- * Takes a payment intent plus the chosen payment asset and produces a fully
- * priced Quote (route, both amounts, USD notionals, network cost).
+ *
+ * Takes a payment intent plus the resolved payment/receive tokens and produces
+ * a fully priced Quote (route, both amounts, USD notionals, network cost).
+ *
+ * Tokens are resolved *before* this call (by symbol or contract address) so a
+ * dynamically discovered token flows through exactly like a seed token.
  */
 export async function buildQuote(
   req: QuoteRequest,
@@ -17,8 +21,8 @@ export async function buildQuote(
 ): Promise<QuoteResult> {
   const { intent } = req;
 
-  const receiveToken = getToken(intent.receiveToken);
-  const payToken = getToken(req.payToken);
+  const receiveToken = req.receiveToken ?? getToken(intent.receiveToken);
+  const payToken = req.payTokenConfig ?? getToken(req.payToken);
   if (!receiveToken || !payToken) {
     return {
       ok: false,
@@ -98,3 +102,5 @@ export async function buildQuote(
 export function isQuoteStale(quote: Quote, maxAgeMs = 20_000): boolean {
   return Date.now() - quote.quotedAt > maxAgeMs;
 }
+
+export type { TokenConfig };

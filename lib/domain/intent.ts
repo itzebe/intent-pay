@@ -35,6 +35,9 @@ export type Route = {
   hops: RouteHop[];
   /** Human path e.g. "USDT → USDC → SOL". */
   path: string[];
+  /** Full token configs in path order — lets the client build the tx without
+   * relying on a symbol lookup, which matters for discovered tokens. */
+  tokens?: TokenConfig[];
   /** Why a route is unavailable, when it is. */
   reason?: string;
 };
@@ -74,7 +77,12 @@ export type Quote = {
 
 export type QuoteRequest = {
   intent: PaymentIntent;
+  /** Payment asset symbol (kept for convenience/back-compat). */
   payToken: string;
+  /** Resolved payment asset — preferred when the token was discovered. */
+  payTokenConfig?: TokenConfig;
+  /** Resolved receive asset — preferred when the token was discovered. */
+  receiveToken?: TokenConfig;
   network?: "mainnet" | "testnet";
   /** Demo-only market-move simulation, forwarded to the routing provider. */
   simulateMove?: number;

@@ -18,6 +18,10 @@ export const monadMainnet = defineChain({
   blockExplorers: {
     default: { name: "MonadScan", url: "https://monadscan.com" },
   },
+  contracts: {
+    // Canonical Multicall3 — used to discover pools and read balances in bulk.
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" },
+  },
   testnet: false,
 });
 
@@ -35,6 +39,9 @@ export const monadTestnet = defineChain({
   },
   blockExplorers: {
     default: { name: "MonadScan Testnet", url: "https://testnet.monadscan.com" },
+  },
+  contracts: {
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" },
   },
   testnet: true,
 });

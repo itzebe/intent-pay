@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { getToken, TOKENS, type TokenConfig } from "@/lib/config/tokens";
+import { getToken, allTokens, registerToken, type TokenConfig } from "@/lib/config/tokens";
 import type { AmountMode, Balance, PaymentIntent, Quote } from "@/lib/domain/intent";
 import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -40,6 +40,8 @@ type FlowState = {
   balancesLoading: boolean;
   /** Demo-only market-move simulation (fraction). Ignored in live mode. */
   simulateMove: number;
+  /** Bumped whenever the token registry gains a discovered token. */
+  tokensVersion: number;
 };
 
 type FlowContextValue = FlowState & {
@@ -53,6 +55,8 @@ type FlowContextValue = FlowState & {
   setBalances: (balances: Balance[]) => void;
   setBalancesLoading: (loading: boolean) => void;
   setSimulateMove: (fraction: number) => void;
+  /** Register a token resolved by the server (paste-an-address flow). */
+  addToken: (token: TokenConfig) => void;
   refreshQuote: () => void;
   /** Restore the transaction to the intended recipient amount. */
   correctToIntended: () => void;
@@ -104,18 +108,20 @@ export function PaymentProvider({
     balances: [],
     balancesLoading: false,
     simulateMove: 0,
+    tokensVersion: 0,
   });
 
   const [nonce, setNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
   const receiveTokenConfig = useMemo(
-    () => getToken(state.intent.receiveToken) ?? TOKENS[0],
-    [state.intent.receiveToken],
+    () => getToken(state.intent.receiveToken) ?? allTokens()[0],
+    // tokensVersion re-reads the registry after a discovered token registers.
+    [state.intent.receiveToken, state.tokensVersion],
   );
   const payTokenConfig = useMemo(
-    () => getToken(state.payToken) ?? TOKENS[1],
-    [state.payToken],
+    () => getToken(state.payToken) ?? allTokens()[1] ?? allTokens()[0],
+    [state.payToken, state.tokensVersion],
   );
 
   // ---- Demo balances -------------------------------------------------------
@@ -164,11 +170,22 @@ export function PaymentProvider({
           const q = json.quote as Quote;
           q.gasLimit = q.gasLimit ? (BigInt(q.gasLimit) as unknown as bigint) : undefined;
           q.gasPriceWei = q.gasPriceWei ? (BigInt(q.gasPriceWei) as unknown as bigint) : undefined;
+          // Register any discovered tokens (route hops, resolved endpoints) so
+          // the UI and the transaction builder can resolve them by symbol.
+          let learned = false;
+          for (const t of [q.payToken, q.receiveToken, ...(q.route.tokens ?? [])]) {
+            if (t?.address) {
+              const before = getToken(t.symbol)?.address;
+              registerToken(t);
+              if (before?.toLowerCase() !== t.address.toLowerCase()) learned = true;
+            }
+          }
           setState((s) => ({
             ...s,
             quote: q,
             quoting: false,
             quoteError: null,
+            tokensVersion: learned ? s.tokensVersion + 1 : s.tokensVersion,
             // In "I spend" mode the recipient amount is derived, so the intent
             // snapshot tracks the current implied value rather than a fixed one.
             intendedReceiveAmount:
@@ -256,6 +273,10 @@ export function PaymentProvider({
   }, []);
   const setSimulateMove = useCallback((fraction: number) => {
     setState((s) => ({ ...s, simulateMove: fraction }));
+  }, []);
+  const addToken = useCallback((token: TokenConfig) => {
+    registerToken(token);
+    setState((s) => ({ ...s, tokensVersion: s.tokensVersion + 1 }));
   }, []);
   const refreshQuote = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -360,6 +381,7 @@ export function PaymentProvider({
     setBalances,
     setBalancesLoading,
     setSimulateMove,
+    addToken,
     refreshQuote,
     correctToIntended,
     recommendedPayToken,

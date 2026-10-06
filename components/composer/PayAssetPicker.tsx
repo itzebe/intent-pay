@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import type { Balance } from "@/lib/domain/intent";
-import { TOKENS, type TokenConfig } from "@/lib/config/tokens";
+import type { TokenConfig } from "@/lib/config/tokens";
+import type { AppMode } from "@/lib/providers";
+import type { MonadNetwork } from "@/lib/config/chains";
 import { formatUsd } from "@/lib/format";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 import { ChevronDown, Sparkle } from "@/components/ui/Icons";
@@ -12,7 +14,7 @@ import { TokenList } from "@/components/ui/TokenList";
 /**
  * Step 3 — how will I pay?
  * Recommends the best available asset, but lets advanced users expand and
- * choose any funded asset.
+ * choose any funded asset. Any token can also be imported by address.
  */
 export function PayAssetPicker({
   balances,
@@ -20,12 +22,20 @@ export function PayAssetPicker({
   recommended,
   onSelect,
   availability,
+  catalog,
+  mode,
+  network,
+  onAddToken,
 }: {
   balances: Balance[];
   selected: string;
   recommended: string | null;
   onSelect: (symbol: string) => void;
   availability?: Record<string, boolean>;
+  catalog: TokenConfig[];
+  mode: AppMode;
+  network: MonadNetwork;
+  onAddToken?: (token: TokenConfig) => void;
 }) {
   const [open, setOpen] = useState(false);
   const funded = balances.filter((b) => b.usd > 0);
@@ -94,10 +104,14 @@ export function PayAssetPicker({
 
       <Modal open={open} onClose={() => setOpen(false)} title="Pay with">
         <TokenList
-          tokens={TOKENS as TokenConfig[]}
+          tokens={catalog}
           balances={balances}
           selected={selected}
           availability={availability}
+          mode={mode}
+          network={network}
+          onAddToken={onAddToken}
+          prefer="pay"
           onSelect={(s) => {
             onSelect(s);
             setOpen(false);

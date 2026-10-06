@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { TOKENS, type TokenConfig } from "@/lib/config/tokens";
+import type { TokenConfig } from "@/lib/config/tokens";
 import { isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
+import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
 import { buildPaymentPlan, describePlan } from "@/lib/execution/plan";
 import { executePlan, ExecutionError, type StepResult } from "@/lib/execution/execute";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -30,6 +31,7 @@ type Stage = "compose" | "review" | "executing" | "success";
 export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const flow = usePaymentFlow();
   const wallet = useWallet(flow.network);
+  const catalog = useTokenCatalog(flow.mode, flow.network);
   const [stage, setStage] = useState<Stage>("compose");
   const [tokenModal, setTokenModal] = useState<null | "receive" | "pay">(null);
   const [steps, setSteps] = useState<StepResult[]>([]);
@@ -51,11 +53,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveBalances, wallet.address, flow.mode]);
 
+  // Routability is discovered, not hardcoded: in live mode we ask the routing
+  // layer which tokens actually have a liquid route right now.
   const availability = useMemo(() => {
     const map: Record<string, boolean> = {};
-    for (const t of TOKENS) map[t.symbol] = true;
+    for (const t of catalog.tokens) map[t.symbol] = t.routable !== false;
     return map;
-  }, []);
+  }, [catalog.tokens]);
 
   const canContinue =
     recipientValid &&
@@ -208,6 +212,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   selected={flow.payToken}
                   recommended={flow.recommendedPayToken}
                   availability={availability}
+                  catalog={catalog.tokens}
+                  mode={flow.mode}
+                  network={flow.network}
+                  onAddToken={flow.addToken}
                   onSelect={(s) => flow.setPayToken(s, true)}
                 />
               </Step>
@@ -384,10 +392,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       {/* token modals */}
       <Modal open={tokenModal === "receive"} onClose={() => setTokenModal(null)} title="Recipient receives">
         <TokenList
-          tokens={TOKENS as TokenConfig[]}
+          tokens={catalog.tokens}
           balances={flow.balances}
           selected={flow.intent.receiveToken}
           availability={availability}
+          mode={flow.mode}
+          network={flow.network}
+          onAddToken={flow.addToken}
           onSelect={(s) => {
             flow.setReceiveToken(s);
             setTokenModal(null);
@@ -396,10 +407,14 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       </Modal>
       <Modal open={tokenModal === "pay"} onClose={() => setTokenModal(null)} title="Pay with">
         <TokenList
-          tokens={TOKENS as TokenConfig[]}
+          tokens={catalog.tokens}
           balances={flow.balances}
           selected={flow.payToken}
           availability={availability}
+          mode={flow.mode}
+          network={flow.network}
+          onAddToken={flow.addToken}
+          prefer="pay"
           onSelect={(s) => {
             flow.setPayToken(s, true);
             setTokenModal(null);

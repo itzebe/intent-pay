@@ -1,6 +1,8 @@
+import { useState } from "react";
 import type { TokenConfig } from "@/lib/config/tokens";
 
-/** Small, config-driven token glyph. No per-token art required. */
+/** Small, config-driven token glyph. Uses the list's logo when present, else a
+ * deterministic letter badge — no per-token art is required. */
 export function TokenBadge({
   token,
   size = 36,
@@ -10,11 +12,14 @@ export function TokenBadge({
   size?: number;
   dim?: boolean;
 }) {
+  const [logoFailed, setLogoFailed] = useState(false);
   const letter = token.symbol.replace(/^W/, "").slice(0, 1).toUpperCase();
+  const showLogo = Boolean(token.logoURI) && !logoFailed;
+
   return (
     <span
       aria-hidden
-      className="relative inline-flex shrink-0 items-center justify-center rounded-full font-bold"
+      className="relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full font-bold"
       style={{
         width: size,
         height: size,
@@ -25,7 +30,20 @@ export function TokenBadge({
         opacity: dim ? 0.55 : 1,
       }}
     >
-      {letter}
+      {showLogo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={token.logoURI}
+          alt=""
+          width={size}
+          height={size}
+          loading="lazy"
+          onError={() => setLogoFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        letter
+      )}
     </span>
   );
 }

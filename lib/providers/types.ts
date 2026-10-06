@@ -52,7 +52,7 @@ export type UsdPrice = {
 export interface RoutingProvider {
   readonly name: string;
   readonly mode: "live" | "demo";
-  /** Can this provider route the given token? */
+  /** Can this provider attempt to route the given token? */
   supports(token: TokenConfig): boolean;
   /** Discover + price a route. */
   quote(req: RouteQuoteRequest): Promise<RouteQuoteResult>;

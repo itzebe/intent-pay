@@ -1,4 +1,4 @@
-import { TOKENS, type TokenConfig } from "@/lib/config/tokens";
+import { allTokens, type TokenConfig } from "@/lib/config/tokens";
 import { formatUnits, parseUnits } from "@/lib/domain/math";
 import type {
   RouteQuoteRequest,
@@ -29,25 +29,29 @@ export class DemoProvider implements RoutingProvider {
   readonly mode = "demo" as const;
 
   supports(token: TokenConfig): boolean {
-    return TOKENS.some((t) => t.symbol === token.symbol);
+    return allTokens().some((t) => t.address.toLowerCase() === token.address.toLowerCase());
   }
 
   async priceUsd(token: TokenConfig): Promise<UsdPrice> {
-    return { usd: token.fallbackUsd, source: "fallback" };
+    // Demo pricing is deterministic sample data. A discovered token with no
+    // shipped fallback price gets $1 so the demo stays explorable — and it is
+    // always labelled as demo pricing.
+    return { usd: token.fallbackUsd > 0 ? token.fallbackUsd : 1, source: "fallback" };
   }
 
   async availableSymbols(): Promise<string[]> {
-    return TOKENS.map((t) => t.symbol);
+    return allTokens().map((t) => t.symbol);
   }
 
   async quote(req: RouteQuoteRequest): Promise<RouteQuoteResult> {
     const { payToken, receiveToken, mode, amount } = req;
     const usd = req.usd !== false;
     const spread = 1 - DEMO_SPREAD;
+    const priceOf = (t: TokenConfig) => (t.fallbackUsd > 0 ? t.fallbackUsd : 1);
 
     if (payToken.symbol === receiveToken.symbol) {
       const units = usd
-        ? round(Number(amount) / receiveToken.fallbackUsd, receiveToken.decimals)
+        ? round(Number(amount) / priceOf(receiveToken), receiveToken.decimals)
         : amount;
       return {
         ok: true,
@@ -64,11 +68,11 @@ export class DemoProvider implements RoutingProvider {
       // The recipient should receive `amount` USD of the receive token. A demo
       // "price move" bumps the delivered value so the overpayment guard is
       // demonstrable; the sender pays for whatever is actually delivered.
-      const intendedUsd = usd ? Number(amount) : Number(amount) * receiveToken.fallbackUsd;
+      const intendedUsd = usd ? Number(amount) : Number(amount) * priceOf(receiveToken);
       const receiveUsd = intendedUsd * (1 + (req.simulateMove ?? 0));
-      const receiveAmount = round(receiveUsd / receiveToken.fallbackUsd, receiveToken.decimals);
+      const receiveAmount = round(receiveUsd / priceOf(receiveToken), receiveToken.decimals);
       const payUsd = receiveUsd / spread;
-      const payAmount = round(payUsd / payToken.fallbackUsd, payToken.decimals);
+      const payAmount = round(payUsd / priceOf(payToken), payToken.decimals);
       return {
         ok: true,
         route: { kind: "swap", hops: [], path: [payToken.symbol, receiveToken.symbol] },
@@ -81,10 +85,10 @@ export class DemoProvider implements RoutingProvider {
     }
 
     // i_spend: the sender spends `amount` USD of the pay token.
-    const payUsd = usd ? Number(amount) : Number(amount) * payToken.fallbackUsd;
-    const payAmount = usd ? round(payUsd / payToken.fallbackUsd, payToken.decimals) : amount;
+    const payUsd = usd ? Number(amount) : Number(amount) * priceOf(payToken);
+    const payAmount = usd ? round(payUsd / priceOf(payToken), payToken.decimals) : amount;
     const receiveUsd = payUsd * spread;
-    const receiveAmount = round(receiveUsd / receiveToken.fallbackUsd, receiveToken.decimals);
+    const receiveAmount = round(receiveUsd / priceOf(receiveToken), receiveToken.decimals);
     return {
       ok: true,
       route: { kind: "swap", hops: [], path: [payToken.symbol, receiveToken.symbol] },

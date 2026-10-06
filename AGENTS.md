@@ -50,6 +50,23 @@ on which provider is active beyond the demo/live label.
 - Exact-payment protection only fires on over-delivery. A shortfall is expected
   in "I spend" mode.
 
+## Routing gotchas (Monad / Uniswap V3)
+
+- **QuoterV2 returns its result by reverting.** `client.multicall()` discards
+  revert data, so it reports every quote as a failure. `quoteMany` calls
+  Multicall3 `aggregate3` directly (`MULTICALL3_ADDRESS`) and decodes each raw
+  return; the single-call fallback must read `err.data` / `err.cause.data`.
+- **Every fee tier must be quoted.** A token can have a `fee=100` pool that
+  reverts while the `fee=3000` pool holds the real liquidity. Collapsing a
+  neighbour to one arbitrary fee tier silently kills the route.
+- **Graph reuse must be keyed on probed basis tokens**, not merely "token is a
+  node". `coversEndpoints` checks `basisKeys`; otherwise a later quote reuses a
+  graph where the new token's pair was never probed.
+- SOL has no liquidity on Monad today — `USDT -> SOL` failing live with
+  `route_unavailable` is correct, not a bug. Demo mode quotes it as sample data.
+- The native MON endpoint is `0x0` and is wrapped to WMON (`NATIVE_POOL_KEY`)
+  for pool lookup; `priceUsd` handles the native basis token.
+
 ## Testing the flow
 
 `/api/quote` accepts a JSON body and is the fastest way to exercise routing

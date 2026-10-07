@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { formatAmount, isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
@@ -20,6 +20,7 @@ import { RecipientField } from "./RecipientField";
 import { AmountField } from "./AmountField";
 import { PayAssetPicker } from "./PayAssetPicker";
 import { ModeToggle } from "./ModeToggle";
+import { IntentEngine } from "./IntentEngine";
 import { MismatchAlert } from "./MismatchAlert";
 import { DemoControls } from "./DemoControls";
 import { LiveCalculation } from "./LiveCalculation";
@@ -44,6 +45,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const [delivery, setDelivery] = useState<
     { verified: boolean; delivered: string; expected: string; reason?: string } | null
   >(null);
+  // Anchor the collected intent steps so a natural-language prefill can scroll
+  // the user down to the fields it just filled.
+  const composeRef = useRef<HTMLDivElement>(null);
 
   const recipientValid = isEvmAddress(flow.intent.recipient);
 
@@ -291,8 +295,18 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             transition={{ duration: 0.2 }}
             className="grid gap-5 p-5 sm:grid-cols-[1.05fr_0.95fr] sm:gap-6 sm:p-6"
           >
+            {/* Optional natural-language front door. It only pre-fills the
+                fields below; the same quote → review → approval flow runs. */}
+            <div className="sm:col-span-2">
+              <IntentEngine
+                onPrefilled={() =>
+                  composeRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }
+              />
+            </div>
+
             {/* left: intent */}
-            <div className="min-w-0 space-y-4">
+            <div ref={composeRef} className="min-w-0 scroll-mt-24 space-y-4">
               <Step n={1}>
                 <RecipientField
                   value={flow.intent.recipient}

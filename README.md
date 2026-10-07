@@ -55,6 +55,21 @@ No token-specific code paths.
 Demo mode also exposes a labelled *Simulate price move* control so the
 exact-payment protection can be demonstrated without a live transaction.
 
+## Natural-language intents
+
+Alongside the form, you can describe the payment in plain English — for example
+`Send $10 worth of MON to 0xABC…`, `Send 10 MON`, or `Send $10`. The Intent
+Engine extracts recipient, amount, and asset, asks only for whatever is
+missing, and then hands the completed fields to the **same** composer (same
+quote, routing, review, and approval flow).
+
+- Parsing is deterministic and works with no AI provider configured. An optional
+  LLM may only fill gaps; it can never supply a price, route, address, or
+  transaction.
+- `$10`, `10 MON`, and `$10 worth of MON` are treated differently on purpose.
+- A name without an address is never turned into an address; the app asks for
+  the real address.
+
 ## Development
 
 ```bash
@@ -68,6 +83,10 @@ Environment (optional):
 
 ```
 MONAD_RPC_URL=https://rpc.monad.xyz
+# Optional AI-assisted intent parsing (the app works without it):
+INTENT_LLM_API_KEY=
+INTENT_LLM_BASE_URL=https://api.openai.com/v1
+INTENT_LLM_MODEL=gpt-4o-mini
 ```
 
 ## Notes

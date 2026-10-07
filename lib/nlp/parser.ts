@@ -1,0 +1,233 @@
+import { isEvmAddress } from "@/lib/format";
+import {
+  emptyIntent,
+  sanitizePatch,
+  type ParsedPaymentIntent,
+} from "./schema";
+import type { MonadNetwork } from "@/lib/config/chains";
+
+/**
+ * Deterministic natural-language parser.
+ *
+ * This is the *authority* for turning an English payment instruction into the
+ * strict intent schema. It is rule-based, offline, side-effect free and always
+ * available — so intent parsing keeps working even when the optional LLM is
+ * down. An LLM may supply a *hint* afterwards (see `mergeHints`), but it can
+ * never override a field the deterministic rules already extracted, and it can
+ * never introduce a value the rules would reject.
+ *
+ * The three amount forms are deliberately distinct:
+ *   "$10"              -> USD_VALUE,    asset null
+ *   "10 MON"           -> TOKEN_AMOUNT, asset MON
+ *   "$10 worth of MON" -> USD_VALUE,    asset MON
+ */
+
+export type ParseHint = {
+  patch: unknown;
+  source?: "llm";
+};
+
+export type ParseResult = {
+  intent: ParsedPaymentIntent;
+  /** Human-readable notes about what was understood (never financial claims). */
+  understood: string[];
+  /** Fields the deterministic rules could not resolve. */
+  unresolved: string[];
+};
+
+/** Symbols the catalog knows — passed in so the parser never invents a token. */
+export type ParserContext = {
+  symbols: string[];
+  network?: MonadNetwork;
+};
+
+export function parseIntent(text: string, ctx: ParserContext): ParsedPaymentIntent {
+  return parseDetailed(text, ctx).intent;
+}
+
+/** Parse a plain-English payment instruction into the strict intent schema. */
+export function parseDetailed(text: string, ctx: ParserContext): ParseResult {
+  const network = ctx.network ?? "mainnet";
+  const intent = emptyIntent(network);
+  const understood: string[] = [];
+  const unresolved: string[] = [];
+
+  let s = (text ?? "").trim();
+  if (!s) return { intent, understood, unresolved };
+
+  // ---- Recipient address (explicit 0x only; never guessed from a name) ----
+  const addrMatch = s.match(/0x[a-fA-F0-9]{40}/);
+  if (addrMatch) {
+    intent.recipientAddress = addrMatch[0];
+    // Remove the address plus a preceding "to" so it can't become a name.
+    s = s.replace(new RegExp(String.raw`\bto\s+${addrMatch[0]}`, "i"), " ");
+    s = s.replace(addrMatch[0], " ");
+  }
+
+  // ---- Explicit "$ amount worth of / in MON" (USD value + asset) ----------
+  const valued = extractUsdWithAsset(s, ctx.symbols);
+  // ---- USD value ("$10", "10 usd") ----------------------------------------
+  const usd = extractUsd(s);
+  // ---- Token amount ("10 MON") --------------------------------------------
+  const tokenAmount = extractTokenAmount(s, ctx.symbols);
+
+  if (valued && Number(valued.amount) > 0) {
+    intent.amount = valued.amount;
+    intent.amountType = "USD_VALUE";
+    intent.asset = valued.symbol;
+  } else if (usd && Number(usd.amount) > 0) {
+    intent.amount = usd.amount;
+    intent.amountType = "USD_VALUE";
+    // "$10 USDC" (no "worth of") still names the asset.
+    if (tokenAmount) intent.asset = tokenAmount.symbol;
+  } else if (tokenAmount && Number(tokenAmount.amount) > 0) {
+    intent.amount = tokenAmount.amount;
+    intent.amountType = "TOKEN_AMOUNT";
+    intent.asset = tokenAmount.symbol;
+  }
+
+  // Bare symbol with no quantity ("send MON to 0x…") — asset only.
+  if (!intent.asset) {
+    const bare = extractBareSymbol(s, ctx.symbols);
+    if (bare) intent.asset = bare;
+  }
+
+  // ---- Recipient name (recorded as a name only; never an address) ---------
+  const name = extractRecipientName(s, ctx.symbols);
+  if (name) intent.recipientName = name;
+
+  if (intent.amount) {
+    understood.push(
+      intent.amountType === "USD_VALUE"
+        ? `$${intent.amount}`
+        : `${intent.amount} ${intent.asset ?? "?"}`,
+    );
+  }
+  if (intent.asset) understood.push(`asset ${intent.asset}`);
+  if (intent.recipientAddress) understood.push(`recipient ${intent.recipientAddress}`);
+  if (intent.recipientName) {
+    understood.push(`name "${intent.recipientName}" — address still needed`);
+  }
+  return { intent, understood, unresolved };
+}
+
+// ---------------------------------------------------------------------------
+// Extraction helpers
+// ---------------------------------------------------------------------------
+
+function extractUsd(s: string): { amount: string } | null {
+  const m = s.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
+  if (m) return { amount: m[1].replace(/,/g, "") };
+  const m2 = s.match(/\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:usd|dollars?|bucks?)\b/i);
+  if (m2) return { amount: m2[1].replace(/,/g, "") };
+  return null;
+}
+
+/** "$10 worth of MON" / "10 dollars in MON" / "$10 of MON". */
+function extractUsdWithAsset(s: string, symbols: string[]): { amount: string; symbol: string } | null {
+  const sym = symbolAlternation(symbols);
+  if (!sym) return null;
+  const m = s.match(
+    new RegExp(
+      String.raw`\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:worth\s+of|worth|of|in|into)\s+(${sym})\b`,
+      "i",
+    ),
+  );
+  if (m) return { amount: m[1].replace(/,/g, ""), symbol: canonical(m[2], symbols) };
+  const m2 = s.match(
+    new RegExp(
+      String.raw`\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:usd|dollars?)\s*(?:worth\s+of|of|in|into)\s+(${sym})\b`,
+      "i",
+    ),
+  );
+  if (m2) return { amount: m2[1].replace(/,/g, ""), symbol: canonical(m2[2], symbols) };
+  return null;
+}
+
+type AssetMatch = { symbol: string; amount: string };
+
+/** Find "<number> <SYMBOL>", ignoring any $ so "$10 USDC" names USDC. */
+function extractTokenAmount(s: string, symbols: string[]): AssetMatch | null {
+  const sym = symbolAlternation(symbols);
+  if (!sym) return null;
+  const m = s.match(new RegExp(String.raw`\b([0-9][0-9,]*(?:\.[0-9]+)?)\s+(${sym})\b`, "i"));
+  if (!m) return null;
+  return { amount: m[1].replace(/,/g, ""), symbol: canonical(m[2], symbols) };
+}
+
+/** A symbol the user names without a quantity: "send MON to 0x…". */
+function extractBareSymbol(s: string, symbols: string[]): string | null {
+  const sym = symbolAlternation(symbols);
+  if (!sym) return null;
+  const m = new RegExp(String.raw`\b(${sym})\b`, "i").exec(s);
+  return m ? canonical(m[1], symbols) : null;
+}
+
+/**
+ * Recipient-name extraction. Only a capitalised, non-reserved word introduced
+ * by "to"/"for", or the token right after a payment verb. A name is recorded as
+ * a *name only*; it never becomes an address.
+ */
+function extractRecipientName(s: string, symbols: string[]): string | null {
+  const reserved = new Set([
+    "monad", "usd", "dollar", "dollars", "bucks", "worth", "send", "pay", "transfer",
+    "give", "wire", "remit", "the", "to", "for", "in", "of", "into", "using", "with",
+    "address", "wallet",
+    ...symbols.map((x) => x.toLowerCase()),
+  ]);
+  const clean = (w: string) => w.replace(/[^A-Za-z0-9._-]/g, "");
+
+  const toName = s.match(/\b(?:to|for)\s+([A-Za-z][A-Za-z0-9._-]{1,39})\b/);
+  if (toName && !reserved.has(toName[1].toLowerCase())) return clean(toName[1]);
+
+  const verbName = s.match(
+    /\b(?:send|pay|transfer|give|wire|remit)\s+([A-Za-z][A-Za-z0-9._-]{1,39})\b/i,
+  );
+  if (verbName && !reserved.has(verbName[1].toLowerCase())) return clean(verbName[1]);
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Symbol matching (never invents a token: only tokens in `symbols`)
+// ---------------------------------------------------------------------------
+
+function symbolAlternation(symbols: string[]): string | null {
+  const list = [...new Set(symbols.filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (!list.length) return null;
+  // Longest-first so "USDC" wins over a shorter prefix; escape regex metachars.
+  return list.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+}
+
+function canonical(sym: string, symbols: string[]): string {
+  return symbols.find((s) => s.toLowerCase() === sym.toLowerCase()) ?? sym;
+}
+
+// ---------------------------------------------------------------------------
+// Optional LLM enhancement
+// ---------------------------------------------------------------------------
+
+/**
+ * Merge an untrusted LLM patch into a deterministic result.
+ *
+ * Rules:
+ *  - The deterministic parse always wins for any field it already filled.
+ *  - The LLM may only fill *gaps*, with values that survive `sanitizePatch`.
+ *  - Addresses, prices, routes and unknown fields are structurally impossible.
+ */
+export function mergeHints(
+  base: ParsedPaymentIntent,
+  hint: ParseHint,
+  ctx: ParserContext,
+): ParsedPaymentIntent {
+  const patch = sanitizePatch(hint.patch, ctx.symbols);
+  const merged: ParsedPaymentIntent = { ...base };
+  if (!merged.amount && patch.amount) merged.amount = patch.amount;
+  if (!merged.amountType && patch.amountType) merged.amountType = patch.amountType;
+  if (!merged.asset && patch.asset) merged.asset = patch.asset;
+  if (!merged.recipientName && !merged.recipientAddress && patch.recipientName) {
+    merged.recipientName = patch.recipientName;
+  }
+  return merged;
+}
+
+export { isEvmAddress };

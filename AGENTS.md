@@ -26,6 +26,7 @@ server (or remove `.next`) afterwards.
 ## Architecture layers
 
 - Intent: `lib/domain/intent.ts`, `lib/domain/validation.ts`
+- Natural-language intent: `lib/nlp/*` (schema, parser, engine, question, handoff, llm)
 - Wallet/balances: `lib/hooks/useWallet.ts`, `app/api/balances/route.ts`
 - Quote/routing: `lib/providers/*`, `lib/server/quote.ts`
 - Construction: `lib/execution/plan.ts`, `lib/execution/abis.ts`
@@ -35,6 +36,36 @@ server (or remove `.next`) afterwards.
 The routing provider is behind `lib/providers/index.ts` (`getRoutingProvider`).
 Demo and live providers implement the same interface; the UI must never branch
 on which provider is active beyond the demo/live label.
+
+## Natural-language Intent Engine
+
+`lib/nlp/*` + `app/api/nlp/route.ts` + `components/composer/IntentEngine.tsx`
+turn a sentence ("Send $10 worth of MON to 0x…") into the existing payment
+intent. It is an **additional interface layer**, not a second payment system:
+
+- **Parser (`parser.ts`) is the authority.** Rule-based, offline, deterministic.
+  It must keep working with no LLM configured. Three amount forms are distinct:
+  `$10` → USD_VALUE/no asset, `10 MON` → TOKEN_AMOUNT/asset MON,
+  `$10 worth of MON` → USD_VALUE/asset MON.
+- **State machine (`schema.ts`) is derived only from the structured draft** —
+  never from LLM memory. Missing field order: amount → asset → recipient.
+  `NEEDS_*` states ask one question at a time (`question.ts`).
+- **The LLM is optional and can only fill gaps.** `sanitizePatch` drops
+  addresses, prices, routes, calldata and unknown keys; the deterministic parse
+  always wins. Provider is configured via `INTENT_LLM_*` / `OPENAI_API_KEY` /
+  `OPENROUTER_API_KEY`; absent/unreachable → deterministic flow only.
+- **No new financial machinery.** A completed draft is handed to the existing
+  composer via `prefillFromIntent` and runs the same quote → route → review →
+  approval pipeline. A token-amount intent is converted to USD using the live
+  price (`handoff.ts`); if there is no live price we refuse rather than fake it.
+- **Never guess an address from a name.** A name is recorded as a name; the
+  address is only ever an explicit, validated `0x…` value.
+- **The requested output asset is authoritative** — the engine never silently
+  substitutes the asset the sender happens to hold; obtaining it is the existing
+  router/optimizer's job.
+- The engine must never break the manual flow: any failure returns a non-fatal
+  error and the form composer keeps working.
+
 
 ## Ecosystem integrations (T10)
 

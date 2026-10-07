@@ -68,6 +68,17 @@ type FlowContextValue = FlowState & {
   refreshQuote: () => void;
   /** Restore the transaction to the intended recipient amount. */
   correctToIntended: () => void;
+  /**
+   * Pre-fill the composer from a completed natural-language intent. Used by the
+   * Intent Engine card: it copies the collected fields in and lets the existing
+   * quote/route/review flow take over from there.
+   */
+  prefillFromIntent: (input: {
+    recipient: string;
+    receiveToken: string;
+    receiveAmountUsd: string;
+    amountMode?: AmountMode;
+  }) => void;
   recommendedPayToken: string | null;
   balanceFor: (symbol: string) => Balance | undefined;
   receiveTokenConfig: TokenConfig;
@@ -318,6 +329,38 @@ export function PaymentProvider({
     setNonce((n) => n + 1);
   }, []);
 
+  const prefillFromIntent = useCallback(
+    (input: {
+      recipient: string;
+      receiveToken: string;
+      receiveAmountUsd: string;
+      amountMode?: AmountMode;
+    }) => {
+      setState((s) => {
+        const amountMode = input.amountMode ?? "recipient_receives";
+        return {
+          ...s,
+          intent: {
+            ...s.intent,
+            recipient: input.recipient,
+            receiveToken: input.receiveToken,
+            receiveAmount: input.receiveAmountUsd,
+            amountMode,
+          },
+          // Pin the recipient amount as the intent, and hand payment-asset
+          // selection back to the optimizer (the user didn't choose one).
+          intendedReceiveAmount:
+            amountMode === "recipient_receives" ? input.receiveAmountUsd : null,
+          payTokenIsManual: false,
+          quote: null,
+          quoteError: null,
+        };
+      });
+      setNonce((n) => n + 1);
+    },
+    [],
+  );
+
   const balanceFor = useCallback(
     (symbol: string) => state.balances.find((b) => b.token.symbol === symbol),
     [state.balances],
@@ -434,6 +477,7 @@ export function PaymentProvider({
     addToken,
     refreshQuote,
     correctToIntended,
+    prefillFromIntent,
     recommendedPayToken,
     balanceFor,
     receiveTokenConfig,

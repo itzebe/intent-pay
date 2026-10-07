@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { Balance } from "@/lib/domain/intent";
 import type { Clarification } from "@/lib/nlp/question";
@@ -30,7 +29,6 @@ export type NlpAsset = {
 
 export type NlpResult = {
   ok: true;
-  mode: AppMode;
   network: MonadNetwork;
   llm: boolean;
   state: IntentState;
@@ -45,7 +43,6 @@ export type NlpResult = {
 };
 
 export function useIntentEngine(
-  mode: AppMode,
   network: MonadNetwork,
   balances: Balance[],
 ) {
@@ -75,7 +72,6 @@ export function useIntentEngine(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text: message,
-            mode,
             network,
             // Real balances only — the engine never invents holdings.
             balances: balances.map((b) => ({
@@ -104,7 +100,7 @@ export function useIntentEngine(
     },
     // balancesKey restarts the callback when real balances change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, network, balancesKey, draft],
+    [network, balancesKey, draft],
   );
 
   const reset = useCallback(() => {

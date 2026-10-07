@@ -1,4 +1,4 @@
-import { getRoutingProvider, type AppMode } from "@/lib/providers";
+import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { getToken, type TokenConfig } from "@/lib/config/tokens";
 import type { Quote, QuoteResult, QuoteRequest } from "@/lib/domain/intent";
@@ -18,7 +18,6 @@ import { gasCapabilities } from "./gasCapabilities";
  */
 export async function buildQuote(
   req: QuoteRequest,
-  mode: AppMode,
   network: MonadNetwork = "mainnet",
 ): Promise<QuoteResult> {
   const { intent } = req;
@@ -44,7 +43,7 @@ export async function buildQuote(
     return { ok: false, code: amountIssue.code, message: amountIssue.message };
   }
 
-  const provider = getRoutingProvider(mode, network);
+  const provider = getRoutingProvider(network);
 
   const routeResult = await provider.quote({
     payToken,
@@ -52,7 +51,7 @@ export async function buildQuote(
     mode: intent.amountMode,
     amount: intent.receiveAmount,
     usd: true,
-    simulateMove: mode === "demo" ? req.simulateMove : undefined,
+
     network,
   });
 
@@ -85,7 +84,6 @@ export async function buildQuote(
 
   const quote: Quote = {
     intent,
-    mode,
     network,
     payToken,
     receiveToken,
@@ -104,9 +102,12 @@ export async function buildQuote(
     payPriceSource: payPrice.source,
     receivePriceSource: receivePrice.source,
     receivePriceUnavailable: !(receivePrice.usd > 0),
-    // Demo mode never touches the chain, so gas is never sponsored there.
+    // Gas handling is reported honestly: sponsorship / ERC-20 gas is only
+    // offered when an Alchemy gas policy is configured; the wallet must also
+    // advertise the capability (checked in the browser) for it to actually be
+    // used, so a quote never overclaims sponsorship it can't deliver.
     gas: {
-      mode: mode === "live" && caps.sponsorshipConfigured ? "sponsored" : "native",
+      mode: caps.sponsorshipConfigured ? "sponsored" : "native",
       sponsorshipConfigured: caps.sponsorshipConfigured,
       rpc: caps.rpc,
     },

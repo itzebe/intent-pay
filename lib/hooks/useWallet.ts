@@ -91,7 +91,7 @@ export function useWallet(network: MonadNetwork = "mainnet") {
     if (!provider) {
       setState((s) => ({
         ...s,
-        error: "No browser wallet detected. Install MetaMask, or use Demo Mode.",
+        error: "No browser wallet detected. Install a browser wallet such as MetaMask to pay on Monad.",
       }));
       return;
     }

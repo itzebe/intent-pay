@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TokenConfig } from "@/lib/config/tokens";
 import type { Balance } from "@/lib/domain/intent";
-import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { formatUsd, isEvmAddress, shortAddress } from "@/lib/format";
 import { TokenBadge } from "./TokenBadge";
@@ -41,7 +40,6 @@ export function TokenList({
   onSelect,
   availability,
   showBalances = true,
-  mode = "demo",
   network = "mainnet",
   onAddToken,
   prefer = "any",
@@ -52,7 +50,6 @@ export function TokenList({
   onSelect: (symbol: string) => void;
   availability?: Record<string, boolean | null>;
   showBalances?: boolean;
-  mode?: AppMode;
   network?: MonadNetwork;
   onAddToken?: (token: TokenConfig) => void;
   /** "pay" hides tokens known to have no route; "receive" shows everything. */
@@ -104,7 +101,7 @@ export function TokenList({
     setPaste({ status: "loading", address: query });
     const timer = setTimeout(async () => {
       try {
-        const res = await resolveAddress(query, mode, network);
+        const res = await resolveAddress(query, network);
         if (cancelled) return;
         if (!res.ok || !res.found || !res.token) {
           setPaste({
@@ -138,7 +135,7 @@ export function TokenList({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, isAddress, mode, network]);
+  }, [query, isAddress, network]);
 
   const unknownMetadata = (t: TokenConfig) =>
     !t.symbol || t.symbol === "Unknown" || t.name === "Unknown token";

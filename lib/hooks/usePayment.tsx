@@ -11,9 +11,7 @@ import {
 } from "react";
 import { getToken, allTokens, registerToken, type TokenConfig } from "@/lib/config/tokens";
 import type { AmountMode, Balance, PaymentIntent, Quote } from "@/lib/domain/intent";
-import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
-import { demoBalances } from "@/lib/demo/wallet";
 import { parseUnits } from "@/lib/domain/math";
 import { isEvmAddress } from "@/lib/format";
 import {
@@ -23,8 +21,6 @@ import {
 import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities";
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 
-export const DEMO_RECIPIENT = "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4";
-
 export type QuoteError = {
   code: string;
   message: string;
@@ -32,7 +28,6 @@ export type QuoteError = {
 };
 
 type FlowState = {
-  mode: AppMode;
   network: MonadNetwork;
   intent: PaymentIntent;
   payToken: string;
@@ -44,8 +39,6 @@ type FlowState = {
   quoteError: QuoteError | null;
   balances: Balance[];
   balancesLoading: boolean;
-  /** Demo-only market-move simulation (fraction). Ignored in live mode. */
-  simulateMove: number;
   /** Bumped whenever the token registry gains a discovered token. */
   tokensVersion: number;
   /** Wall-clock (ms) when the current quote finished resolving. */
@@ -53,7 +46,6 @@ type FlowState = {
 };
 
 type FlowContextValue = FlowState & {
-  setMode: (mode: AppMode) => void;
   setNetwork: (network: MonadNetwork) => void;
   setRecipient: (recipient: string) => void;
   setReceiveToken: (symbol: string) => void;
@@ -62,7 +54,6 @@ type FlowContextValue = FlowState & {
   setPayToken: (symbol: string, manual?: boolean) => void;
   setBalances: (balances: Balance[]) => void;
   setBalancesLoading: (loading: boolean) => void;
-  setSimulateMove: (fraction: number) => void;
   /** Register a token resolved by the server (paste-an-address flow). */
   addToken: (token: TokenConfig) => void;
   refreshQuote: () => void;
@@ -114,21 +105,20 @@ const MISM = 0.005; // 0.5% tolerance for the exact-payment protection
 
 export function PaymentProvider({
   children,
-  initialMode = "demo",
 }: {
   children: React.ReactNode;
-  initialMode?: AppMode;
 }) {
   const [state, setState] = useState<FlowState>({
-    mode: initialMode,
     network: "mainnet",
+    // The form composer is USD-denominated ("recipient receives $X of TOKEN").
+    // Defaults are arbitrary starting points the user edits — not demo data.
     intent: {
-      recipient: DEMO_RECIPIENT,
-      receiveToken: "SOL",
+      recipient: "",
+      receiveToken: "USDC",
       receiveAmount: "5",
       amountMode: "recipient_receives",
     },
-    payToken: "USDT",
+    payToken: "USDC",
     payTokenIsManual: false,
     intendedReceiveAmount: "5",
     quote: null,
@@ -136,7 +126,6 @@ export function PaymentProvider({
     quoteError: null,
     balances: [],
     balancesLoading: false,
-    simulateMove: 0,
     tokensVersion: 0,
     autoRefreshAt: 0,
   });
@@ -154,20 +143,9 @@ export function PaymentProvider({
     [state.payToken, state.tokensVersion],
   );
 
-  // ---- Demo balances -------------------------------------------------------
-  useEffect(() => {
-    if (state.mode === "demo") {
-      setState((s) => ({ ...s, balances: demoBalances(), balancesLoading: false }));
-    } else {
-      // Live mode reads balances from the connected wallet; drop demo samples
-      // so they can never masquerade as real holdings.
-      setState((s) => ({ ...s, balances: [], balancesLoading: false }));
-    }
-  }, [state.mode]);
-
   // ---- Auto quote (debounced) ---------------------------------------------
   useEffect(() => {
-    const { intent, payToken, mode, network } = state;
+    const { intent, payToken, network } = state;
     // Don't spam the network for obviously invalid input.
     if (!isEvmAddress(intent.recipient) || !intent.receiveAmount) {
       setState((s) => ({ ...s, quote: null, quoteError: null, quoting: false }));
@@ -188,9 +166,7 @@ export function PaymentProvider({
           body: JSON.stringify({
             ...intent,
             payToken,
-            mode,
             network,
-            simulateMove: state.simulateMove,
           }),
           signal: controller.signal,
         });
@@ -257,16 +233,11 @@ export function PaymentProvider({
     state.intent.receiveAmount,
     state.intent.amountMode,
     state.payToken,
-    state.mode,
     state.network,
-    state.simulateMove,
     nonce,
   ]);
 
   // ---- Setters -------------------------------------------------------------
-  const setMode = useCallback((mode: AppMode) => {
-    setState((s) => ({ ...s, mode, quote: null, quoteError: null }));
-  }, []);
   const setNetwork = useCallback((network: MonadNetwork) => {
     setState((s) => ({ ...s, network, quote: null, quoteError: null }));
   }, []);
@@ -302,9 +273,6 @@ export function PaymentProvider({
   const setBalancesLoading = useCallback((loading: boolean) => {
     setState((s) => ({ ...s, balancesLoading: loading }));
   }, []);
-  const setSimulateMove = useCallback((fraction: number) => {
-    setState((s) => ({ ...s, simulateMove: fraction }));
-  }, []);
   const addToken = useCallback((token: TokenConfig) => {
     registerToken(token);
     setState((s) => ({ ...s, tokensVersion: s.tokensVersion + 1 }));
@@ -316,9 +284,6 @@ export function PaymentProvider({
       if (!s.intendedReceiveAmount) return s;
       return {
         ...s,
-        // Drop any demo market-move simulation so the quote actually returns to
-        // the intended recipient amount.
-        simulateMove: 0,
         intent: {
           ...s.intent,
           amountMode: "recipient_receives",
@@ -376,7 +341,6 @@ export function PaymentProvider({
   const { result: optimizer, loading: optimizerLoading } = useOptimizer(
     state.intent,
     state.balances,
-    state.mode,
     state.network,
   );
 
@@ -420,19 +384,19 @@ export function PaymentProvider({
   // A quote is only trustworthy for a short window. We auto-refresh shortly
   // before it goes stale, and while it is stale the UI blocks execution so a
   // price the user saw is never the price they sign.
-  const quoteStale = state.mode === "live" && isQuoteStale(state.autoRefreshAt);
+  const quoteStale = isQuoteStale(state.autoRefreshAt);
 
   // Proactively refresh as the quote approaches staleness (delay 0 when it has
   // already aged out, so a long-idle tab recovers immediately).
   useEffect(() => {
-    if (state.mode !== "live" || !state.quote || !state.autoRefreshAt) return;
+    if (!state.quote || !state.autoRefreshAt) return;
     const delay = Math.max(
       0,
       QUOTE_REFRESH_AFTER_MS - (Date.now() - state.autoRefreshAt),
     );
     const timer = setTimeout(() => setNonce((n) => n + 1), delay);
     return () => clearTimeout(timer);
-  }, [state.mode, state.quote, state.autoRefreshAt]);
+  }, [state.quote, state.autoRefreshAt]);
 
   // ---- Balance sufficiency -------------------------------------------------
   const sufficiency = useMemo(() => {
@@ -464,7 +428,6 @@ export function PaymentProvider({
 
   const value: FlowContextValue = {
     ...state,
-    setMode,
     setNetwork,
     setRecipient,
     setReceiveToken,
@@ -473,7 +436,6 @@ export function PaymentProvider({
     setPayToken,
     setBalances,
     setBalancesLoading,
-    setSimulateMove,
     addToken,
     refreshQuote,
     correctToIntended,

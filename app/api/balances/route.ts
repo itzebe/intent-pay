@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { discoverWalletBalances, ensureCatalog } from "@/lib/server/discovery";
-import { getRoutingProvider, type AppMode } from "@/lib/providers";
+import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { isEvmAddress } from "@/lib/format";
 import { fetchZerionResult, tokenFromZerion, zerionEnabled } from "@/lib/server/zerion";
@@ -16,17 +16,13 @@ export const dynamic = "force-dynamic";
  *   - Monad on-chain reads give the *authoritative* balance for every candidate.
  *
  * Zerion widens the search; the chain decides the number. A token Zerion lists
- * but the wallet doesn't actually hold is dropped, because execution depends on
- * the on-chain balance, not the indexer's.
- *
- * In demo mode we never pretend to read the chain — demo balances are produced
- * client-side from the sample wallet.
+ * but the wallet doesn'''t actually hold is dropped, because execution depends on
+ * the on-chain balance, not the indexer'''s.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const address = url.searchParams.get("address") ?? "";
-  const network = (url.searchParams.get("network") as MonadNetwork) ?? "mainnet";
-  const mode = (url.searchParams.get("mode") as AppMode) ?? "live";
+  const network: MonadNetwork = "mainnet";
 
   if (!isEvmAddress(address)) {
     return NextResponse.json(
@@ -34,18 +30,11 @@ export async function GET(req: Request) {
       { status: 400 },
     );
   }
-  if (mode === "demo") {
-    return NextResponse.json(
-      { ok: false, message: "Demo balances are provided client-side." },
-      { status: 400 },
-    );
-  }
-
   try {
     // Discover against the runtime catalog so a wallet's non-shipped holdings
     // (e.g. a token added to the official list after deploy) are still found.
     await ensureCatalog(network);
-    const provider = getRoutingProvider("live", network);
+    const provider = getRoutingProvider(network);
 
     // Zerion asset intelligence (best-effort). We distinguish a *failure* from
     // an genuinely empty wallet: a configured-but-failing Zerion means the

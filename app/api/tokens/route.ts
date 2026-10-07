@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Address } from "viem";
 import { allTokens, SEED_TOKENS, catalogVersion, type TokenConfig } from "@/lib/config/tokens";
-import { getRoutingProvider, type AppMode } from "@/lib/providers";
+import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ensureCatalog, resolveToken, searchTokens } from "@/lib/server/discovery";
 import { getCatalog } from "@/lib/server/tokenList";
@@ -25,8 +25,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const mode: AppMode = url.searchParams.get("mode") === "live" ? "live" : "demo";
-  const network: MonadNetwork = url.searchParams.get("network") === "testnet" ? "testnet" : "mainnet";
+  const network: MonadNetwork = "mainnet";
   const query = url.searchParams.get("q");
   const address = url.searchParams.get("address");
   const withAvailability = url.searchParams.get("availability") !== "0";
@@ -37,9 +36,9 @@ export async function GET(req: Request) {
   // Tri-state availability: true (probed + liquid), false (probed, no
   // liquidity), null (not probed yet — the answer comes from a real quote).
   let routability: Map<string, boolean> | null = null;
-  if (mode === "live" && withAvailability) {
+  if (withAvailability) {
     try {
-      const provider = getRoutingProvider("live", network);
+      const provider = getRoutingProvider(network);
       routability = await (provider as any).routability?.() ?? null;
     } catch {
       routability = null;
@@ -68,9 +67,9 @@ export async function GET(req: Request) {
     // what lets a token launched after deployment answer "can I pay with it?"
     // without ever having been added to a source list.
     let routable = annotate(t.address, poolKeyOf(t));
-    if (mode === "live" && resolved.exists && routable === null) {
+    if (resolved.exists && routable === null) {
       try {
-        routable = await getRoutingProvider("live", network).isRoutable?.(t, network) ?? null;
+        routable = await getRoutingProvider(network).isRoutable?.(t, network) ?? null;
       } catch {
         routable = null;
       }
@@ -82,7 +81,6 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       ok: true,
-      mode,
       network,
       found: resolved.exists,
       listed: resolved.listed,
@@ -105,7 +103,6 @@ export async function GET(req: Request) {
     }));
     return NextResponse.json({
       ok: true,
-      mode,
       network,
       query,
       catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
@@ -122,7 +119,6 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     ok: true,
-    mode,
     network,
     /** Seeds are the shipped defaults; the rest is discovered at runtime. */
     seedCount: SEED_TOKENS.length,
@@ -161,8 +157,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
   const address = String(body?.address ?? "");
-  const network: MonadNetwork = body?.network === "testnet" ? "testnet" : "mainnet";
-  const mode: AppMode = body?.mode === "live" ? "live" : "demo";
+  const network: MonadNetwork = "mainnet";
 
   await ensureCatalog(network);
 
@@ -176,9 +171,9 @@ export async function POST(req: Request) {
   const t = resolved.token;
 
   let routable: boolean | null = null;
-  if (mode === "live" && resolved.exists) {
+  if (resolved.exists) {
     try {
-      const map = (await (getRoutingProvider("live", network) as any).routability?.()) as
+      const map = (await (getRoutingProvider(network) as any).routability?.()) as
         | Map<string, boolean>
         | null;
       if (map) routable = map.get(t.address.toLowerCase()) ?? map.get(poolKeyOf(t)) ?? null;

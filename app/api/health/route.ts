@@ -11,7 +11,6 @@ export async function GET() {
     chain: "monad",
     networks: {
       mainnet: { chainId: NETWORKS.mainnet.chainId, rpc: NETWORKS.mainnet.chain.rpcUrls.default.http[0] },
-      testnet: { chainId: NETWORKS.testnet.chainId, rpc: NETWORKS.testnet.chain.rpcUrls.default.http[0] },
     },
     liveRouting: configured,
     time: new Date().toISOString(),

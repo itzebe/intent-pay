@@ -110,7 +110,7 @@ export function ReviewSheet({
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Routing provider</span>
                   <span className="font-mono text-white/70">
-                    {quote.mode === "demo" ? "Simulated · Demo mode" : "Uniswap V3 · Monad"}
+                    Uniswap V3 · Monad
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -138,9 +138,7 @@ export function ReviewSheet({
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Price source</span>
                   <span className="font-mono text-white/70">
-                    {quote.mode === "demo"
-                      ? "Simulated"
-                      : `Pay: ${quote.payPriceSource ?? "—"} · Receive: ${quote.receivePriceSource ?? "—"}`}
+                    {`Pay: ${quote.payPriceSource ?? "—"} · Receive: ${quote.receivePriceSource ?? "—"}`}
                   </span>
                 </div>
                 <div className="hairline my-1" />
@@ -153,11 +151,6 @@ export function ReviewSheet({
                     </li>
                   ))}
                 </ol>
-                {quote.mode === "demo" && (
-                  <p className="mt-2 rounded-lg bg-amber-400/10 px-3 py-2 text-[11px] text-amber-200/90">
-                    Demo mode — this confirms the experience only. No blockchain transaction is sent.
-                  </p>
-                )}
               </div>
             </motion.div>
           )}

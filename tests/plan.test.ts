@@ -11,7 +11,6 @@ function quote(overrides: Partial<Quote>): Quote {
   const receiveToken = getToken("USDC")!;
   return {
     intent: { recipient: RECIPIENT, receiveToken: "USDC", receiveAmount: "5", amountMode: "recipient_receives" },
-    mode: "live",
     network: "mainnet",
     payToken,
     receiveToken,
@@ -42,9 +41,10 @@ describe("buildPaymentPlan", () => {
   });
 
   it("describes a hop-less swap as a conversion and never marks it executable", () => {
-    // Demo / simulated swaps carry no pool data; they must not be presented as
-    // a direct transfer, and must never reach on-chain execution.
-    const plan = buildPaymentPlan(quote({ mode: "demo" }), SENDER, RECIPIENT);
+    // A swap with no pool/hop data carries nothing to construct a real
+    // transaction from; it must not be presented as a direct transfer, and must
+    // never reach on-chain execution.
+    const plan = buildPaymentPlan(quote({}), SENDER, RECIPIENT);
     expect(plan.executable).toBe(false);
     expect(describePlan(plan)).toEqual(["Convert USDT → USDC"]);
   });

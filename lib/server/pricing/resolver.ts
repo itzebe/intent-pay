@@ -118,7 +118,7 @@ export class PriceResolver {
 
       // DEX-derived: read the live Uniswap V3 quoter against a USD anchor.
       try {
-        const provider = getRoutingProvider("live", network);
+        const provider = getRoutingProvider(network);
         const onchain = await provider.priceUsd(token, network);
         if (onchain.usd > 0 && onchain.source !== "fallback") {
           return { usd: onchain.usd, source: "onchain", label: labelFor("onchain"), at, ttlMs: TTL_MS, status: "LIVE" };
@@ -127,12 +127,8 @@ export class PriceResolver {
         /* fall through */
       }
 
-      // A shipped reference price is still legitimate for known assets — but it
-      // is labelled as such, and unknown tokens get nothing.
-      if (token.fallbackUsd > 0) {
-        return { usd: token.fallbackUsd, source: "fallback", label: labelFor("fallback"), at, ttlMs: TTL_MS, status: "LIVE" };
-      }
-
+      // No live source resolved a price. Production never substitutes a
+      // hardcoded rate here — the token is honestly unpriceable right now.
       return { usd: null, source: "unavailable", label: labelFor("unavailable"), at, ttlMs: TTL_MS, status: "UNAVAILABLE" };
     });
 

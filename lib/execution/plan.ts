@@ -83,7 +83,7 @@ export function buildPaymentPlan(
     return { steps, primaryStepId: steps[0].id, executable: true };
   }
 
-  // A demo (or otherwise simulated) swap has no pool data to construct a real
+  // A swap route with no hops carries no pool data to construct a real
   // transaction from, so describe the transformation rather than pretending it
   // is a direct transfer. The execution layer never sends this plan on-chain.
   if (route.hops.length === 0) {

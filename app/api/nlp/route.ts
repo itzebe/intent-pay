@@ -8,7 +8,7 @@ import {
   tintForAddress,
   type TokenConfig,
 } from "@/lib/config/tokens";
-import { getRoutingProvider, type AppMode } from "@/lib/providers";
+import { getRoutingProvider } from "@/lib/providers";
 import type { Balance } from "@/lib/domain/intent";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { mergeDraft, planFromDraft, planFromText } from "@/lib/nlp/engine";
@@ -41,8 +41,7 @@ export async function POST(req: Request) {
   }
 
   const text = typeof body?.text === "string" ? body.text : "";
-  const mode: AppMode = body?.mode === "live" ? "live" : "demo";
-  const network: MonadNetwork = body?.network === "testnet" ? "testnet" : "mainnet";
+  const network: MonadNetwork = "mainnet";
   const balances: Balance[] = Array.isArray(body?.balances) ? (body.balances as Balance[]) : [];
 
   if (!text.trim()) {
@@ -78,7 +77,6 @@ export async function POST(req: Request) {
 
     const payload: Record<string, unknown> = {
       ok: true,
-      mode,
       network,
       llm: llmEnabled(),
       state: plan.state,
@@ -102,7 +100,7 @@ export async function POST(req: Request) {
           message: `${plan.draft.asset} isn't currently available through this payment route.`,
         };
       } else {
-        const provider = getRoutingProvider(mode, network);
+        const provider = getRoutingProvider(network);
         const price = await provider.priceUsd(resolved.token, network);
         const priceUsd = price.usd > 0 ? price.usd : null;
         const handoff = draftToHandoff(plan.draft, priceUsd);
@@ -134,7 +132,7 @@ export async function POST(req: Request) {
 function parseDraft(raw: unknown): ParsedPaymentIntent | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
-  const base = emptyIntent(r.network === "testnet" ? "testnet" : "mainnet");
+  const base = emptyIntent("mainnet");
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
   const amountType = r.amountType === "USD_VALUE" || r.amountType === "TOKEN_AMOUNT" ? r.amountType : null;
   return {

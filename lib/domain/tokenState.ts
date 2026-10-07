@@ -1,6 +1,6 @@
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { TokenConfig } from "@/lib/config/tokens";
-import { getRoutingProvider, type AppMode } from "@/lib/providers";
+import { getRoutingProvider } from "@/lib/providers";
 import { getPriceResolver } from "@/lib/server/pricing";
 
 /**
@@ -110,7 +110,6 @@ export async function getTokenIntelligence(
   opts: { network?: MonadNetwork; routable?: boolean | null; probeRoute?: boolean } = {},
 ): Promise<TokenIntelligence> {
   const network = opts.network ?? "mainnet";
-  const mode: AppMode = "live";
 
   const price = await getPriceResolver()
     .resolve(token, network)
@@ -119,7 +118,7 @@ export async function getTokenIntelligence(
   let routable = opts.routable ?? null;
   if (routable === null && opts.probeRoute) {
     try {
-      routable = await getRoutingProvider(mode, network).isRoutable?.(token, network) ?? null;
+      routable = await getRoutingProvider(network).isRoutable?.(token, network) ?? null;
     } catch {
       routable = null;
     }

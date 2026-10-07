@@ -23,7 +23,10 @@ export type TokenConfig = {
   decimals: number;
   /** Native asset (MON) — no contract, paid as msg.value. */
   native?: boolean;
-  /** Known fallback USD price, used only in demo / when no live price exists. */
+  /**
+   * A last-resort reference USD price. Intentionally 0 for every shipped token:
+   * production never substitutes a hardcoded rate for a missing live price.
+   */
   fallbackUsd: number;
   /** Glyph tint for the token badge. */
   tint: string;
@@ -38,7 +41,7 @@ export type TokenConfig = {
 /**
  * Shipped defaults. These are *examples of currently supported assets*, not the
  * source of truth — the app discovers the rest at runtime. Kept small and
- * verified so the first paint and Demo Mode never depend on a network fetch.
+ * verified so the first paint never depends on a network fetch.
  */
 export const SEED_TOKENS: TokenConfig[] = [
   {
@@ -47,7 +50,7 @@ export const SEED_TOKENS: TokenConfig[] = [
     address: NATIVE_ADDRESS,
     decimals: 18,
     native: true,
-    fallbackUsd: 0.029,
+    fallbackUsd: 0,
     tint: "#836EF9",
     source: "native",
     seed: true,
@@ -77,7 +80,7 @@ export const SEED_TOKENS: TokenConfig[] = [
     name: "Wrapped SOL",
     address: "0xea17E5a9efEBf1477dB45082d67010E2245217f1",
     decimals: 9,
-    fallbackUsd: 180,
+    fallbackUsd: 0,
     tint: "#14F195",
     source: "seed",
     seed: true,
@@ -87,7 +90,7 @@ export const SEED_TOKENS: TokenConfig[] = [
     name: "Wrapped Ether",
     address: "0xEE8c0E9f1BFFb4Eb878d8f15f368A02a35481242",
     decimals: 18,
-    fallbackUsd: 3200,
+    fallbackUsd: 0,
     tint: "#8A92B2",
     source: "seed",
     seed: true,

@@ -22,20 +22,19 @@ import { PayAssetPicker } from "./PayAssetPicker";
 import { ModeToggle } from "./ModeToggle";
 import { IntentEngine } from "./IntentEngine";
 import { MismatchAlert } from "./MismatchAlert";
-import { DemoControls } from "./DemoControls";
 import { LiveCalculation } from "./LiveCalculation";
 import { FlowDiagram } from "@/components/flow/FlowDiagram";
 import { ReviewSheet } from "./ReviewSheet";
 import { SuccessScreen } from "@/components/success/SuccessScreen";
 import { BalanceOverview } from "@/components/wallet/WalletBar";
-import { Bolt, Check, Lock, Spinner, Warning } from "@/components/ui/Icons";
+import { Check, Lock, Spinner, Warning } from "@/components/ui/Icons";
 
 type Stage = "compose" | "review" | "executing" | "success";
 
 export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const flow = usePaymentFlow();
   const wallet = useWallet(flow.network);
-  const catalog = useTokenCatalog(flow.mode, flow.network);
+  const catalog = useTokenCatalog(flow.network);
   const [stage, setStage] = useState<Stage>("compose");
   const [tokenModal, setTokenModal] = useState<null | "receive" | "pay">(null);
   const [steps, setSteps] = useState<StepResult[]>([]);
@@ -54,7 +53,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // Ask the wallet what it supports (EIP-5792 atomic batch + paymaster). This
   // is what lets us offer sponsored / ERC-20 gas only when it can actually work.
   useEffect(() => {
-    if (flow.mode !== "live" || !wallet.provider) {
+    if (!wallet.provider) {
       setWalletCaps(null);
       return;
     }
@@ -65,13 +64,11 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     return () => {
       cancelled = true;
     };
-  }, [flow.mode, flow.network, wallet.provider, wallet.address]);
+  }, [flow.network, wallet.provider, wallet.address]);
 
   // Effective gas mode for this payment: what the user should expect.
   const gasMode: "sponsored" | "erc20" | "native" =
-    flow.mode === "live" &&
-    flow.capabilities?.gas.sponsorshipConfigured &&
-    walletCaps?.paymasterService
+    flow.capabilities?.gas.sponsorshipConfigured && walletCaps?.paymasterService
       ? "sponsored"
       : "native";
 
@@ -79,14 +76,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const { balances: liveBalances, loading: liveLoading } = useLiveBalances(
     wallet.address,
     flow.network,
-    flow.mode,
   );
   useEffect(() => {
-    if (flow.mode === "live" && wallet.address) {
+    if (wallet.address) {
       flow.setBalances(liveBalances);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveBalances, wallet.address, flow.mode]);
+  }, [liveBalances, wallet.address]);
 
   // Routability is discovered, not hardcoded: in live mode we ask the routing
   // layer which tokens were actually probed and have a liquid route. Tokens we
@@ -130,22 +126,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
   // One atomic approval instead of N, when the wallet supports EIP-5792 batches.
   const batchable =
-    flow.mode === "live" && Boolean(walletCaps?.atomicBatch) && Boolean(plan?.executable) && (plan?.steps.length ?? 0) > 1;
+    Boolean(walletCaps?.atomicBatch) && Boolean(plan?.executable) && (plan?.steps.length ?? 0) > 1;
 
   const onConfirm = useCallback(async () => {
     if (!flow.quote || !plan) return;
     setError(null);
     setSteps([]);
     setDelivery(null);
-
-    // Demo mode: run the delivery experience without touching the chain.
-    if (flow.mode === "demo") {
-      setStage("executing");
-      await runDemoExecution(plan, setSteps);
-      setTxHash(undefined);
-      setStage("success");
-      return;
-    }
 
     if (!wallet.address || !wallet.walletClient) {
       setError("Connect your wallet to pay on Monad.");
@@ -245,7 +232,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     }
   }, [
     flow.quote,
-    flow.mode,
     flow.network,
     flow.receiveTokenConfig,
     flow.intent.recipient,
@@ -273,15 +259,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           <span className="text-sm font-semibold text-white">Payment</span>
         </div>
         <div className="flex items-center gap-2">
-          {flow.mode === "demo" ? (
-            <span className="chip text-amber-200/80">
-              <Bolt className="h-3 w-3" /> Demo mode
-            </span>
-          ) : (
-            <span className="chip text-emerald-200/80">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live · {networkLabel}
-            </span>
-          )}
+          <span className="chip text-emerald-200/80">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live · {networkLabel}
+          </span>
         </div>
       </div>
 
@@ -343,7 +323,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   recommended={flow.recommendedPayToken}
                   availability={availability}
                   catalog={catalog.tokens}
-                  mode={flow.mode}
                   network={flow.network}
                   onAddToken={flow.addToken}
                   optimizer={flow.optimizer}
@@ -351,13 +330,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   onSelect={(s) => flow.setPayToken(s, true)}
                 />
               </Step>
-
-              {flow.mode === "demo" && (
-                <DemoControls
-                  simulateMove={flow.simulateMove}
-                  onChange={flow.setSimulateMove}
-                />
-              )}
 
               <AnimatePresence>
                 {flow.mismatch?.active && (
@@ -405,8 +377,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
               <BalanceOverview
                 balances={flow.balances}
-                loading={flow.mode === "live" ? liveLoading : flow.balancesLoading}
-                demo={flow.mode === "demo"}
+                loading={liveLoading}
               />
 
               <button
@@ -478,12 +449,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               <Spinner className="h-10 w-10 animate-spin text-mono-soft" />
             </div>
             <h3 className="text-lg font-semibold text-white">
-              {flow.mode === "demo" ? "Delivering payment…" : "Waiting for confirmation…"}
+              Waiting for confirmation…
             </h3>
             <p className="mt-1 max-w-xs text-sm text-white/45">
-              {flow.mode === "demo"
-                ? "Simulating the delivery steps for the demo."
-                : "Approve each step in your wallet. Confirmation usually takes under a second on Monad."}
+              Approve each step in your wallet. Confirmation usually takes under a second on Monad.
             </p>
             {steps.length > 0 && (
               <div className="mt-6 w-full max-w-sm space-y-2 text-left">
@@ -518,7 +487,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               recipient={flow.intent.recipient}
               txHash={txHash}
               network={flow.network}
-              demo={flow.mode === "demo"}
               onReset={reset}
               delivery={delivery}
             />
@@ -533,7 +501,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           balances={flow.balances}
           selected={flow.intent.receiveToken}
           availability={availability}
-          mode={flow.mode}
           network={flow.network}
           onAddToken={flow.addToken}
           onSelect={(s) => {
@@ -548,7 +515,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           balances={flow.balances}
           selected={flow.payToken}
           availability={availability}
-          mode={flow.mode}
           network={flow.network}
           onAddToken={flow.addToken}
           prefer="pay"
@@ -578,35 +544,16 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
   );
 }
 
-/** Demo execution: walks the plan with realistic timing, never claims a hash. */
-async function runDemoExecution(
-  plan: ReturnType<typeof buildPaymentPlan>,
-  setSteps: (updater: (prev: StepResult[]) => StepResult[]) => void,
-) {
-  for (const step of plan.steps) {
-    setSteps((prev) => [
-      ...prev.filter((s) => s.stepId !== step.id),
-      { stepId: step.id, label: step.label, status: "submitted" },
-    ]);
-    await new Promise((r) => setTimeout(r, 420));
-    setSteps((prev) =>
-      prev.map((s) => (s.stepId === step.id ? { ...s, status: "confirmed" } : s)),
-    );
-    await new Promise((r) => setTimeout(r, 160));
-  }
-}
-
 /** Reads live balances for a connected wallet via the balances API. */
 function useLiveBalances(
   address: string | undefined,
   network: MonadNetwork,
-  mode: string,
 ) {
   const [balances, setBalances] = useState<Balance[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (mode !== "live" || !address) {
+    if (!address) {
       setBalances([]);
       return;
     }
@@ -624,7 +571,7 @@ function useLiveBalances(
     return () => {
       cancelled = true;
     };
-  }, [address, network, mode]);
+  }, [address, network]);
 
   return { balances, loading };
 }

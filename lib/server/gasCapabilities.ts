@@ -3,7 +3,7 @@ import type { MonadNetwork } from "@/lib/config/chains";
 /**
  * Alchemy execution capabilities, resolved server-side.
  *
- * Alchemy serves Monad mainnet/testnet and supports Bundler, Gas Sponsorship and
+ * Alchemy serves Monad Mainnet and supports Bundler, Gas Sponsorship and
  * ERC-20 gas payments there. Whether a *specific payment* can use them also
  * depends on the user's wallet advertising the EIP-5792 `paymasterService`
  * capability (checked in the browser). This module only reports what is
@@ -14,6 +14,8 @@ export type GasCapabilities = {
   alchemy: boolean;
   /** An Alchemy gas policy is configured (sponsorship / ERC-20 gas possible). */
   sponsorshipConfigured: boolean;
+  /** ERC-20 gas payment is configured (same policy, used for token gas). */
+  erc20GasConfigured: boolean;
   /** The gas policy id, when configured. Safe to hand to a wallet capability. */
   policyId?: string;
   /** RPC is currently routed through Alchemy. */
@@ -23,9 +25,11 @@ export type GasCapabilities = {
 export function gasCapabilities(_network: MonadNetwork = "mainnet"): GasCapabilities {
   const alchemy = Boolean(process.env.ALCHEMY_API_KEY);
   const policyId = process.env.ALCHEMY_GAS_POLICY_ID;
+  const sponsorshipConfigured = alchemy && Boolean(policyId);
   return {
     alchemy,
-    sponsorshipConfigured: alchemy && Boolean(policyId),
+    sponsorshipConfigured,
+    erc20GasConfigured: sponsorshipConfigured,
     policyId: policyId || undefined,
     rpc: alchemy ? "alchemy" : "public",
   };

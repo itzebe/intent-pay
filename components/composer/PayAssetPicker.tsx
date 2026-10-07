@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { Balance } from "@/lib/domain/intent";
 import type { TokenConfig } from "@/lib/config/tokens";
-import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { formatUsd } from "@/lib/format";
 import { TokenBadge } from "@/components/ui/TokenBadge";
@@ -28,7 +27,6 @@ export function PayAssetPicker({
   onSelect,
   availability,
   catalog,
-  mode,
   network,
   onAddToken,
   optimizer,
@@ -40,7 +38,6 @@ export function PayAssetPicker({
   onSelect: (symbol: string) => void;
   availability?: Record<string, boolean | null>;
   catalog: TokenConfig[];
-  mode: AppMode;
   network: MonadNetwork;
   onAddToken?: (token: TokenConfig) => void;
   optimizer?: OptimizeResult | null;
@@ -140,7 +137,6 @@ export function PayAssetPicker({
           balances={balances}
           selected={selected}
           availability={availability}
-          mode={mode}
           network={network}
           onAddToken={onAddToken}
           prefer="pay"

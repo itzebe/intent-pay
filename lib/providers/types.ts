@@ -1,4 +1,5 @@
 import type { TokenConfig } from "@/lib/config/tokens";
+import type { MonadNetwork } from "@/lib/config/chains";
 import type {
   AmountMode,
   QuoteErrorCode,
@@ -13,10 +14,7 @@ export type RouteQuoteRequest = {
   amount: string;
   /** True when `amount` is a dollar value (the composer's "$5.00 SOL"). */
   usd?: boolean;
-  /** Demo-only: perturb the receive side to simulate a market move / misconfigured
-   * transaction. Honoured only by the demo provider; ignored on live routes. */
-  simulateMove?: number;
-  network: "mainnet" | "testnet";
+  network: MonadNetwork;
 };
 
 export type RouteQuoteSuccess = {
@@ -51,24 +49,24 @@ export type UsdPrice = {
  */
 export interface RoutingProvider {
   readonly name: string;
-  readonly mode: "live" | "demo";
+  
   /** Can this provider attempt to route the given token? */
   supports(token: TokenConfig): boolean;
   /** Discover + price a route. */
   quote(req: RouteQuoteRequest): Promise<RouteQuoteResult>;
   /** USD price for a token, used for the payment notional. */
-  priceUsd(token: TokenConfig, network: "mainnet" | "testnet"): Promise<UsdPrice>;
+  priceUsd(token: TokenConfig, network: MonadNetwork): Promise<UsdPrice>;
   /** Tokens that currently have at least one liquid route. */
-  availableSymbols(network: "mainnet" | "testnet"): Promise<string[]>;
+  availableSymbols(network: MonadNetwork): Promise<string[]>;
   /**
    * Whether a *specific* token currently has a usable route. Optional: not
    * every provider can answer this, and a provider that can't must not be
    * treated as "no route".
    */
-  isRoutable?(token: TokenConfig, network?: "mainnet" | "testnet"): Promise<boolean>;
+  isRoutable?(token: TokenConfig, network?: MonadNetwork): Promise<boolean>;
   /**
    * Routability for every token the provider knows, keyed by contract *and*
    * pool address. Only tokens that were actually probed appear. Optional.
    */
-  routability?(network?: "mainnet" | "testnet"): Promise<Map<string, boolean>>;
+  routability?(network?: MonadNetwork): Promise<Map<string, boolean>>;
 }

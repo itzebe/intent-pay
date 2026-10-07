@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { optimizePayment } from "@/lib/server/optimizer";
-import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { AmountMode, Balance, PaymentIntent } from "@/lib/domain/intent";
 import { getToken, getTokenByAddress, type TokenConfig } from "@/lib/config/tokens";
@@ -25,8 +24,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
 
-  const network: MonadNetwork = body?.network === "testnet" ? "testnet" : "mainnet";
-  const mode: AppMode = body?.mode === "live" ? "live" : "demo";
+  const network: MonadNetwork = "mainnet";
   const amountMode: AmountMode =
     body?.amountMode === "i_spend" ? "i_spend" : "recipient_receives";
 
@@ -70,7 +68,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await optimizePayment(intent, balances, mode, network);
+    const result = await optimizePayment(intent, balances, network);
     return NextResponse.json({ ok: true, network, ...result });
   } catch (err) {
     return NextResponse.json(

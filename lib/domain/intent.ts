@@ -1,4 +1,5 @@
 import type { TokenConfig } from "@/lib/config/tokens";
+import type { MonadNetwork } from "@/lib/config/chains";
 
 /**
  * MODE A — "recipient_receives": the recipient amount is the intent; the
@@ -45,8 +46,7 @@ export type Route = {
 export type Quote = {
   /** Echo of the intent that produced this quote. */
   intent: PaymentIntent;
-  mode: "live" | "demo";
-  network: "mainnet" | "testnet";
+  network: MonadNetwork;
 
   payToken: TokenConfig;
   receiveToken: TokenConfig;
@@ -101,9 +101,7 @@ export type QuoteRequest = {
   payTokenConfig?: TokenConfig;
   /** Resolved receive asset — preferred when the token was discovered. */
   receiveToken?: TokenConfig;
-  network?: "mainnet" | "testnet";
-  /** Demo-only market-move simulation, forwarded to the routing provider. */
-  simulateMove?: number;
+  network?: MonadNetwork;
 };
 
 export type QuoteResult =

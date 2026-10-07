@@ -22,7 +22,6 @@ export function SuccessScreen({
   recipient,
   txHash,
   network,
-  demo,
   onReset,
   delivery,
 }: {
@@ -35,7 +34,6 @@ export function SuccessScreen({
   recipient: string;
   txHash?: string;
   network: MonadNetwork;
-  demo: boolean;
   onReset: () => void;
   /** On-chain proof that the recipient received the intended amount. */
   delivery?: { verified: boolean; delivered: string; expected: string; reason?: string } | null;
@@ -121,17 +119,17 @@ export function SuccessScreen({
         {usdTokenLabel(receiveUsd, receiveToken.symbol)} delivered
       </motion.h2>
       <p className="mt-2 text-sm text-white/50">
-        {demo ? "Demo delivery complete" : "Confirmed on Monad"} · to{" "}
+        Confirmed on Monad · to{" "}
         <span className="font-mono text-white/75">{shortAddress(recipient, 6)}</span>
       </p>
 
       <div className="mt-6 w-full max-w-sm rounded-2xl border border-white/[0.07] bg-ink-800/40 p-4 text-left">
         <Row label="You paid" value={usdTokenLabel(payUsd, payToken.symbol)} sub={`${payAmount} ${payToken.symbol}`} />
         <Row label="They received" value={usdTokenLabel(receiveUsd, receiveToken.symbol)} sub={`${receiveAmount} ${receiveToken.symbol}`} strong />
-        <Row label="Network" value={network === "mainnet" ? "Monad" : "Monad Testnet"} />
+        <Row label="Network" value="Monad" />
       </div>
 
-      {!demo && delivery && (
+      {delivery && (
         <div
           className={`mt-4 w-full max-w-sm rounded-2xl border px-4 py-3 text-left text-xs ${
             delivery.verified
@@ -170,10 +168,6 @@ export function SuccessScreen({
             <ExternalLink className="h-4 w-4" /> View on explorer
           </a>
         </div>
-      ) : demo ? (
-        <p className="mt-4 max-w-sm rounded-2xl border border-amber-400/20 bg-amber-400/[0.06] px-4 py-3 text-xs text-amber-200/90">
-          Demo mode — no transaction was sent and no hash exists. Switch to Live mode to pay on Monad.
-        </p>
       ) : null}
 
       <button onClick={onReset} className="btn-primary mt-6 w-full max-w-sm">

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { MonadNetwork } from "@/lib/config/chains";
-import type { AppMode } from "@/lib/providers";
 import type { Balance, PaymentIntent } from "@/lib/domain/intent";
 import { isEvmAddress } from "@/lib/format";
 
@@ -30,7 +29,6 @@ export type OptimizeResult = {
 export function useOptimizer(
   intent: PaymentIntent,
   balances: Balance[],
-  mode: AppMode,
   network: MonadNetwork,
 ) {
   const [result, setResult] = useState<OptimizeResult | null>(null);
@@ -64,7 +62,6 @@ export function useOptimizer(
             receiveToken: intent.receiveToken,
             receiveAmount: intent.receiveAmount,
             amountMode: intent.amountMode,
-            mode,
             network,
             balances: balances.map((b) => ({
               token: { symbol: b.token.symbol, address: b.token.address },
@@ -95,7 +92,6 @@ export function useOptimizer(
     intent.receiveToken,
     intent.receiveAmount,
     intent.amountMode,
-    mode,
     network,
     fundedKey,
   ]);

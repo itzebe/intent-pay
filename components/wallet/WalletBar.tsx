@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { shortAddress } from "@/lib/format";
-import { Bolt, ChevronDown, Wallet } from "@/components/ui/Icons";
+import { ChevronDown, Wallet } from "@/components/ui/Icons";
 
 /** Connect / connected pill. One tap, obvious, wallet-first. */
 export function ConnectButton({
@@ -74,11 +74,9 @@ export function ConnectButton({
 export function BalanceOverview({
   balances,
   loading,
-  demo,
 }: {
   balances: { token: { symbol: string; tint: string }; amount: string; usd: number }[];
   loading?: boolean;
-  demo?: boolean;
 }) {
   const total = balances.reduce((s, b) => s + b.usd, 0);
   const funded = balances.filter((b) => b.usd > 0);
@@ -108,11 +106,6 @@ export function BalanceOverview({
           ))
         )}
       </div>
-      {demo && (
-        <div className="mt-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-white/30">
-          <Bolt className="h-3 w-3" /> Sample wallet · demo mode
-        </div>
-      )}
     </div>
   );
 }

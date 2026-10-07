@@ -19,7 +19,7 @@ import { Check, Sparkle, Spinner, Warning } from "@/components/ui/Icons";
  */
 export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
   const flow = usePaymentFlow();
-  const engine = useIntentEngine(flow.mode, flow.network, flow.balances);
+  const engine = useIntentEngine(flow.network, flow.balances);
   const [text, setText] = useState("");
   const result = engine.result;
 

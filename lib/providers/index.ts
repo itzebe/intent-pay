@@ -1,26 +1,23 @@
 import type { MonadNetwork } from "@/lib/config/chains";
-import { DemoProvider } from "./demo";
 import { UniswapV3Provider } from "./uniswapV3";
 import type { RoutingProvider } from "./types";
 
-export type AppMode = "live" | "demo";
-
-const liveProviders = new Map<MonadNetwork, UniswapV3Provider>();
-const demoProvider = new DemoProvider();
-
 /**
- * Returns the routing provider for a mode. Providers are stateless w.r.t. the
- * UI; swapping the routing backend never touches UI code.
+ * The routing layer is mainnet-only and live-only. Production never has a
+ * simulated routing backend: every quote comes from the real Uniswap V3
+ * deployment on Monad Mainnet. `getRoutingProvider()` exists so the UI never
+ * imports a concrete provider.
  */
-export function getRoutingProvider(mode: AppMode, network: MonadNetwork = "mainnet"): RoutingProvider {
-  if (mode === "demo") return demoProvider;
-  let p = liveProviders.get(network);
+const providers = new Map<MonadNetwork, UniswapV3Provider>();
+
+export function getRoutingProvider(network: MonadNetwork = "mainnet"): RoutingProvider {
+  let p = providers.get(network);
   if (!p) {
     p = new UniswapV3Provider(network);
-    liveProviders.set(network, p);
+    providers.set(network, p);
   }
   return p;
 }
 
-export { DemoProvider, UniswapV3Provider };
+export { UniswapV3Provider };
 export type { RoutingProvider };

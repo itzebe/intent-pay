@@ -9,25 +9,6 @@ import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
 import { Bolt, Shield } from "@/components/ui/Icons";
 
-function ModeSwitch() {
-  const { mode, setMode } = usePaymentFlow();
-  return (
-    <div className="flex rounded-2xl border border-white/[0.08] bg-ink-900/60 p-0.5 text-xs">
-      {(["demo", "live"] as const).map((m) => (
-        <button
-          key={m}
-          onClick={() => setMode(m)}
-          className={`rounded-xl px-3 py-1.5 font-medium capitalize transition ${
-            mode === m ? "bg-white/[0.09] text-white" : "text-white/45 hover:text-white/75"
-          }`}
-        >
-          {m === "demo" ? "Demo" : "Live"}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function Shell() {
   const flow = usePaymentFlow();
   const wallet = useWallet(flow.network);
@@ -49,7 +30,6 @@ function Shell() {
             </div>
           </div>
           <div className="flex items-center gap-2.5">
-            <ModeSwitch />
             <ConnectButton
               status={wallet.status}
               address={wallet.address}
@@ -72,7 +52,7 @@ function Shell() {
         <Hero onTry={() => composerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} />
 
         <div ref={composerRef} className="mx-auto mt-10 max-w-5xl scroll-mt-20 px-5">
-          <PaymentComposer networkLabel={flow.network === "mainnet" ? "Monad" : "Monad Testnet"} />
+          <PaymentComposer networkLabel="Monad" />
           <IntegrationStack network={flow.network} />
         </div>
 
@@ -82,8 +62,8 @@ function Shell() {
           <div className="card-flat flex flex-col gap-3 p-4 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
             <span className="flex items-center gap-2">
               <Shield className="h-4 w-4 text-emerald-300/70" />
-              Live mode reads real Monad balances and quotes real Uniswap V3 routes. Demo mode uses
-              clearly labelled sample data.
+              Live on Monad Mainnet. Every balance, price, route and transaction is read from and
+              written to the real chain.
             </span>
             <span className="flex items-center gap-2">
               <Bolt className="h-4 w-4 text-mono-soft" /> Built on Monad · chain id 143
@@ -97,7 +77,7 @@ function Shell() {
 
 export default function AppShell() {
   return (
-    <PaymentProvider initialMode="demo">
+    <PaymentProvider>
       <Shell />
     </PaymentProvider>
   );

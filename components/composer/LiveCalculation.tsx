@@ -91,16 +91,9 @@ export function LiveCalculation({
               <Row label="Estimated network cost" value={formatGasUsd(quote.networkCostUsd)} />
               <Row label="Total sender cost" value={formatUsd(quote.totalSenderCostUsd)} />
             </div>
-            {quote.mode === "live" && (
-              <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
-                {priceProvenance(quote)}
-              </p>
-            )}
-            {quote.mode === "demo" && (
-              <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
-                Demo pricing · sample data, not a live quote
-              </p>
-            )}
+            <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
+              {priceProvenance(quote)}
+            </p>
           </motion.div>
         ) : (
           <motion.p

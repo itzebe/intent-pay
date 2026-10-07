@@ -13,9 +13,8 @@ export const dynamic = "force-dynamic";
  * contributing wallet intelligence. It reports configuration, never a claim
  * that a specific payment *will* be sponsored (that also needs a capable wallet).
  */
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const network: MonadNetwork = url.searchParams.get("network") === "testnet" ? "testnet" : "mainnet";
+export async function GET() {
+  const network: MonadNetwork = "mainnet";
   const gas = gasCapabilities(network);
 
   return NextResponse.json({

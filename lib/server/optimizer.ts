@@ -2,7 +2,7 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import type { AmountMode, Balance, PaymentIntent } from "@/lib/domain/intent";
 import { parseUnits } from "@/lib/domain/math";
 import type { TokenConfig } from "@/lib/config/tokens";
-import type { AppMode } from "@/lib/providers";
+
 import { buildQuote } from "./quote";
 
 /**
@@ -57,7 +57,6 @@ function heldEnough(token: TokenConfig, balance: Balance | undefined, payAmount:
 export async function optimizePayment(
   intent: PaymentIntent,
   balances: Balance[],
-  mode: AppMode,
   network: MonadNetwork = "mainnet",
 ): Promise<OptimizeResult> {
   const funded = balances
@@ -77,7 +76,6 @@ export async function optimizePayment(
             payTokenConfig: b.token,
             network,
           },
-          mode,
           network,
         );
         if (!res.ok) {

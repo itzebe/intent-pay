@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { SEED_TOKENS, registerToken, type TokenConfig } from "@/lib/config/tokens";
-import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 
 /**
@@ -29,7 +28,7 @@ export type CatalogInfo = {
  * change. Works in both modes: discovery is a data concern, not a live-quote
  * concern.
  */
-export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
+export function useTokenCatalog(network: MonadNetwork) {
   const [tokens, setTokens] = useState<CatalogToken[]>(SEED_TOKENS as CatalogToken[]);
   const [info, setInfo] = useState<CatalogInfo | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,7 +37,7 @@ export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/tokens?mode=${mode}&network=${network}`, { cache: "no-store" })
+    fetch(`/api/tokens?network=${network}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
         if (cancelled || !json?.ok) return;
@@ -57,7 +56,7 @@ export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
     return () => {
       cancelled = true;
     };
-  }, [mode, network]);
+  }, [network]);
 
   return { tokens, info, loading, error };
 }
@@ -87,13 +86,12 @@ export type ResolvedTokenResponse = {
 /** Resolve a pasted address against the chain (metadata + routability). */
 export async function resolveAddress(
   address: string,
-  mode: AppMode,
   network: MonadNetwork,
 ): Promise<ResolvedTokenResponse> {
   const res = await fetch("/api/tokens", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ address, mode, network }),
+    body: JSON.stringify({ address, network }),
   });
   return res.json();
 }
@@ -101,11 +99,10 @@ export async function resolveAddress(
 /** Server-side search (symbol / name / address) for tokens beyond the cache. */
 export async function searchCatalog(
   query: string,
-  mode: AppMode,
   network: MonadNetwork,
 ): Promise<CatalogToken[]> {
   const res = await fetch(
-    `/api/tokens?q=${encodeURIComponent(query)}&mode=${mode}&network=${network}`,
+    `/api/tokens?q=${encodeURIComponent(query)}&network=${network}`,
     { cache: "no-store" },
   );
   const json = await res.json();

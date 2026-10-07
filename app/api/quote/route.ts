@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildQuote } from "@/lib/server/quote";
-import { getRoutingProvider, type AppMode } from "@/lib/providers";
+import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { AmountMode, PaymentIntent } from "@/lib/domain/intent";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
@@ -33,9 +33,6 @@ export async function POST(req: Request) {
     receiveAmount,
     amountMode,
     payToken,
-    mode = "demo",
-    network = "mainnet",
-    simulateMove,
   } = body ?? {};
 
   if (
@@ -51,8 +48,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const appMode: AppMode = mode === "live" ? "live" : "demo";
-  const net: MonadNetwork = network === "testnet" ? "testnet" : "mainnet";
+  const net: MonadNetwork = "mainnet";
 
   try {
     // Install the runtime catalog before resolving, so a symbol that only
@@ -111,16 +107,14 @@ export async function POST(req: Request) {
         payTokenConfig: payConfig,
         receiveToken: receiveConfig,
         network: net,
-        simulateMove,
-      },
-      appMode,
+          },
       net,
     );
 
     if (!result.ok) {
       let alternatives = result.alternatives;
       if (result.code === "route_unavailable" && !alternatives) {
-        alternatives = await getRoutingProvider(appMode, net).availableSymbols(net);
+        alternatives = await getRoutingProvider(net).availableSymbols(net);
       }
       return NextResponse.json({ ...result, alternatives });
     }

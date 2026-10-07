@@ -11,6 +11,7 @@ import {
   type TokenConfig,
 } from "@/lib/config/tokens";
 import { formatUnits, parseUnits } from "@/lib/domain/math";
+import type { MonadNetwork } from "@/lib/config/chains";
 import type { Route, RouteHop } from "@/lib/domain/intent";
 import { FEE_TIERS, UNISWAP, WMON_ADDRESS } from "./constants";
 import { getMarketPriceUsd } from "@/lib/server/pricing/market";
@@ -89,7 +90,7 @@ export class UniswapV3Provider implements RoutingProvider {
   /** Token keys with the deepest total liquidity, used to pick basis tokens. */
   private liquidityScore = new Map<string, bigint>();
 
-  constructor(private network: "mainnet" | "testnet" = "mainnet") {}
+  constructor(private network: MonadNetwork = "mainnet") {}
 
   private client(): PublicClient {
     return getPublicClient(this.network);
@@ -681,7 +682,7 @@ export class UniswapV3Provider implements RoutingProvider {
    *   3. otherwise derive the price from live Uniswap V3 liquidity against an
    *      anchor — this is what prices a brand-new token that no market-data
    *      provider knows about yet,
-   *   4. a shipped reference price for known assets, else 0 (unknown).
+   *   4. otherwise unknown (0) — never a fabricated rate.
    */
   private async computePrice(token: TokenConfig): Promise<UsdPrice> {
     if (isUsdAnchor(token)) return { usd: 1, source: "stable" };

@@ -3,7 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import type { Quote } from "@/lib/domain/intent";
 import type { TokenConfig } from "@/lib/config/tokens";
-import { formatAmount, formatGasUsd, formatUsd, usdTokenLabel } from "@/lib/format";
+import { formatAmount, formatGasUsd, formatImpact, formatUsd, usdTokenLabel } from "@/lib/format";
 import { Spinner, Warning } from "@/components/ui/Icons";
 import type { QuoteError } from "@/lib/hooks/usePayment";
 
@@ -87,6 +87,9 @@ export function LiveCalculation({
             <Row label="You pay" value={usdTokenLabel(quote.payUsd, payToken.symbol)} usd={`${formatAmount(quote.payAmount)} ${payToken.symbol}`} />
             <Row label="Recipient receives" value={usdTokenLabel(quote.receiveUsd, receiveToken.symbol)} usd={`${formatAmount(quote.receiveAmount)} ${receiveToken.symbol}`} strong />
             <Row label="Conversion" value={quote.route.path.join(" → ")} mono />
+            {formatImpact(quote.priceImpact) && (
+              <Row label="Price impact" value={formatImpact(quote.priceImpact)!} />
+            )}
             <div className="hairline pt-2.5">
               <Row
                 label="Estimated network cost"

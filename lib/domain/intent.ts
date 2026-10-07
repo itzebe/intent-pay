@@ -62,6 +62,13 @@ export type Quote = {
   /** Effective conversion rate (receive per 1 pay). */
   rate: number;
 
+  /**
+   * Real price impact (fraction: 0.0012 === 0.12%) from live quoter output, or
+   * null/undefined when it could not be computed from trustworthy data. Never a
+   * fabricated value.
+   */
+  priceImpact?: number | null;
+
   route: Route;
   /** Total estimated sender cost in USD (payUsd + network cost). */
   totalSenderCostUsd: number;

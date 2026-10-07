@@ -11,6 +11,7 @@ import {
   type TokenConfig,
 } from "@/lib/config/tokens";
 import { formatUnits, parseUnits } from "@/lib/domain/math";
+import { computePriceImpact, spotProbeInput } from "@/lib/domain/impact";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { Route, RouteHop } from "@/lib/domain/intent";
 import { FEE_TIERS, UNISWAP, WMON_ADDRESS } from "./constants";
@@ -608,6 +609,7 @@ export class UniswapV3Provider implements RoutingProvider {
         rate: 1,
         gasEstimate: 120_000n,
         exactOutput: false,
+        priceImpact: 0,
       };
     }
 
@@ -652,6 +654,20 @@ export class UniswapV3Provider implements RoutingProvider {
       tokens: best.path,
     };
 
+    // Real price impact: compare this trade's effective rate against a
+    // near-spot exact-input probe on the same path. If the probe cannot be
+    // quoted we report null (never a fabricated number).
+    let priceImpact: number | null = null;
+    try {
+      const probeIn = spotProbeInput(payAmount);
+      if (probeIn > 0n && probeIn < payAmount) {
+        const probeOut = await this.quotePath(best.path, best.fees, probeIn, false);
+        priceImpact = computePriceImpact(payAmount, receiveAmount, probeIn, probeOut);
+      }
+    } catch {
+      priceImpact = null;
+    }
+
     return {
       ok: true,
       route,
@@ -660,6 +676,7 @@ export class UniswapV3Provider implements RoutingProvider {
       rate,
       gasEstimate: 60_000n + BigInt(hops.length) * 120_000n,
       exactOutput: exactOut,
+      priceImpact,
     };
   }
 

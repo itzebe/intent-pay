@@ -108,6 +108,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     !flow.quoting &&
     !flow.quoteError &&
     flow.sufficiency.status !== "insufficient" &&
+    // A wallet without MON for the network fee cannot submit; don't let the
+    // user reach a signing step that is already known to fail.
+    flow.gasSufficiency.status !== "insufficient" &&
     // A stale price must be refreshed before it can be reviewed or signed.
     !flow.quoteStale &&
     !flow.mismatch?.active;
@@ -369,6 +372,24 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   </span>
                 </motion.div>
               )}
+
+              {flow.sufficiency.status !== "insufficient" &&
+                flow.gasSufficiency.status === "insufficient" && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex items-start gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-xs text-amber-100"
+                  >
+                    <Warning className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      {`You need a small amount of MON for network fees (about ${formatAmount(
+                        flow.gasSufficiency.requiredMon,
+                      )} MON). Your wallet holds ${formatAmount(
+                        flow.gasSufficiency.availableMon,
+                      )} MON.`}
+                    </span>
+                  </motion.div>
+                )}
             </div>
 
             {/* right: live result */}
@@ -412,6 +433,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   <>No route available</>
                 ) : flow.sufficiency.status === "insufficient" ? (
                   <>Insufficient balance</>
+                ) : flow.gasSufficiency.status === "insufficient" ? (
+                  <>Need MON for network fees</>
                 ) : flow.quoteStale ? (
                   <>
                     <Spinner className="h-4 w-4 animate-spin" /> Refreshing price…

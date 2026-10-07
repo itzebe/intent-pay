@@ -26,6 +26,12 @@ export type RouteQuoteSuccess = {
   rate: number;
   gasEstimate: bigint;
   exactOutput: boolean;
+  /**
+   * Real price impact of this trade (fraction: 0.0012 === 0.12%), derived from
+   * live quoter output. `null` when a trustworthy spot reference could not be
+   * produced — the UI then says "unavailable" rather than inventing a number.
+   */
+  priceImpact?: number | null;
 };
 
 export type RouteQuoteFailure = {

@@ -4,7 +4,15 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { Quote } from "@/lib/domain/intent";
 import type { TokenConfig } from "@/lib/config/tokens";
-import { formatAmount, formatGasUsd, formatUsd, shortAddress, usdTokenLabel } from "@/lib/format";
+import {
+  formatAmount,
+  formatGasUsd,
+  formatImpact,
+  formatUsd,
+  shortAddress,
+  usdTokenLabel,
+} from "@/lib/format";
+import { planEconomics } from "@/lib/execution/plan";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 import { ArrowDown, ChevronDown, Shield, Warning } from "@/components/ui/Icons";
 
@@ -42,6 +50,9 @@ export function ReviewSheet({
   batchable?: boolean;
 }) {
   const [showDetails, setShowDetails] = useState(false);
+
+  const impact = formatImpact(quote.priceImpact);
+  const econ = planEconomics(quote);
 
   const gasRow =
     gasMode === "sponsored"
@@ -88,6 +99,12 @@ export function ReviewSheet({
             strong
           />
           <SummaryRow label="Conversion" value={quote.route.path.join(" → ")} mono />
+          {impact && <SummaryRow label="Price impact" value={impact} />}
+          <SummaryRow
+            label={econ.exact ? "Minimum received" : "Guaranteed minimum"}
+            value={`${formatAmount(econ.minimumReceived)} ${receiveToken.symbol}`}
+            sub={econ.exact ? "exact output" : `${(econ.slippageBps / 100).toFixed(2)}% slippage`}
+          />
           <SummaryRow label="Network" value={networkLabel} />
           <SummaryRow
             label="Estimated network cost"

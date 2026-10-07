@@ -97,6 +97,16 @@ type FlowContextValue = FlowState & {
     available: string;
     shortfall: string;
   };
+  /**
+   * Whether the wallet can cover the network fee. Monad fees are paid in MON,
+   * so a wallet that holds the payment asset but no MON is blocked on gas. When
+   * sponsorship / ERC-20 gas is configured this is always "ok".
+   */
+  gasSufficiency: {
+    status: "ok" | "insufficient" | "unknown";
+    requiredMon: string;
+    availableMon: string;
+  };
 };
 
 const FlowContext = createContext<FlowContextValue | null>(null);
@@ -426,6 +436,41 @@ export function PaymentProvider({
     }
   }, [state.quote, state.balances, state.payToken, payTokenConfig]);
 
+  // ---- Network-fee (gas) sufficiency --------------------------------------
+  // Monad fees are paid in MON. A wallet that holds the payment asset but no
+  // MON can't submit — unless a paymaster is configured. We surface this as its
+  // own, plainly-worded state so the user never sees a raw "insufficient funds"
+  // error. When sponsorship is configured we don't claim a MON shortfall.
+  const gasSufficiency = useMemo(() => {
+    const native = state.balances.find((b) => b.token.native);
+    const availableMon = native?.amount ?? "0";
+    if (capabilities?.gas.sponsorshipConfigured) {
+      return { status: "ok" as const, requiredMon: "0", availableMon };
+    }
+    // No native balance entry means no wallet is connected / balances are not
+    // loaded yet. We don't know the fee position, so don't block on it.
+    if (!native) {
+      return { status: "unknown" as const, requiredMon: "0", availableMon };
+    }
+    const q = state.quote;
+    if (!q?.gasLimit || !q?.gasPriceWei) {
+      return { status: "unknown" as const, requiredMon: "0", availableMon };
+    }
+    try {
+      const required = q.gasLimit * q.gasPriceWei;
+      const requiredMon = Number(required) / 1e18;
+      // The gas price can move between quote and send; require a small buffer.
+      const buffered = required + required / 5n;
+      const available = parseUnits(availableMon, 18);
+      if (available >= buffered) {
+        return { status: "ok" as const, requiredMon: requiredMon.toFixed(6), availableMon };
+      }
+      return { status: "insufficient" as const, requiredMon: requiredMon.toFixed(6), availableMon };
+    } catch {
+      return { status: "unknown" as const, requiredMon: "0", availableMon };
+    }
+  }, [state.quote, state.balances, capabilities]);
+
   const value: FlowContextValue = {
     ...state,
     setNetwork,
@@ -450,6 +495,7 @@ export function PaymentProvider({
     mismatch,
     quoteStale,
     sufficiency,
+    gasSufficiency,
   };
 
   return <FlowContext.Provider value={value}>{children}</FlowContext.Provider>;

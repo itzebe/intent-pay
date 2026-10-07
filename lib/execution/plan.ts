@@ -2,7 +2,7 @@ import type { Address } from "viem";
 import type { TokenConfig } from "@/lib/config/tokens";
 import { getToken } from "@/lib/config/tokens";
 import type { Quote } from "@/lib/domain/intent";
-import { parseUnits } from "@/lib/domain/math";
+import { formatUnits, parseUnits } from "@/lib/domain/math";
 import { WMON_ADDRESS, UNISWAP } from "@/lib/providers/constants";
 
 /** Slippage tolerance applied to route limits (50 bps). */
@@ -181,4 +181,39 @@ export function buildPaymentPlan(
 /** Summarise a plan as short human steps for the "transaction details" panel. */
 export function describePlan(plan: PaymentPlan): string[] {
   return plan.steps.map((s) => s.label);
+}
+
+export type PlanEconomics = {
+  /** The least the recipient is guaranteed to receive, from the real limits. */
+  minimumReceived: string;
+  /** Slippage tolerance applied to the route limits, in basis points. */
+  slippageBps: number;
+  /**
+   * True when the output amount is fixed by the plan (a direct transfer or an
+   * exact-output swap), so the minimum equals the quoted amount exactly.
+   */
+  exact: boolean;
+};
+
+/**
+ * Derive the guaranteed minimum the recipient receives from the plan's own
+ * on-chain limits — never a separately invented number. For an exact-output
+ * swap (or a direct transfer) the output is fixed; for an exact-input swap the
+ * swap step's `amountOutMinimum` is the guarantee.
+ */
+export function planEconomics(quote: Quote): PlanEconomics {
+  const slippageBps = Number(SLIPPAGE_BPS);
+  if (quote.route.kind === "direct" || quote.exactOutput) {
+    return { minimumReceived: quote.receiveAmount, slippageBps, exact: true };
+  }
+  try {
+    const out = applySlipOut(parseUnits(quote.receiveAmount, quote.receiveToken.decimals));
+    return {
+      minimumReceived: formatUnits(out, quote.receiveToken.decimals),
+      slippageBps,
+      exact: false,
+    };
+  } catch {
+    return { minimumReceived: quote.receiveAmount, slippageBps, exact: true };
+  }
 }

@@ -92,6 +92,7 @@ export async function buildQuote(
     payUsd,
     receiveUsd,
     rate: routeResult.rate,
+    priceImpact: routeResult.priceImpact ?? null,
     route: routeResult.route,
     totalSenderCostUsd: payUsd + networkCost.usd,
     networkCostUsd: networkCost.usd,

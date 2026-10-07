@@ -23,6 +23,8 @@ export function ReviewSheet({
   confirming,
   error,
   networkLabel,
+  gasMode = "native",
+  batchable = false,
 }: {
   quote: Quote;
   payToken: TokenConfig;
@@ -34,8 +36,19 @@ export function ReviewSheet({
   confirming: boolean;
   error?: string | null;
   networkLabel: string;
+  /** How gas will be handled for this payment. */
+  gasMode?: "sponsored" | "erc20" | "native";
+  /** The connected wallet can submit the plan as one atomic batch. */
+  batchable?: boolean;
 }) {
   const [showDetails, setShowDetails] = useState(false);
+
+  const gasRow =
+    gasMode === "sponsored"
+      ? { value: "Sponsored", sub: "by Alchemy" }
+      : gasMode === "erc20"
+        ? { value: `Paid in ${payToken.symbol}`, sub: "via Alchemy" }
+        : { value: formatGasUsd(quote.networkCostUsd), sub: undefined };
 
   return (
     <div className="flex h-full flex-col">
@@ -67,7 +80,11 @@ export function ReviewSheet({
           />
           <SummaryRow label="Conversion" value={quote.route.path.join(" → ")} mono />
           <SummaryRow label="Network" value={networkLabel} />
-          <SummaryRow label="Estimated network cost" value={formatGasUsd(quote.networkCostUsd)} />
+          <SummaryRow
+            label="Estimated network cost"
+            value={gasRow.value}
+            sub={gasRow.sub}
+          />
           <div className="hairline mt-1 pt-3">
             <SummaryRow label="Total sender cost" value={formatUsd(quote.totalSenderCostUsd)} strong />
           </div>
@@ -100,6 +117,30 @@ export function ReviewSheet({
                   <span className="text-white/40">Slippage protection</span>
                   <span className="font-mono text-white/70">
                     {quote.exactOutput ? "Exact output" : "Exact input"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white/40">Gas</span>
+                  <span className="font-mono text-white/70">
+                    {gasMode === "sponsored"
+                      ? "Sponsored (Alchemy)"
+                      : gasMode === "erc20"
+                        ? `ERC-20 gas (Alchemy)`
+                        : "Paid in MON"}
+                  </span>
+                </div>
+                {batchable && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/40">Submission</span>
+                    <span className="font-mono text-white/70">Atomic batch (EIP-5792)</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-white/40">Price source</span>
+                  <span className="font-mono text-white/70">
+                    {quote.mode === "demo"
+                      ? "Simulated"
+                      : `Pay: ${quote.payPriceSource ?? "—"} · Receive: ${quote.receivePriceSource ?? "—"}`}
                   </span>
                 </div>
                 <div className="hairline my-1" />

@@ -41,7 +41,7 @@ export type RouteQuoteResult = RouteQuoteSuccess | RouteQuoteFailure;
 
 export type UsdPrice = {
   usd: number;
-  source: "stable" | "onchain" | "fallback";
+  source: "stable" | "market" | "dex" | "onchain" | "fallback";
 };
 
 /**

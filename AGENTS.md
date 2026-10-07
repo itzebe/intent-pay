@@ -30,11 +30,45 @@ server (or remove `.next`) afterwards.
 - Quote/routing: `lib/providers/*`, `lib/server/quote.ts`
 - Construction: `lib/execution/plan.ts`, `lib/execution/abis.ts`
 - Execution: `lib/execution/execute.ts`
-- Verification: `lib/providers/uniswapV3.ts`
+- Verification: `lib/execution/verify.ts`
 
 The routing provider is behind `lib/providers/index.ts` (`getRoutingProvider`).
 Demo and live providers implement the same interface; the UI must never branch
 on which provider is active beyond the demo/live label.
+
+## Ecosystem integrations (T10)
+
+Three external providers are wired in, all config-driven and honest about
+whether they are configured. `.env.example` documents every key.
+
+- **Uniswap** — `lib/providers/uniswapV3.ts` is the live routing engine
+  (exact-output, pool discovery, all fee tiers). Do not replace it; the
+  optimizer and quote layer call through `getRoutingProvider`.
+- **Alchemy** — `lib/server/gasCapabilities.ts` (server) and
+  `lib/execution/alchemy.ts` (client). Provides Alchemy RPC transport, and,
+  when `ALCHEMY_API_KEY` + `ALCHEMY_GAS_POLICY_ID` are set, EIP-5792
+  `wallet_sendCalls` batching with optional gas sponsorship / ERC-20 gas.
+  `getWalletCapabilities` asks the user's own wallet what it supports; when it
+  does not, execution falls back to sequential MON-gas txs. Never claim
+  sponsorship that isn't configured.
+- **Zerion** — `lib/server/zerion.ts`. HTTP Basic auth (key as username, empty
+  password) against `https://api.zerion.io`; supplies wallet asset discovery and
+  USD valuation. Balances that get spent are still confirmed on-chain
+  (`lib/server/discovery.ts`); Zerion never decides execution. Returns `[]` on
+  any failure — never treat that as "empty wallet".
+- **Market prices** — `lib/server/pricing/*`. Alchemy Prices (when keyed) →
+  GeckoTerminal → DexScreener → on-chain Uniswap quote. Every price carries a
+  `source` label surfaced in the UI. Never fabricate a rate.
+- **Pay-asset optimizer** — `lib/server/optimizer.ts` + `/api/optimize` rank the
+  wallet's assets for the current intent; the composer uses it to recommend the
+  best pay asset (replacing the old naive pick). `lib/hooks/useOptimizer.ts`.
+- `/api/capabilities` reports what is configured; `components/landing/IntegrationStack.tsx`
+  renders it as an honest active/off strip.
+- **Test isolation**: `lib/config/tokens.ts` uses a module-level registry and
+  `lib/server/http.ts` a shared `TtlCache`. Tests that touch tokens or cached
+  providers must use unique addresses/keys per test or they leak state between
+  cases (see `tests/pricing.test.ts`, `tests/zerion.test.ts`).
+
 
 ## Conventions
 

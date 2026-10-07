@@ -8,8 +8,12 @@ import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
 import { buildPaymentPlan, describePlan } from "@/lib/execution/plan";
-import { executePlan, ExecutionError, type StepResult } from "@/lib/execution/execute";
+import { executePlan, executePlanBatched, ExecutionError, type StepResult } from "@/lib/execution/execute";
+import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
+import { verifyDelivery } from "@/lib/execution/verify";
+import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
+import { NETWORKS } from "@/lib/config/chains";
 import type { Balance } from "@/lib/domain/intent";
 import { Modal } from "@/components/ui/Modal";
 import { TokenList } from "@/components/ui/TokenList";
@@ -37,8 +41,36 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const [steps, setSteps] = useState<StepResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | undefined>();
+  const [walletCaps, setWalletCaps] = useState<WalletCapabilities | null>(null);
+  const [delivery, setDelivery] = useState<
+    { verified: boolean; delivered: string; expected: string; reason?: string } | null
+  >(null);
 
   const recipientValid = isEvmAddress(flow.intent.recipient);
+
+  // Ask the wallet what it supports (EIP-5792 atomic batch + paymaster). This
+  // is what lets us offer sponsored / ERC-20 gas only when it can actually work.
+  useEffect(() => {
+    if (flow.mode !== "live" || !wallet.provider) {
+      setWalletCaps(null);
+      return;
+    }
+    let cancelled = false;
+    getWalletCapabilities(wallet.provider, NETWORKS[flow.network].chainId).then((caps) => {
+      if (!cancelled) setWalletCaps(caps);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [flow.mode, flow.network, wallet.provider, wallet.address]);
+
+  // Effective gas mode for this payment: what the user should expect.
+  const gasMode: "sponsored" | "erc20" | "native" =
+    flow.mode === "live" &&
+    flow.capabilities?.gas.sponsorshipConfigured &&
+    walletCaps?.paymasterService
+      ? "sponsored"
+      : "native";
 
   // Live balances for a connected wallet (live mode only).
   const { balances: liveBalances, loading: liveLoading } = useLiveBalances(
@@ -91,10 +123,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     }
   }, [flow.quote, wallet.address, flow.intent.recipient]);
 
+  // One atomic approval instead of N, when the wallet supports EIP-5792 batches.
+  const batchable =
+    flow.mode === "live" && Boolean(walletCaps?.atomicBatch) && Boolean(plan?.executable) && (plan?.steps.length ?? 0) > 1;
+
   const onConfirm = useCallback(async () => {
     if (!flow.quote || !plan) return;
     setError(null);
     setSteps([]);
+    setDelivery(null);
 
     // Demo mode: run the delivery experience without touching the chain.
     if (flow.mode === "demo") {
@@ -116,20 +153,76 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     }
 
     setStage("executing");
-    try {
-      const result = await executePlan(plan, wallet.walletClient, flow.network, {
-        onStep: (r) =>
-          setSteps((prev) => {
-            const idx = prev.findIndex((x) => x.stepId === r.stepId);
-            if (idx >= 0) {
-              const copy = [...prev];
-              copy[idx] = r;
-              return copy;
-            }
-            return [...prev, r];
-          }),
+    const onStep = (r: StepResult) =>
+      setSteps((prev) => {
+        const idx = prev.findIndex((x) => x.stepId === r.stepId);
+        if (idx >= 0) {
+          const copy = [...prev];
+          copy[idx] = r;
+          return copy;
+        }
+        return [...prev, r];
       });
-      setTxHash(result.primaryHash);
+
+    try {
+      // Prefer an atomic EIP-5792 batch when the wallet supports it and the plan
+      // has more than one step — one approval instead of N. Falls back to
+      // sequential transactions if the wallet rejects the batch.
+      const useBatch =
+        plan.executable &&
+        plan.steps.length > 1 &&
+        walletCaps?.atomicBatch &&
+        wallet.provider;
+
+      let primaryHash: `0x${string}` | undefined;
+      if (useBatch) {
+        try {
+          const result = await executePlanBatched(
+            plan,
+            wallet.provider!,
+            wallet.address,
+            NETWORKS[flow.network].chainId,
+            flow.network,
+            {
+              policyId:
+                flow.capabilities?.gas.sponsorshipConfigured
+                  ? flow.capabilities.gas.policyId
+                  : undefined,
+            },
+            { onStep },
+          );
+          primaryHash = result.primaryHash;
+        } catch (batchErr) {
+          // If the wallet advertises the capability but the batch still fails
+          // for a non-rejection reason, fall back to sequential execution.
+          if (batchErr instanceof ExecutionError && batchErr.code === "rejected") throw batchErr;
+          const result = await executePlan(plan, wallet.walletClient, flow.network, { onStep });
+          primaryHash = result.primaryHash;
+        }
+      } else {
+        const result = await executePlan(plan, wallet.walletClient, flow.network, { onStep });
+        primaryHash = result.primaryHash;
+      }
+
+      setTxHash(primaryHash);
+
+      // Verify the recipient actually received the intended amount — a confirmed
+      // tx is not the same thing as a fulfilled intent.
+      if (primaryHash) {
+        try {
+          const check = await verifyDelivery(
+            getClientPublicClient(flow.network),
+            [primaryHash],
+            flow.receiveTokenConfig,
+            flow.intent.recipient,
+            flow.quote.receiveAmount,
+          );
+          setDelivery(check);
+        } catch {
+          setDelivery(null);
+        }
+      }
+
       setStage("success");
     } catch (err) {
       const message =
@@ -137,7 +230,17 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       setError(message);
       setStage("review");
     }
-  }, [flow.quote, flow.mode, flow.network, plan, wallet]);
+  }, [
+    flow.quote,
+    flow.mode,
+    flow.network,
+    flow.receiveTokenConfig,
+    flow.intent.recipient,
+    flow.capabilities,
+    plan,
+    wallet,
+    walletCaps,
+  ]);
 
   const reset = useCallback(() => {
     setStage("compose");
@@ -219,6 +322,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   mode={flow.mode}
                   network={flow.network}
                   onAddToken={flow.addToken}
+                  optimizer={flow.optimizer}
+                  optimizerLoading={flow.optimizerLoading}
                   onSelect={(s) => flow.setPayToken(s, true)}
                 />
               </Step>
@@ -326,6 +431,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               confirming={false}
               error={error}
               networkLabel={networkLabel}
+              gasMode={gasMode}
+              batchable={batchable}
             />
           </motion.div>
         )}
@@ -385,6 +492,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               network={flow.network}
               demo={flow.mode === "demo"}
               onReset={reset}
+              delivery={delivery}
             />
           </motion.div>
         )}

@@ -73,6 +73,24 @@ export type Quote = {
   quotedAt: number;
   /** True when the quote required a live exact-output on-chain call. */
   exactOutput: boolean;
+
+  /** Where each side's USD price came from (stable/market/dex/onchain/fallback). */
+  payPriceSource?: string;
+  receivePriceSource?: string;
+  /** True when the receive token has no trustworthy price (never show $0.00). */
+  receivePriceUnavailable?: boolean;
+
+  /** How gas will be handled for this payment. */
+  gas?: {
+    /** "sponsored" | "erc20" | "native" — what the user should expect. */
+    mode: "sponsored" | "erc20" | "native";
+    /** True when Alchemy sponsorship is configured and usable. */
+    sponsorshipConfigured: boolean;
+    /** RPC currently in use. */
+    rpc: "alchemy" | "public";
+    /** The user's wallet supports the EIP-5792 batch + paymaster capabilities. */
+    walletCapable?: boolean;
+  };
 };
 
 export type QuoteRequest = {

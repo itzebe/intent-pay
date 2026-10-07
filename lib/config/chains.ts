@@ -48,6 +48,45 @@ export const monadTestnet = defineChain({
 
 export type MonadNetwork = "mainnet" | "testnet";
 
+/**
+ * Alchemy RPC endpoint for a network, when an API key is configured.
+ *
+ * Alchemy serves Monad mainnet + testnet. Using it as the transport upgrades the
+ * whole app (reads, gas estimation, receipts) to an indexed node; when no key is
+ * present we fall back to the public RPC and nothing else changes.
+ */
+export function alchemyRpcUrl(network: MonadNetwork): string | null {
+  const key = process.env.ALCHEMY_API_KEY;
+  if (!key) return null;
+  const slug = network === "mainnet" ? "monad-mainnet" : "monad-testnet";
+  return `https://${slug}.g.alchemy.com/v2/${key}`;
+}
+
+/** Server-side RPC: Alchemy when configured, else the configured/public RPC. */
+export function serverRpcUrl(network: MonadNetwork): string {
+  return (
+    alchemyRpcUrl(network) ??
+    (network === "mainnet"
+      ? process.env.MONAD_RPC_URL ?? "https://rpc.monad.xyz"
+      : process.env.MONAD_TESTNET_RPC_URL ?? "https://testnet-rpc.monad.xyz")
+  );
+}
+
+/** Browser-visible RPC (public keys only). */
+export function browserRpcUrl(network: MonadNetwork): string {
+  const pub = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
+  if (pub) {
+    const slug = network === "mainnet" ? "monad-mainnet" : "monad-testnet";
+    return `https://${slug}.g.alchemy.com/v2/${pub}`;
+  }
+  return (
+    (network === "mainnet"
+      ? process.env.NEXT_PUBLIC_MONAD_RPC_URL
+      : process.env.NEXT_PUBLIC_MONAD_TESTNET_RPC_URL) ??
+    (network === "mainnet" ? "https://rpc.monad.xyz" : "https://testnet-rpc.monad.xyz")
+  );
+}
+
 export const NETWORKS = {
   mainnet: {
     key: "mainnet" as const,

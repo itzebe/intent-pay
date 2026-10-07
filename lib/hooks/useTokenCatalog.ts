@@ -62,12 +62,20 @@ export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
   return { tokens, info, loading, error };
 }
 
+export type ResolvedPrice = {
+  usd: number | null;
+  source: "stable" | "market" | "dex" | "onchain" | "fallback" | "unavailable";
+  label: string;
+};
+
 export type ResolvedTokenResponse = {
   ok: boolean;
   found?: boolean;
   listed?: boolean;
   /** true = payable, false = no route, null/undefined = unknown (unprobed). */
   routable?: boolean | null;
+  /** Live price resolution — independent of routability. */
+  price?: ResolvedPrice | null;
   problem?: string;
   code?: string;
   message?: string;

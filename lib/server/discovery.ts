@@ -326,6 +326,8 @@ export type DiscoveredBalance = {
   raw: bigint;
   /** True when the token came from the curated list (not a seed). */
   discovered: boolean;
+  /** Where the USD price came from (stable/market/dex/onchain/fallback). */
+  priceSource?: string;
 };
 
 const ERC20_ABI = [
@@ -339,26 +341,36 @@ const ERC20_ABI = [
 ] as const;
 
 /**
- * Find which known Monad tokens a wallet actually holds.
+ * Find which Monad tokens a wallet actually holds.
  *
  * The public Monad RPC caps eth_getLogs at a 100-block range, so a
  * log-based asset scan is not viable. Instead we multicall `balanceOf` across
- * the discovered catalog (seed + official list). Tokens the user adds by
- * address are included too, so a wallet's non-listed holdings can still be
- * evaluated. Only tokens with a non-zero balance are priced.
+ * the discovered catalog (seed + official list) plus any assets an external
+ * intelligence source (Zerion) reported — then keep only non-zero balances.
+ *
+ * On-chain balances are authoritative: a token Zerion lists but the chain says
+ * the wallet does not hold is dropped. Zerion widens *which* tokens we look at;
+ * the chain decides the amount.
  */
 export async function discoverWalletBalances(
   address: Address,
   network: MonadNetwork,
-  priceOf: (token: TokenConfig) => Promise<{ usd: number }>,
+  priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,
+  externalAssets: TokenConfig[] = [],
 ): Promise<{ balances: (DiscoveredBalance & { usd: number })[] }> {
   const client = getPublicClient(network);
-  const candidates = curatedCatalog().map((c) => configFromCurated(c));
-  // Include anything already registered but not in the catalog (e.g. pasted).
-  for (const t of allTokens()) {
-    if (!candidates.some((c) => keyOf(c.address) === keyOf(t.address))) candidates.push(t);
-  }
 
+  const byKey = new Map<string, TokenConfig>();
+  const add = (t: TokenConfig) => {
+    if (!byKey.has(keyOf(t.address))) byKey.set(keyOf(t.address), t);
+  };
+  for (const c of curatedCatalog()) add(configFromCurated(c));
+  // Anything already registered but not in the catalog (e.g. pasted).
+  for (const t of allTokens()) add(t);
+  // Assets discovered by an external intelligence provider.
+  for (const t of externalAssets) add(t);
+
+  const candidates = [...byKey.values()];
   const erc20 = candidates.filter((t) => !t.native);
 
   const results = await client
@@ -393,8 +405,12 @@ export async function discoverWalletBalances(
 
   const priced = await Promise.all(
     held.map(async (b) => {
-      const price = await priceOf(b.token).catch(() => ({ usd: 0 }));
-      return { ...b, usd: Number(b.amount) * (price.usd ?? 0) };
+      const price = await priceOf(b.token).catch(() => ({ usd: 0, source: undefined }));
+      return {
+        ...b,
+        usd: Number(b.amount) * (price.usd ?? 0),
+        priceSource: price.source,
+      };
     }),
   );
 

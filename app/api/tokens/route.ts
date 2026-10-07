@@ -5,6 +5,7 @@ import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ensureCatalog, resolveToken, searchTokens } from "@/lib/server/discovery";
 import { getCatalog } from "@/lib/server/tokenList";
+import { getPriceResolver } from "@/lib/server/pricing";
 import { WMON_ADDRESS } from "@/lib/providers/constants";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +62,9 @@ export async function GET(req: Request) {
       );
     }
     const t = resolved.token;
+    const price = resolved.exists
+      ? await getPriceResolver().resolve(t, network).catch(() => null)
+      : null;
     return NextResponse.json({
       ok: true,
       mode,
@@ -70,6 +74,7 @@ export async function GET(req: Request) {
       problem: resolved.problem,
       routable: resolved.exists ? annotate(t.address, poolKeyOf(t)) : false,
       catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
+      price,
       token: serializeToken(t, resolved.source),
     });
   }
@@ -165,12 +170,18 @@ export async function POST(req: Request) {
     }
   }
 
+  // Live price resolution (market -> DEX -> on-chain), independent of routing.
+  const price = resolved.exists
+    ? await getPriceResolver().resolve(t, network).catch(() => null)
+    : null;
+
   return NextResponse.json({
     ok: true,
     found: resolved.exists,
     listed: resolved.listed,
     problem: resolved.problem,
     routable,
+    price,
     catalog: { count: (await getCatalog(network)).tokens.length, version: catalogVersion() },
     token: serializeToken(t, resolved.source),
   });

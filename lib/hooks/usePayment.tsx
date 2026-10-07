@@ -16,6 +16,8 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { demoBalances } from "@/lib/demo/wallet";
 import { parseUnits } from "@/lib/domain/math";
 import { isEvmAddress } from "@/lib/format";
+import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities";
+import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 
 export const DEMO_RECIPIENT = "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4";
 
@@ -64,6 +66,11 @@ type FlowContextValue = FlowState & {
   balanceFor: (symbol: string) => Balance | undefined;
   receiveTokenConfig: TokenConfig;
   payTokenConfig: TokenConfig;
+  /** Configured infrastructure (routing/pricing/wallet intelligence/gas). */
+  capabilities: Capabilities | null;
+  /** Ranked payment assets from the gas-aware optimizer. */
+  optimizer: OptimizeResult | null;
+  optimizerLoading: boolean;
   /** Amount mismatch protection, when applicable. */
   mismatch: {
     active: boolean;
@@ -303,14 +310,26 @@ export function PaymentProvider({
     [state.balances],
   );
 
-  // ---- Recommended payment asset ------------------------------------------
+  // ---- Configured infrastructure -------------------------------------------
+  const capabilities = useCapabilities(state.network);
+
+  // ---- Gas-aware payment optimizer -----------------------------------------
+  // Ranks every funded asset as a way to satisfy the intent, weighing route
+  // availability, amount, and network cost. This is what makes the
+  // recommendation honest: a token is only "best" if it can actually pay.
+  const { result: optimizer, loading: optimizerLoading } = useOptimizer(
+    state.intent,
+    state.balances,
+    state.mode,
+    state.network,
+  );
+
   const recommendedPayToken = useMemo(() => {
-    const funded = state.balances
-      .filter((b) => b.usd > 0)
-      .sort((a, b) => b.usd - a.usd);
-    if (funded.length === 0) return null;
-    return funded[0].token.symbol;
-  }, [state.balances]);
+    if (optimizer?.best) return optimizer.best.symbol;
+    // Fall back to the largest holding while the optimizer is still thinking.
+    const funded = state.balances.filter((b) => b.usd > 0).sort((a, b) => b.usd - a.usd);
+    return funded[0]?.token.symbol ?? null;
+  }, [optimizer, state.balances]);
 
   // Keep the recommendation in sync until the user chooses manually.
   useEffect(() => {
@@ -388,6 +407,9 @@ export function PaymentProvider({
     balanceFor,
     receiveTokenConfig,
     payTokenConfig,
+    capabilities,
+    optimizer,
+    optimizerLoading,
     mismatch,
     sufficiency,
   };

@@ -24,6 +24,7 @@ export function SuccessScreen({
   network,
   demo,
   onReset,
+  delivery,
 }: {
   payToken: TokenConfig;
   receiveToken: TokenConfig;
@@ -36,6 +37,8 @@ export function SuccessScreen({
   network: MonadNetwork;
   demo: boolean;
   onReset: () => void;
+  /** On-chain proof that the recipient received the intended amount. */
+  delivery?: { verified: boolean; delivered: string; expected: string; reason?: string } | null;
 }) {
   const reduce = useReducedMotion();
   const [phase, setPhase] = useState(reduce ? 4 : 0);
@@ -127,6 +130,28 @@ export function SuccessScreen({
         <Row label="They received" value={usdTokenLabel(receiveUsd, receiveToken.symbol)} sub={`${receiveAmount} ${receiveToken.symbol}`} strong />
         <Row label="Network" value={network === "mainnet" ? "Monad" : "Monad Testnet"} />
       </div>
+
+      {!demo && delivery && (
+        <div
+          className={`mt-4 w-full max-w-sm rounded-2xl border px-4 py-3 text-left text-xs ${
+            delivery.verified
+              ? "border-emerald-400/25 bg-emerald-400/[0.06] text-emerald-100/90"
+              : "border-amber-400/25 bg-amber-400/[0.06] text-amber-100/90"
+          }`}
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <Check className="h-3.5 w-3.5" />
+            {delivery.verified
+              ? "Delivery verified on-chain"
+              : "Delivery could not be fully verified"}
+          </div>
+          <p className="mt-1 text-white/60">
+            Recipient received {delivery.delivered} {receiveToken.symbol}
+            {delivery.verified ? "" : ` (expected ${delivery.expected})`}.
+            {delivery.reason ? ` ${delivery.reason}.` : ""}
+          </p>
+        </div>
+      )}
 
       {txHash ? (
         <div className="mt-4 w-full max-w-sm">

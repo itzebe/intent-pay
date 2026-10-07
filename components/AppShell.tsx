@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { PaymentProvider, usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { Hero, HowItWorks } from "@/components/landing/Hero";
+import { IntegrationStack } from "@/components/landing/IntegrationStack";
 import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
 import { Bolt, Shield } from "@/components/ui/Icons";
@@ -72,6 +73,7 @@ function Shell() {
 
         <div ref={composerRef} className="mx-auto mt-10 max-w-5xl scroll-mt-20 px-5">
           <PaymentComposer networkLabel={flow.network === "mainnet" ? "Monad" : "Monad Testnet"} />
+          <IntegrationStack network={flow.network} />
         </div>
 
         <HowItWorks />

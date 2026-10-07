@@ -8,14 +8,21 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { formatUsd, isEvmAddress, shortAddress } from "@/lib/format";
 import { TokenBadge } from "./TokenBadge";
 import { Check, Spinner, Warning } from "./Icons";
-import { resolveAddress } from "@/lib/hooks/useTokenCatalog";
+import { resolveAddress, type ResolvedPrice } from "@/lib/hooks/useTokenCatalog";
 
 export type PickableToken = TokenConfig & { routable?: boolean | null };
 
 type PasteState =
   | { status: "idle" }
   | { status: "loading"; address: string }
-  | { status: "found"; address: string; token: TokenConfig; routable: boolean | null; listed: boolean }
+  | {
+      status: "found";
+      address: string;
+      token: TokenConfig;
+      routable: boolean | null;
+      listed: boolean;
+      price: ResolvedPrice | null;
+    }
   | { status: "error"; address: string; message: string };
 
 /**
@@ -120,6 +127,7 @@ export function TokenList({
           token,
           routable: res.routable ?? null,
           listed: Boolean(res.listed),
+          price: res.price ?? null,
         });
       } catch {
         if (!cancelled)
@@ -172,6 +180,16 @@ export function TokenList({
           <div className="mt-0.5 font-mono text-[11px] text-white/35">
             {shortAddress(paste.token.address, 6)}
           </div>
+          {paste.price && (
+            <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+              <span className="text-white/70">
+                {paste.price.usd !== null ? formatUsd(paste.price.usd) : "Price unavailable"}
+              </span>
+              <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/45">
+                {paste.price.label}
+              </span>
+            </div>
+          )}
           <RouteState routable={paste.routable} />
         </div>
       )}

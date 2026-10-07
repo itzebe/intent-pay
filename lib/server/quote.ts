@@ -4,6 +4,7 @@ import { getToken, type TokenConfig } from "@/lib/config/tokens";
 import type { Quote, QuoteResult, QuoteRequest } from "@/lib/domain/intent";
 import { validateRecipient, validateUsdAmount } from "@/lib/domain/validation";
 import { estimateNetworkCost } from "./gas";
+import { gasCapabilities } from "./gasCapabilities";
 
 /**
  * Intent layer -> quote layer orchestration.
@@ -79,6 +80,8 @@ export async function buildQuote(
   const monPrice = await provider.priceUsd(monToken, network);
   const networkCost = await estimateNetworkCost(network, monPrice, routeResult.gasEstimate);
 
+  const caps = gasCapabilities(network);
+
   const quote: Quote = {
     intent,
     mode,
@@ -97,6 +100,15 @@ export async function buildQuote(
     gasPriceWei: networkCost.gasPriceWei,
     quotedAt: Date.now(),
     exactOutput: routeResult.exactOutput,
+    payPriceSource: payPrice.source,
+    receivePriceSource: receivePrice.source,
+    receivePriceUnavailable: !(receivePrice.usd > 0),
+    // Demo mode never touches the chain, so gas is never sponsored there.
+    gas: {
+      mode: mode === "live" && caps.sponsorshipConfigured ? "sponsored" : "native",
+      sponsorshipConfigured: caps.sponsorshipConfigured,
+      rpc: caps.rpc,
+    },
   };
 
   return { ok: true, quote };

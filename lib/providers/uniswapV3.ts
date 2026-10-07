@@ -13,6 +13,7 @@ import {
 import { formatUnits, parseUnits } from "@/lib/domain/math";
 import type { Route, RouteHop } from "@/lib/domain/intent";
 import { FEE_TIERS, UNISWAP, WMON_ADDRESS } from "./constants";
+import { getMarketPriceUsd } from "@/lib/server/pricing/market";
 import type {
   RouteQuoteRequest,
   RouteQuoteResult,
@@ -671,18 +672,27 @@ export class UniswapV3Provider implements RoutingProvider {
   }
 
   /**
-   * Price a token in dollars by finding the best route to a stablecoin and
-   * reading the real quoter. Stablecoins are treated as $1 (a hard peg is the
-   * only assumption; it is never used to fabricate a swap rate).
+   * Price a token in dollars.
+   *
+   * Order of attack:
+   *   1. a configured USD anchor is $1 (an explicit peg assumption),
+   *   2. a real *market* source (Alchemy / GeckoTerminal / DexScreener) when it
+   *      covers the token,
+   *   3. otherwise derive the price from live Uniswap V3 liquidity against an
+   *      anchor — this is what prices a brand-new token that no market-data
+   *      provider knows about yet,
+   *   4. a shipped reference price for known assets, else 0 (unknown).
    */
   private async computePrice(token: TokenConfig): Promise<UsdPrice> {
+    if (isUsdAnchor(token)) return { usd: 1, source: "stable" };
+
+    const market = await getMarketPriceUsd(token, this.network).catch(() => null);
+    if (market) return { usd: market.usd, source: market.source };
+
     const stables = [...USD_ANCHOR_SYMBOLS]
       .map((s) => getToken(s))
       .filter((t): t is TokenConfig => Boolean(t))
       .filter((t) => !eq(t.address, token.address));
-
-    // A USD anchor is $1 by definition of the peg.
-    if (isUsdAnchor(token)) return { usd: 1, source: "stable" };
 
     const probeUnits = parseUnits("1", token.decimals);
 

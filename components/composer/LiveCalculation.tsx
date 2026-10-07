@@ -91,6 +91,11 @@ export function LiveCalculation({
               <Row label="Estimated network cost" value={formatGasUsd(quote.networkCostUsd)} />
               <Row label="Total sender cost" value={formatUsd(quote.totalSenderCostUsd)} />
             </div>
+            {quote.mode === "live" && (
+              <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
+                {priceProvenance(quote)}
+              </p>
+            )}
             {quote.mode === "demo" && (
               <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
                 Demo pricing · sample data, not a live quote
@@ -110,6 +115,18 @@ export function LiveCalculation({
       </AnimatePresence>
     </div>
   );
+}
+
+/** Plain-language label for where the live prices came from. */
+function priceProvenance(quote: Quote): string {
+  if (quote.receivePriceUnavailable) return "Recipient token price unavailable";
+  const kind = (s?: string) =>
+    s === "stable" ? "stablecoin peg"
+      : s === "market" ? "market price"
+        : s === "dex" ? "DEX price"
+          : s === "onchain" ? "on-chain price"
+            : "reference price";
+  return `Priced at ${kind(quote.receivePriceSource)}`;
 }
 
 function Row({

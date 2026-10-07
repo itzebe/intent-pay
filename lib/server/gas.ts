@@ -5,19 +5,25 @@ import type { UsdPrice } from "@/lib/providers/types";
 
 const DEFAULT_GAS_LIMIT = 350_000n;
 const FALLBACK_GAS_PRICE = 101_000_000_000n; // ~101 gwei (observed on Monad mainnet)
-const FALLBACK_MON_USD = 0.029;
 
 export type NetworkCost = {
   gasLimit: bigint;
   gasPriceWei: bigint;
   monAmount: number;
+  /** USD value of the gas, or 0 when no live MON price was available. */
   usd: number;
+  /** False when the USD value could not be derived from live data. */
+  usdAvailable: boolean;
 };
 
 /**
  * Estimate the network (gas) cost of a payment. Gas is always paid in MON on
  * Monad. We use the current gas price from the node, falling back to a sane
  * default when the RPC does not report one.
+ *
+ * The USD notional is derived strictly from the live MON price. When there is
+ * no live price we return `usdAvailable: false` and a zero value so the UI can
+ * say the cost is unavailable rather than showing a fabricated dollar figure.
  */
 export async function estimateNetworkCost(
   network: MonadNetwork,
@@ -33,8 +39,9 @@ export async function estimateNetworkCost(
   }
   const wei = gasLimit * gasPriceWei;
   const monAmount = Number(wei) / 1e18;
-  const usd = monAmount * (monPrice.usd || FALLBACK_MON_USD);
-  return { gasLimit, gasPriceWei, monAmount, usd };
+  const priceable = monPrice.usd > 0;
+  const usd = priceable ? monAmount * monPrice.usd : 0;
+  return { gasLimit, gasPriceWei, monAmount, usd, usdAvailable: priceable };
 }
 
 export function isNativeToken(token: TokenConfig): boolean {

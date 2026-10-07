@@ -31,6 +31,13 @@ import { Check, Lock, Spinner, Warning } from "@/components/ui/Icons";
 
 type Stage = "compose" | "review" | "executing" | "success";
 
+/** Every confirmed/submitted hash a plan produced, in execution order. */
+function hashOf(results: StepResult[]): `0x${string}`[] {
+  return results
+    .filter((r): r is StepResult & { hash: `0x${string}` } => Boolean(r.hash))
+    .map((r) => r.hash);
+}
+
 export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const flow = usePaymentFlow();
   const wallet = useWallet(flow.network);
@@ -175,6 +182,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         wallet.provider;
 
       let primaryHash: `0x${string}` | undefined;
+      let stepHashes: `0x${string}`[] = [];
       if (useBatch) {
         try {
           const result = await executePlanBatched(
@@ -192,27 +200,34 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             { onStep },
           );
           primaryHash = result.primaryHash;
+          stepHashes = hashOf(result.results);
         } catch (batchErr) {
           // If the wallet advertises the capability but the batch still fails
           // for a non-rejection reason, fall back to sequential execution.
           if (batchErr instanceof ExecutionError && batchErr.code === "rejected") throw batchErr;
           const result = await executePlan(plan, wallet.walletClient, flow.network, { onStep });
           primaryHash = result.primaryHash;
+          stepHashes = hashOf(result.results);
         }
       } else {
         const result = await executePlan(plan, wallet.walletClient, flow.network, { onStep });
         primaryHash = result.primaryHash;
+        stepHashes = hashOf(result.results);
       }
 
       setTxHash(primaryHash);
 
       // Verify the recipient actually received the intended amount — a confirmed
-      // tx is not the same thing as a fulfilled intent.
-      if (primaryHash) {
+      // tx is not the same thing as a fulfilled intent. When the output token is
+      // native and a swap is required, the primary receipt is the swap (which
+      // delivers to the sender), so the unwrap/transfer steps must be included
+      // for the recipient's balance change to be observed.
+      const hashes = stepHashes.length ? stepHashes : primaryHash ? [primaryHash] : [];
+      if (hashes.length) {
         try {
           const check = await verifyDelivery(
             getClientPublicClient(flow.network),
-            [primaryHash],
+            hashes,
             flow.receiveTokenConfig,
             flow.intent.recipient,
             flow.quote.receiveAmount,

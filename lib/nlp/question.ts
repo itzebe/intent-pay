@@ -29,7 +29,7 @@ export function nextClarification(intent: ParsedPaymentIntent): Clarification {
   if (state === "NEEDS_ASSET") {
     return {
       state,
-      question: "Which asset would you like to send?",
+      question: "Which asset would you like the recipient to receive?",
       expect: "asset",
     };
   }

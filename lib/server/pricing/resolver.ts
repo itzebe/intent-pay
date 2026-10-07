@@ -12,7 +12,7 @@ import type { PriceProvider, PriceQuery } from "./types";
  *   - "market"  — a market-data source (Alchemy Prices API)
  *   - "dex"     — a public DEX aggregator (GeckoTerminal / DexScreener)
  *   - "onchain" — derived from live Uniswap V3 pool liquidity
- *   - "fallback"— a shipped reference price (demo/known default)
+ *   - "fallback"— a shipped reference rate (a configured default, not a quote)
  */
 export type PriceSourceKind = "stable" | "market" | "dex" | "onchain" | "fallback" | "unavailable";
 

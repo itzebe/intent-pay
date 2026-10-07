@@ -66,6 +66,8 @@ export type Quote = {
   /** Total estimated sender cost in USD (payUsd + network cost). */
   totalSenderCostUsd: number;
   networkCostUsd: number;
+  /** False when the network cost could not be priced from live MON data. */
+  networkCostUsdAvailable?: boolean;
   /** Estimated gas limit + price used. */
   gasLimit?: bigint;
   gasPriceWei?: bigint;

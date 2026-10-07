@@ -95,6 +95,7 @@ export async function buildQuote(
     route: routeResult.route,
     totalSenderCostUsd: payUsd + networkCost.usd,
     networkCostUsd: networkCost.usd,
+    networkCostUsdAvailable: networkCost.usdAvailable,
     gasLimit: networkCost.gasLimit,
     gasPriceWei: networkCost.gasPriceWei,
     quotedAt: Date.now(),

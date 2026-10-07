@@ -48,7 +48,16 @@ export function ReviewSheet({
       ? { value: "Sponsored", sub: "by Alchemy" }
       : gasMode === "erc20"
         ? { value: `Paid in ${payToken.symbol}`, sub: "via Alchemy" }
-        : { value: formatGasUsd(quote.networkCostUsd), sub: undefined };
+        : quote.networkCostUsdAvailable === false
+          ? { value: "Unavailable", sub: "no live MON price" }
+          : { value: formatGasUsd(quote.networkCostUsd), sub: undefined };
+
+  // When gas could not be priced from live data the total understates the real
+  // cost, so show it as a lower bound rather than a precise figure.
+  const totalSenderCost =
+    quote.networkCostUsdAvailable === false
+      ? `≥ ${formatUsd(quote.totalSenderCostUsd)} + gas`
+      : formatUsd(quote.totalSenderCostUsd);
 
   return (
     <div className="flex h-full flex-col">
@@ -86,7 +95,7 @@ export function ReviewSheet({
             sub={gasRow.sub}
           />
           <div className="hairline mt-1 pt-3">
-            <SummaryRow label="Total sender cost" value={formatUsd(quote.totalSenderCostUsd)} strong />
+            <SummaryRow label="Total sender cost" value={totalSenderCost} strong />
           </div>
         </div>
 

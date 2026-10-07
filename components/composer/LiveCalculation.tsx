@@ -88,8 +88,22 @@ export function LiveCalculation({
             <Row label="Recipient receives" value={usdTokenLabel(quote.receiveUsd, receiveToken.symbol)} usd={`${formatAmount(quote.receiveAmount)} ${receiveToken.symbol}`} strong />
             <Row label="Conversion" value={quote.route.path.join(" → ")} mono />
             <div className="hairline pt-2.5">
-              <Row label="Estimated network cost" value={formatGasUsd(quote.networkCostUsd)} />
-              <Row label="Total sender cost" value={formatUsd(quote.totalSenderCostUsd)} />
+              <Row
+                label="Estimated network cost"
+                value={
+                  quote.networkCostUsdAvailable === false
+                    ? "Unavailable"
+                    : formatGasUsd(quote.networkCostUsd)
+                }
+              />
+              <Row
+                label="Total sender cost"
+                value={
+                  quote.networkCostUsdAvailable === false
+                    ? `≥ ${formatUsd(quote.totalSenderCostUsd)} + gas`
+                    : formatUsd(quote.totalSenderCostUsd)
+                }
+              />
             </div>
             <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
               {priceProvenance(quote)}

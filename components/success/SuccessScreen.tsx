@@ -6,7 +6,7 @@ import type { TokenConfig } from "@/lib/config/tokens";
 import { explorerTxUrl, type MonadNetwork } from "@/lib/config/chains";
 import { shortAddress, usdTokenLabel } from "@/lib/format";
 import { TokenBadge } from "@/components/ui/TokenBadge";
-import { Check, Copy, ExternalLink } from "@/components/ui/Icons";
+import { Check, Copy, ExternalLink, Warning } from "@/components/ui/Icons";
 
 /**
  * Delivery experience. A short visual delivery animation, then the exact facts:
@@ -116,10 +116,13 @@ export function SuccessScreen({
         animate={{ opacity: phase >= 4 ? 1 : 0.2, y: 0 }}
         className="num text-3xl font-semibold tracking-tight text-white sm:text-4xl"
       >
-        {usdTokenLabel(receiveUsd, receiveToken.symbol)} delivered
+        {usdTokenLabel(receiveUsd, receiveToken.symbol)}
+        {delivery && !delivery.verified ? " sent" : " delivered"}
       </motion.h2>
       <p className="mt-2 text-sm text-white/50">
-        Confirmed on Monad · to{" "}
+        {delivery && !delivery.verified
+          ? "Broadcast to Monad · delivery not yet proven · to "
+          : "Confirmed on Monad · to "}
         <span className="font-mono text-white/75">{shortAddress(recipient, 6)}</span>
       </p>
 
@@ -138,7 +141,11 @@ export function SuccessScreen({
           }`}
         >
           <div className="flex items-center gap-2 font-medium">
-            <Check className="h-3.5 w-3.5" />
+            {delivery.verified ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Warning className="h-3.5 w-3.5" />
+            )}
             {delivery.verified
               ? "Delivery verified on-chain"
               : "Delivery could not be fully verified"}

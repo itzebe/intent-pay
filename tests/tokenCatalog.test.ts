@@ -7,7 +7,6 @@ import {
   getToken,
   getTokenByAddress,
   poolAddressOf,
-  registerToken,
   resetCatalog,
   setActiveCatalog,
   type CuratedToken,

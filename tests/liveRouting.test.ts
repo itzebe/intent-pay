@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { UniswapV3Provider } from "@/lib/providers/uniswapV3";
-import { configFromCurated, getToken, type TokenConfig } from "@/lib/config/tokens";
+import { getToken } from "@/lib/config/tokens";
 
 /**
  * Live integration tests against real Monad mainnet.
@@ -17,14 +17,6 @@ const LIVE = process.env.MONAD_LIVE_TESTS === "1";
 const network = "mainnet" as const;
 
 const provider = new UniswapV3Provider("mainnet");
-
-/** A token that is in the official list but is not one of our shipped seeds. */
-const DISCOVERED: TokenConfig = configFromCurated({
-  address: "0xAD96C3dffCD6374294e2573A7fBBA96097CC8d7c",
-  symbol: "DUST",
-  name: "Dust",
-  decimals: 18,
-});
 
 async function quote(pay: string, receive: string, usd = "5") {
   const res = await provider.quote({

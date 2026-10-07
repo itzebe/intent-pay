@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { TokenConfig } from "@/lib/config/tokens";
 import { formatAmount, isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";

@@ -11,7 +11,6 @@ import {
   registerToken,
   setActiveCatalog,
   tintForAddress,
-  type CuratedToken,
   type TokenConfig,
 } from "@/lib/config/tokens";
 import { isEvmAddress } from "@/lib/format";

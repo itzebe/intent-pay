@@ -20,7 +20,7 @@ export type GasCapabilities = {
   rpc: "alchemy" | "public";
 };
 
-export function gasCapabilities(network: MonadNetwork = "mainnet"): GasCapabilities {
+export function gasCapabilities(_network: MonadNetwork = "mainnet"): GasCapabilities {
   const alchemy = Boolean(process.env.ALCHEMY_API_KEY);
   const policyId = process.env.ALCHEMY_GAS_POLICY_ID;
   return {

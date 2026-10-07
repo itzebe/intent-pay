@@ -44,7 +44,6 @@ const GRAPH_TTL_MS = 5 * 60 * 1000;
 const PRICE_TTL_MS = 30 * 1000;
 /** Bounds on how many tokens we will quote against, to keep latency sane. */
 const MAX_BASIS_TOKENS = 24;
-const MAX_DISCOVERY_TOKENS = 24;
 
 type PoolInfo = { pool: Address; fee: number; liquidity: bigint; to: Address };
 
@@ -60,8 +59,6 @@ function poolAddress(token: TokenConfig): Address {
 function poolKey(token: TokenConfig): string {
   return poolAddress(token).toLowerCase();
 }
-
-type HopQuote = { to: TokenConfig; fee: number; pool: Address; out: bigint };
 
 /**
  * Live Uniswap V3 routing on Monad.

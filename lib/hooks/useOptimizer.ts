@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { AppMode } from "@/lib/providers";
-import type { AmountMode, Balance, PaymentIntent } from "@/lib/domain/intent";
+import type { Balance, PaymentIntent } from "@/lib/domain/intent";
 import { isEvmAddress } from "@/lib/format";
 
 export type PaymentOption = {

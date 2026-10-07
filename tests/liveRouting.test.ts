@@ -31,6 +31,19 @@ async function quote(pay: string, receive: string, usd = "5") {
   return res;
 }
 
+/** Exact-input quote ("I spend") — a fixed token amount in, quoted out. */
+async function quoteIn(pay: string, receive: string, amount: string) {
+  const res = await provider.quote({
+    payToken: getToken(pay)!,
+    receiveToken: getToken(receive)!,
+    mode: "i_spend",
+    amount,
+    usd: false,
+    network,
+  });
+  return res;
+}
+
 describe.skipIf(!LIVE)("live routing on Monad mainnet (chain 143)", () => {
   beforeAll(async () => {
     // Mirror production: install the runtime catalog from the live Monad list
@@ -127,5 +140,22 @@ describe.skipIf(!LIVE)("live routing on Monad mainnet (chain 143)", () => {
     if (!res.ok) return;
     expect(res.route.path.at(-1)).toBe("MON");
     expect(res.route.hops.at(-1)?.toSymbol).toBe("MON");
+  }, 120_000);
+
+  it("exact-input picks the best pool, not the worst (regression: ascending sort)", async () => {
+    // The forward (exact-in) search must rank goals by the most output. It
+    // previously sorted ascending, so USDC→MON chose the fee=100 tier
+    // (~2.86 MON per 1 USDC) over the deeper fee=3000 tier (~38.8 MON), a >10x
+    // shortfall. A sound quote must deliver at least 10 MON for 1 USDC.
+    const res = await quoteIn("USDC", "MON", "1");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.receiveAmount).not.toBe("");
+    expect(Number(res.receiveAmount)).toBeGreaterThan(10);
+    // The reported human rate (receive per 1 pay) must be decimal-adjusted.
+    // USDC is 6-dp and MON is 18-dp, so a raw-base-unit rate would be inflated
+    // by 10^12 (≈3.9e13 instead of ≈38.8).
+    expect(res.rate).toBeGreaterThan(0);
+    expect(res.rate).toBeLessThan(1000);
   }, 120_000);
 });

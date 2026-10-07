@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { getToken, allTokens, registerToken, type TokenConfig } from "@/lib/config/tokens";
+import { getToken, getTokenByAddress, registerToken, tintForAddress, type TokenConfig } from "@/lib/config/tokens";
 import type { AmountMode, Balance, Quote } from "@/lib/domain/intent";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { parseUnits } from "@/lib/domain/math";
@@ -26,7 +26,9 @@ import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities"
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
 import { createLatestGuard } from "@/lib/domain/latest";
-import { resolveGasMode, alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
+import { alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
+import { resolveAbstraction, type AbstractionResult } from "@/lib/domain/abstraction";
+import { NETWORKS } from "@/lib/config/chains";
 
 export type QuoteError = {
   code: string;
@@ -153,6 +155,11 @@ type FlowContextValue = FlowState & {
   gasMode: GasMode;
   /** The live gas-mode resolution, including whether the wallet is capable. */
   gasInfo: GasInfo;
+  /**
+   * Deterministic wallet-abstraction state for the current payment. Names the
+   * exact reason abstraction is or isn't available (never a bare boolean).
+   */
+  abstraction: AbstractionResult;
   /** Report the wallet's EIP-5792 capabilities (from the composer's probe). */
   setWalletGasCapabilities: (caps: WalletGasCapabilities | null) => void;
   /**
@@ -198,12 +205,12 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   const latestRef = useRef(createLatestGuard());
 
   const receiveTokenConfig = useMemo(
-    () => getToken(state.intent.receiveToken) ?? allTokens()[0],
-    [state.intent.receiveToken, state.tokensVersion],
+    () => resolveIntentAsset(state.intent.receiveTokenAddress, state.intent.receiveToken),
+    [state.intent.receiveTokenAddress, state.intent.receiveToken, state.tokensVersion],
   );
   const payTokenConfig = useMemo(
-    () => getToken(state.intent.payToken) ?? allTokens()[1] ?? allTokens()[0],
-    [state.intent.payToken, state.tokensVersion],
+    () => resolveIntentAsset(state.intent.payTokenAddress, state.intent.payToken),
+    [state.intent.payTokenAddress, state.intent.payToken, state.tokensVersion],
   );
 
   // ---- Canonical intent mutation ------------------------------------------
@@ -245,7 +252,15 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     [patchIntent],
   );
   const setReceiveToken = useCallback(
-    (symbol: string) => patchIntent({ receiveToken: symbol }),
+    (symbol: string) => {
+      const token = getToken(symbol);
+      patchIntent({
+        receiveToken: symbol,
+        // The contract address is the authoritative identity; record it with
+        // the symbol so the two can never drift apart.
+        receiveTokenAddress: token?.address,
+      });
+    },
     [patchIntent],
   );
   const setReceiveAmount = useCallback(
@@ -270,8 +285,14 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     [patchIntent],
   );
   const setPayToken = useCallback(
-    (symbol: string, manual = true) =>
-      patchIntent({ payToken: symbol, payTokenSource: manual ? "user" : "recommended" }),
+    (symbol: string, manual = true) => {
+      const token = getToken(symbol);
+      patchIntent({
+        payToken: symbol,
+        payTokenAddress: token?.address,
+        payTokenSource: manual ? "user" : "recommended",
+      });
+    },
     [patchIntent],
   );
 
@@ -330,16 +351,23 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     }) => {
       const amountMode = input.amountMode ?? "recipient_receives";
       setState((s) => {
+        const receiveCfg = getToken(input.receiveToken);
+        const payCfg = input.payToken ? getToken(input.payToken) : undefined;
         const intent = reduceIntent(s.intent, {
           recipient: input.recipient,
           receiveToken: input.receiveToken,
+          receiveTokenAddress: receiveCfg?.address,
           receiveAmount: input.receiveAmountUsd,
           amountMode,
           // When the instruction deterministically named a source asset
           // ("Send 10 MON"), honour it. When it did not, the source is only
           // *recommended* and the user must still confirm it before Review.
           ...(input.payToken
-            ? { payToken: input.payToken, payTokenSource: input.payTokenSource ?? "intent" }
+            ? {
+                payToken: input.payToken,
+                payTokenAddress: payCfg?.address,
+                payTokenSource: input.payTokenSource ?? "intent",
+              }
             : {}),
         });
         return {
@@ -389,8 +417,16 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     if (recommendedPayToken === state.intent.payToken) return;
     // A recommendation is not an execution commitment, so it must not bump the
     // intent version (which would needlessly invalidate the quote). Apply it
-    // directly.
-    setState((s) => ({ ...s, intent: { ...s.intent, payToken: recommendedPayToken } }));
+    // directly — with its contract address, so the identity stays canonical.
+    const cfg = getToken(recommendedPayToken);
+    setState((s) => ({
+      ...s,
+      intent: {
+        ...s.intent,
+        payToken: recommendedPayToken,
+        payTokenAddress: cfg?.address,
+      },
+    }));
   }, [recommendedPayToken, state.intent.payTokenSource, state.intent.payToken]);
 
   // ---- Auto quote (debounced, version-guarded) ----------------------------
@@ -423,7 +459,9 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...toPaymentIntent(intent),
+            receiveTokenAddress: intent.receiveTokenAddress,
             payToken: intent.payToken,
+            payTokenAddress: intent.payTokenAddress,
             network: intent.network,
           }),
           signal: controller.signal,
@@ -576,12 +614,38 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.quote, state.balances, state.intent.payToken, payTokenConfig]);
 
+  // ---- Wallet abstraction state (partial, honest) --------------------------
+  // Gas handling is per-payment, not a global boolean: whether abstraction is
+  // available depends on the chain, the configured paymaster, the wallet's
+  // advertised capability AND the selected asset.
+  const abstraction = useMemo<AbstractionResult>(() => {
+    const chainId = NETWORKS[state.intent.network].chainId;
+    const supportedTokens: string[] = (capabilities?.gas as any)?.supportedTokens ?? [];
+    return resolveAbstraction(payTokenConfig, {
+      chainId,
+      // Monad mainnet is the only configured chain today; it is supported when
+      // the deployment targets it.
+      chainSupported: state.intent.network === "mainnet",
+      paymasterConfigured: Boolean(capabilities?.gas.sponsorshipConfigured),
+      walletSupportsPaymaster: Boolean(walletGasCaps?.paymasterService),
+      walletSupportsErc20Gas: Boolean(walletGasCaps?.erc20GasPayment),
+      walletSupportsBatch: Boolean(walletGasCaps?.atomicBatch),
+      supportedTokens,
+    });
+  }, [capabilities, walletGasCaps, payTokenConfig, state.intent.network]);
+
   // ---- Gas handling (abstracted when the wallet can actually deliver it) ---
   const gasInfo = useMemo<GasInfo>(() => {
     const paymasterConfigured = Boolean(capabilities?.gas.sponsorshipConfigured);
     const walletSupportsPaymaster = Boolean(walletGasCaps?.paymasterService);
     const walletSupportsErc20Gas = Boolean(walletGasCaps?.erc20GasPayment);
-    const mode = resolveGasMode(paymasterConfigured, walletSupportsPaymaster, walletSupportsErc20Gas);
+    // The mode is the *per-payment* abstraction outcome, so a token the
+    // paymaster doesn't sponsor never reports "sponsored".
+    const mode: GasMode = abstraction.gasOptions.sponsored
+      ? "sponsored"
+      : abstraction.gasOptions.erc20GasPayment
+        ? "erc20"
+        : "native";
     const pubKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
     const policyId = capabilities?.gas.policyId;
     const abstracted = mode !== "native";
@@ -593,7 +657,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       paymasterServiceUrl: abstracted && pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
       paymasterContext: abstracted && policyId ? { policyId } : undefined,
     };
-  }, [capabilities, walletGasCaps]);
+  }, [capabilities, walletGasCaps, abstraction]);
 
   const gasSufficiency = useMemo(() => {
     const native = state.balances.find((b) => b.token.native);
@@ -692,6 +756,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     gasSufficiency,
     gasMode: gasInfo.mode,
     gasInfo,
+    abstraction,
     setWalletGasCapabilities,
     readiness,
   };
@@ -703,6 +768,38 @@ export function usePaymentFlow(): FlowContextValue {
   const ctx = useContext(FlowContext);
   if (!ctx) throw new Error("usePaymentFlow must be used within PaymentProvider");
   return ctx;
+}
+
+/**
+ * Resolve the canonical token for an intent asset: the contract address is
+ * authoritative, the symbol is only a fallback. Returns `null` (never a
+ * different token's config) when the asset cannot be resolved, so a label can
+ * never be borrowed from an unrelated token.
+ */
+export function resolveIntentAsset(
+  address: string | undefined,
+  symbol: string,
+): TokenConfig {
+  if (address) {
+    const byAddress = getTokenByAddress(address);
+    if (byAddress) return byAddress;
+  }
+  if (symbol) {
+    const bySymbol = getToken(symbol);
+    if (bySymbol) return bySymbol;
+  }
+  // Unresolved: a neutral placeholder derived from the recorded symbol — never
+  // another token's config, so the UI can't show a wrong asset's label.
+  return {
+    symbol: symbol || "—",
+    name: symbol || "Unknown asset",
+    address: "0x0000000000000000000000000000000000000000",
+    decimals: 18,
+    native: false,
+    fallbackUsd: 0,
+    tint: tintForAddress(symbol || "unknown"),
+    source: "wallet",
+  };
 }
 
 /**

@@ -4,7 +4,7 @@ import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { AmountMode, PaymentIntent } from "@/lib/domain/intent";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
-import { getToken } from "@/lib/config/tokens";
+import { getToken, getTokenByAddress } from "@/lib/config/tokens";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +30,11 @@ export async function POST(req: Request) {
   const {
     recipient,
     receiveToken,
+    receiveTokenAddress,
     receiveAmount,
     amountMode,
     payToken,
+    payTokenAddress,
   } = body ?? {};
 
   if (
@@ -55,14 +57,31 @@ export async function POST(req: Request) {
     // exists in the live list resolves even if it was never shipped.
     await ensureCatalog(net);
 
-    // Resolve both sides to real token configs (symbol or address).
+    // Resolve both sides to real token configs. The contract address is the
+    // authoritative identity when present; the symbol is only a fallback.
     const [receiveResolved, payResolved] = await Promise.all([
-      resolveToken(receiveToken, net),
-      resolveToken(payToken, net),
+      resolveToken(
+        typeof receiveTokenAddress === "string" && receiveTokenAddress ? receiveTokenAddress : receiveToken,
+        net,
+      ),
+      resolveToken(
+        typeof payTokenAddress === "string" && payTokenAddress ? payTokenAddress : payToken,
+        net,
+      ),
     ]);
 
-    const receiveConfig = receiveResolved?.token ?? getToken(receiveToken);
-    const payConfig = payResolved?.token ?? getToken(payToken);
+    const receiveConfig =
+      receiveResolved?.token ??
+      (typeof receiveTokenAddress === "string" && receiveTokenAddress
+        ? getTokenByAddress(receiveTokenAddress)
+        : undefined) ??
+      getToken(receiveToken);
+    const payConfig =
+      payResolved?.token ??
+      (typeof payTokenAddress === "string" && payTokenAddress
+        ? getTokenByAddress(payTokenAddress)
+        : undefined) ??
+      getToken(payToken);
 
     if (!receiveConfig || !payConfig) {
       const which = !receiveConfig ? receiveToken : payToken;

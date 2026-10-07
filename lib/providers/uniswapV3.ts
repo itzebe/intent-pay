@@ -594,13 +594,17 @@ export class UniswapV3Provider implements RoutingProvider {
       });
 
       if (goals.length) {
-        goals.sort((a, b) => (a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : 0));
+        // Exact-input: `cost` is the *output* amount, so the best goal is the
+        // one that delivers the most. (Sorting ascending here — as the
+        // exact-output branch does, where cost is an input — would silently
+        // pick the worst pool, e.g. the fee=100 tier for USDC→MON.)
+        goals.sort((a, b) => (a.cost > b.cost ? -1 : a.cost < b.cost ? 1 : 0));
         return { path: goals[0].path, fees: goals[0].fees };
       }
       if (expansions.length === 0) break;
 
       const ranked = expansions.sort((a, b) =>
-        a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : 0,
+        a.cost > b.cost ? -1 : a.cost < b.cost ? 1 : 0,
       );
       const perKey = new Map<string, (typeof frontier)[number]>();
       for (const e of ranked) if (!perKey.has(e.key)) perKey.set(e.key, e);
@@ -734,7 +738,11 @@ export class UniswapV3Provider implements RoutingProvider {
 
     const payStr = formatUnits(payAmount, payToken.decimals);
     const receiveStr = formatUnits(receiveAmount, receiveToken.decimals);
-    const rate = Number(payAmount) > 0 ? Number(receiveAmount) / Number(payAmount) : 0;
+    // Human rate (receive per 1 pay) must use decimal-adjusted amounts, not raw
+    // base units — otherwise a 6-dp / 18-dp pair reports a rate off by 10^12.
+    const payNum = Number(payStr);
+    const receiveNum = Number(receiveStr);
+    const rate = payNum > 0 ? receiveNum / payNum : 0;
 
     const route: Route = {
       kind: "swap",

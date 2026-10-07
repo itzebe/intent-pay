@@ -28,7 +28,8 @@ import { FlowDiagram } from "@/components/flow/FlowDiagram";
 import { ReviewSheet } from "./ReviewSheet";
 import { SuccessScreen } from "@/components/success/SuccessScreen";
 import { BalanceOverview } from "@/components/wallet/WalletBar";
-import { Check, Lock, Spinner, Warning } from "@/components/ui/Icons";
+import { Check, ChevronDown, Lock, Spinner, Warning } from "@/components/ui/Icons";
+import { TokenBadge } from "@/components/ui/TokenBadge";
 
 type Stage = "compose" | "review" | "executing" | "success";
 
@@ -394,25 +395,52 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 />
               </Step>
 
-              <Step n={2}>
+              <Step n={2} title={flow.intent.amountMode === "i_spend" ? "How much will you spend?" : "What should they receive?"}>
                 <ModeToggle value={flow.intent.amountMode} onChange={flow.setAmountMode} />
-                <div className="mt-3">
-                  <AmountField
-                    amount={flow.intent.receiveAmount}
-                    onAmountChange={flow.setReceiveAmount}
-                    token={flow.receiveTokenConfig}
-                    onOpenToken={() => setTokenModal("receive")}
-                    label={
-                      flow.intent.amountMode === "recipient_receives"
-                        ? "Recipient receives"
-                        : "I spend"
-                    }
-                    usdHint={
-                      flow.intent.amountMode === "recipient_receives"
-                        ? `They get exactly $${flow.intent.receiveAmount || "0"} in ${flow.receiveTokenConfig.symbol}`
-                        : `You spend exactly $${flow.intent.receiveAmount || "0"} in ${flow.payTokenConfig.symbol}`
-                    }
-                  />
+                <div className="mt-3 space-y-2">
+                  {(() => {
+                    const iSpend = flow.intent.amountMode === "i_spend";
+                    // The amount is USD-denominated in both modes, but the token
+                    // badge must reflect the *side* the amount is expressed in:
+                    // "recipient receives" prices the output asset, "I spend"
+                    // prices the input asset. Showing the output asset next to a
+                    // spend amount is what produced "You spend exactly $5 in
+                    // AUSD" while the real pay asset was USDT.
+                    const amountToken = iSpend ? flow.payTokenConfig : flow.receiveTokenConfig;
+                    return (
+                      <AmountField
+                        amount={flow.intent.receiveAmount}
+                        onAmountChange={flow.setReceiveAmount}
+                        token={amountToken}
+                        onOpenToken={() => setTokenModal(iSpend ? "pay" : "receive")}
+                        label={iSpend ? "I spend" : "Recipient receives"}
+                        usdHint={
+                          iSpend
+                            ? `You spend exactly $${flow.intent.receiveAmount || "0"} in ${amountToken.symbol}`
+                            : `They get exactly $${flow.intent.receiveAmount || "0"} in ${amountToken.symbol}`
+                        }
+                      />
+                    );
+                  })()}
+
+                  {/* In "I spend" mode the amount badge is the *pay* asset, so
+                      the output asset needs its own, explicit chooser. */}
+                  {flow.intent.amountMode === "i_spend" && (
+                    <button
+                      onClick={() => setTokenModal("receive")}
+                      className="flex w-full items-center justify-between rounded-2xl border border-white/[0.08] bg-ink-900/40 px-3 py-2.5 transition hover:border-white/20 hover:bg-white/[0.04]"
+                      aria-label="Choose receive token"
+                    >
+                      <span className="text-xs text-white/45">They receive</span>
+                      <span className="flex items-center gap-2">
+                        <TokenBadge token={flow.receiveTokenConfig} size={22} />
+                        <span className="text-sm font-semibold text-white">
+                          {flow.receiveTokenConfig.symbol}
+                        </span>
+                        <ChevronDown className="h-4 w-4 text-white/50" />
+                      </span>
+                    </button>
+                  )}
                 </div>
               </Step>
 
@@ -651,7 +679,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   );
 }
 
-function Step({ n, children }: { n: number; children: React.ReactNode }) {
+function Step({
+  n,
+  title,
+  children,
+}: {
+  n: number;
+  title?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="relative">
       <div className="mb-2 flex items-center gap-2">
@@ -659,7 +695,7 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
           {n}
         </span>
         <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/35">
-          {n === 1 ? "Recipient" : n === 2 ? "What should they receive?" : "How will you pay?"}
+          {title ?? (n === 1 ? "Recipient" : n === 2 ? "What should they receive?" : "How will you pay?")}
         </span>
       </div>
       {children}

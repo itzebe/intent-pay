@@ -1,4 +1,5 @@
 import { isEvmAddress } from "@/lib/format";
+import { getToken, getTokenByAddress } from "@/lib/config/tokens";
 import type { AmountMode, PaymentIntent } from "@/lib/domain/intent";
 import type { MonadNetwork } from "@/lib/config/chains";
 
@@ -27,14 +28,22 @@ export type CanonicalFields = {
   text: string;
   /** Recipient address. Only ever an explicit 0x value — never inferred. */
   recipient: string;
-  /** Output/receive asset symbol (what the recipient gets). */
+  /** Output/receive asset symbol (what the recipient gets). Display only. */
   receiveToken: string;
+  /**
+   * The receive asset's contract address. This is the *authoritative* identity
+   * (chain + address); the symbol is derived display metadata. Present whenever
+   * the asset was chosen from the catalog.
+   */
+  receiveTokenAddress?: string;
   /** The amount as entered, interpreted per `amountMode`. */
   receiveAmount: string;
   /** Whether `receiveAmount` is "what they receive" or "what I spend". */
   amountMode: AmountMode;
-  /** Source/pay asset symbol (what the user spends). */
+  /** Source/pay asset symbol (what the user spends). Display only. */
   payToken: string;
+  /** The pay asset's contract address — the authoritative identity. */
+  payTokenAddress?: string;
   /** How the pay asset was established. */
   payTokenSource: PayTokenSource;
   /** Target chain. */
@@ -79,9 +88,11 @@ function sameFields(a: CanonicalFields, b: CanonicalFields): boolean {
     a.text === b.text &&
     a.recipient === b.recipient &&
     a.receiveToken === b.receiveToken &&
+    (a.receiveTokenAddress ?? "") === (b.receiveTokenAddress ?? "") &&
     a.receiveAmount === b.receiveAmount &&
     a.amountMode === b.amountMode &&
     a.payToken === b.payToken &&
+    (a.payTokenAddress ?? "") === (b.payTokenAddress ?? "") &&
     a.payTokenSource === b.payTokenSource &&
     a.network === b.network
   );
@@ -92,14 +103,21 @@ function sameFields(a: CanonicalFields, b: CanonicalFields): boolean {
  * purpose: it is provenance, not an execution parameter. Two requests with the
  * same recipient/tokens/amount/network/mode produce the same transaction no
  * matter how they were phrased.
+ *
+ * The asset *addresses* are included (not just symbols) so that a same-symbol
+ * token at a different contract — or a symbol that resolves differently after a
+ * catalog refresh — produces a different key and therefore invalidates any
+ * earlier quote/plan.
  */
 export function executionKey(f: CanonicalFields): string {
+  const assetRef = (symbol: string, address?: string) =>
+    `${symbol.toLowerCase()}@${(address ?? "").toLowerCase()}`;
   return [
     f.network,
     f.amountMode,
-    f.receiveToken,
+    assetRef(f.receiveToken, f.receiveTokenAddress),
     f.receiveAmount,
-    f.payToken,
+    assetRef(f.payToken, f.payTokenAddress),
     f.recipient.toLowerCase(),
   ].join("|");
 }
@@ -133,6 +151,33 @@ export function toPaymentIntent(intent: CanonicalIntent): PaymentIntent {
     receiveAmount: intent.receiveAmount,
     amountMode: intent.amountMode,
   };
+}
+
+/**
+ * Resolve the canonical *receive* asset for this intent. The address is
+ * authoritative; the symbol is a fallback only when no address was recorded.
+ * Returns undefined when the intent's asset cannot be resolved at all — the UI
+ * then shows "unknown", never a different token's label.
+ */
+export function receiveTokenOf(intent: CanonicalIntent) {
+  return resolveIntentToken(intent.receiveTokenAddress, intent.receiveToken);
+}
+
+/** Resolve the canonical *pay* asset for this intent. */
+export function payTokenOf(intent: CanonicalIntent) {
+  return resolveIntentToken(intent.payTokenAddress, intent.payToken);
+}
+
+function resolveIntentToken(address: string | undefined, symbol: string) {
+  if (address) {
+    const byAddress = getTokenByAddress(address);
+    if (byAddress) return byAddress;
+  }
+  if (symbol) {
+    const bySymbol = getToken(symbol);
+    if (bySymbol) return bySymbol;
+  }
+  return undefined;
 }
 
 /**

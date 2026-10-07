@@ -166,6 +166,16 @@ metadata, a trustworthy price *and* a real route. `/api/tokens` exposes
   `route_unavailable` is correct, not a bug. Demo mode quotes it as sample data.
 - The native MON endpoint is `0x0` and is wrapped to WMON (`NATIVE_POOL_KEY`)
   for pool lookup; `priceUsd` handles the native basis token.
+- **Exact-input goal ranking is descending.** The forward (exact-in) search
+  ranks goals by `cost`, which for exact-input is the *output* amount, so the
+  best goal is the one that delivers the **most**. Sorting ascending (as the
+  exact-output branch does, where `cost` is an input) silently picks the worst
+  pool — e.g. the `fee=100` USDC→MON tier instead of `fee=3000`, a >10x
+  shortfall. Do not "unify" the two sorts.
+- **The quote `rate` is a human rate** (receive per 1 pay), computed from
+  `formatUnits` decimal-adjusted amounts — never from raw base units. A 6-dp pay
+  token against an 18-dp receive token otherwise reports a rate inflated by
+  10^12. Regression covered in `tests/liveRouting.test.ts`.
 
 ## Quote freshness (execution guard)
 

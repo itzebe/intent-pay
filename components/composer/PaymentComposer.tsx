@@ -55,8 +55,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // the user down to the fields it just filled.
   const composeRef = useRef<HTMLDivElement>(null);
 
-  const recipientValid = isEvmAddress(flow.intent.recipient);
-
   // Ask the wallet what it supports (EIP-5792 atomic batch + paymaster). This
   // is what lets us offer sponsored / ERC-20 gas only when it can actually work.
   useEffect(() => {
@@ -102,24 +100,23 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     return map;
   }, [catalog.tokens]);
 
-  const canContinue =
-    recipientValid &&
-    Boolean(flow.quote) &&
-    !flow.quoting &&
-    !flow.quoteError &&
-    flow.sufficiency.status !== "insufficient" &&
-    // A wallet without MON for the network fee cannot submit; don't let the
-    // user reach a signing step that is already known to fail.
-    flow.gasSufficiency.status !== "insufficient" &&
-    // A stale price must be refreshed before it can be reviewed or signed.
-    !flow.quoteStale &&
-    !flow.mismatch?.active;
+  const recipientValid = isEvmAddress(flow.intent.recipient);
+  // The recipient is only "entered" once the user has actually supplied or
+  // confirmed the address; a programmatically prefilled field must still be
+  // acknowledged. Used to decide what the flow reveals.
+  const recipientConfirmed = flow.recipientConfirmed && recipientValid;
+
+  // The deterministic readiness gate is the single source of truth for whether
+  // Review is reachable — never visual state alone.
+  const canContinue = flow.readiness.ready;
 
   const onReview = useCallback(() => {
-    if (!flow.quote) return;
+    // Defence-in-depth: never advance to Review unless the deterministic gate
+    // says every execution input is finalized.
+    if (!flow.readiness.ready || !flow.quote) return;
     setError(null);
     setStage("review");
-  }, [flow.quote]);
+  }, [flow.readiness.ready, flow.quote]);
 
   const plan = useMemo(() => {
     if (!flow.quote) return null;
@@ -146,6 +143,14 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
     if (!wallet.address || !wallet.walletClient) {
       setError("Connect your wallet to pay on Monad.");
+      return;
+    }
+
+    // Re-check the deterministic gate at the moment of signing: a stale quote
+    // or a newly-insufficient balance must never be signed.
+    if (!flow.readiness.ready) {
+      flow.refreshQuote();
+      setError("This payment changed. Review it again before confirming.");
       return;
     }
 
@@ -255,6 +260,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     flow.intent.recipient,
     flow.capabilities,
     flow.quoteStale,
+    flow.readiness.ready,
     plan,
     wallet,
     walletCaps,
@@ -309,6 +315,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 <RecipientField
                   value={flow.intent.recipient}
                   onChange={flow.setRecipient}
+                  onValidChange={(valid) => flow.markRecipientConfirmed(valid)}
                 />
               </Step>
 
@@ -338,6 +345,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 <PayAssetPicker
                   balances={flow.balances}
                   selected={flow.payToken}
+                  payTokenIsSet={flow.payTokenSource === "user" || flow.payTokenSource === "intent"}
                   recommended={flow.recommendedPayToken}
                   availability={availability}
                   catalog={catalog.tokens}
@@ -399,7 +407,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 payToken={flow.payTokenConfig}
                 receiveToken={flow.receiveTokenConfig}
                 recipient={flow.intent.recipient}
-                recipientValid={recipientValid}
+                recipientValid={recipientConfirmed}
               />
 
               <LiveCalculation
@@ -408,41 +416,36 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 error={flow.quoteError}
                 payToken={flow.payTokenConfig}
                 receiveToken={flow.receiveTokenConfig}
-                onUseAlternative={(s) => flow.setReceiveToken(s)}
+                readiness={flow.readiness}
+                onUseAlternative={(s) => {
+                  // Choosing a different receive asset is a real user action;
+                  // reset the source commitment so they rethink the pairing.
+                  flow.setReceiveToken(s);
+                }}
               />
 
               <BalanceOverview
                 balances={flow.balances}
                 loading={liveLoading}
+                connected={Boolean(wallet.address)}
               />
 
               <button
                 onClick={onReview}
                 disabled={!canContinue}
                 className="btn-primary w-full"
+                aria-disabled={!canContinue}
               >
-                {flow.mismatch?.active ? (
-                  <>Fix amount to continue</>
-                ) : flow.quoting ? (
+                {flow.readiness.code === "quoting" || flow.readiness.code === "quote_stale" ? (
                   <>
-                    <Spinner className="h-4 w-4 animate-spin" /> Pricing…
+                    <Spinner className="h-4 w-4 animate-spin" /> {flow.readiness.cta}
                   </>
-                ) : !recipientValid ? (
-                  <>Enter a recipient address</>
-                ) : flow.quoteError ? (
-                  <>No route available</>
-                ) : flow.sufficiency.status === "insufficient" ? (
-                  <>Insufficient balance</>
-                ) : flow.gasSufficiency.status === "insufficient" ? (
-                  <>Need MON for network fees</>
-                ) : flow.quoteStale ? (
+                ) : flow.readiness.ready ? (
                   <>
-                    <Spinner className="h-4 w-4 animate-spin" /> Refreshing price…
+                    <Lock className="h-4 w-4" /> {flow.readiness.cta}
                   </>
                 ) : (
-                  <>
-                    <Lock className="h-4 w-4" /> Review payment
-                  </>
+                  flow.readiness.cta
                 )}
               </button>
             </div>

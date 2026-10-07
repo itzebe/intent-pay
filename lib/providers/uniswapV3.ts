@@ -442,12 +442,21 @@ export class UniswapV3Provider implements RoutingProvider {
   // -------------------------------------------------------------------------
 
   /**
-   * Expand from `from` toward `to` using real quoter output as the cost.
+   * Find the cheapest path for the given mode.
    *
-   * Only a bounded set of neighbours is expanded per node: the pools with the
-   * deepest liquidity, preferring those that connect to the other endpoint or
-   * to the tokens with the most connections. Without this the graph is dense
-   * enough that a naive search fans out into hundreds of quoter calls.
+   * For exact-input we expand *forward* from the pay token: each hop is quoted
+   * with the live output of the previous hop, so the running amount is always
+   * in the units of the current node.
+   *
+   * For exact-output we expand *backward* from the receive token: each hop is
+   * quoted `quoteExactOutputSingle(current -> previous)` with the running
+   * required input. This is the only correct way to search a multi-hop
+   * exact-output route — quoting a forward hop with the *final* output amount
+   * (in the wrong token's decimals) makes valid multi-hop routes look
+   * unavailable, which is exactly the "no route" bug this fixes.
+   *
+   * The search stays bounded: only the deepest-liquid neighbours are expanded
+   * per node, and every fee tier is preserved.
    */
   private async findBestPath(
     from: TokenConfig,
@@ -456,13 +465,83 @@ export class UniswapV3Provider implements RoutingProvider {
     exactOut: boolean,
   ): Promise<{ path: TokenConfig[]; fees: number[] } | null> {
     const adjacency = await this.ensureGraph([from, to]);
-    const goalKey = poolKey(to);
 
+    // Expand from `start` toward `goal`. Neighbour ordering is intentionally
+    // indifferent to direction: the searches below only expand nodes that can
+    // still reach the goal over liquid pools.
     const neighbourEdges = (key: string): PoolInfo[] => {
       const edges = adjacency.get(key) ?? [];
-      // Prefer edges that reach the goal, then the deepest pools. We keep every
-      // fee tier: a token can have a pool at fee=100 that reverts while its
-      // fee=3000 pool is the one with real liquidity.
+      return [...edges]
+        .sort((a, b) => (b.liquidity > a.liquidity ? 1 : b.liquidity < a.liquidity ? -1 : 0))
+        .slice(0, CANDIDATE_LIMIT);
+    };
+
+    if (exactOut) {
+      // ---- Backward search: receive(goal) -> pay(start) ----
+      const startKey = poolKey(from);
+      let frontier: { key: string; path: TokenConfig[]; fees: number[]; cost: bigint }[] = [
+        { key: poolKey(to), path: [to], fees: [], cost: amount },
+      ];
+
+      for (let hop = 0; hop < MAX_HOPS; hop++) {
+        // `req.amount` is the amount of `a` required to produce `prevAmount`
+        // of `b`. We evaluate the candidate against each frontier node's
+        // current required amount.
+        const requests: { a: TokenConfig; b: TokenConfig; fee: number; amount: bigint }[] = [];
+        const meta: { node: (typeof frontier)[number]; nextKey: string; fee: number }[] = [];
+        for (const node of frontier) {
+          const used = new Set(node.path.map(poolKey));
+          const last = node.path[node.path.length - 1];
+          for (const edge of neighbourEdges(node.key)) {
+            const nextKey = edge.to.toLowerCase();
+            if (used.has(nextKey)) continue;
+            const nextToken = this.tokenByKey.get(nextKey);
+            if (!nextToken) continue;
+            requests.push({ a: nextToken, b: last, fee: edge.fee, amount: node.cost });
+            meta.push({ node, nextKey, fee: edge.fee });
+          }
+        }
+
+        if (requests.length === 0) break;
+        const outs = await this.quoteMany(
+          requests.map((r) => ({ a: r.a, b: r.b, fee: r.fee, amount: r.amount, exactOut: true })),
+        );
+
+        const expansions: (typeof frontier)[number][] = [];
+        const goals: (typeof frontier)[number][] = [];
+        outs.forEach((out, i) => {
+          if (out === null || out <= 0n) return;
+          const { node, nextKey, fee } = meta[i];
+          const nextToken = this.tokenByKey.get(nextKey)!;
+          const candidate = {
+            key: nextKey,
+            path: [...node.path, nextToken],
+            fees: [fee, ...node.fees], // built in pay->receive order
+            cost: out, // amount of nextToken required
+          };
+          if (nextKey === startKey) goals.push(candidate);
+          else expansions.push(candidate);
+        });
+
+        if (goals.length) {
+          goals.sort((a, b) => (a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : 0));
+          return { path: goals[0].path.slice().reverse(), fees: goals[0].fees };
+        }
+        if (expansions.length === 0) break;
+
+        expansions.sort((a, b) => (a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : 0));
+        const perKey = new Map<string, (typeof frontier)[number]>();
+        for (const e of expansions) if (!perKey.has(e.key)) perKey.set(e.key, e);
+        frontier = [...perKey.values()].slice(0, 10);
+      }
+      return null;
+    }
+
+    // ---- Forward search: pay(start) -> receive(goal), amount fixed ----
+    const goalKey = poolKey(to);
+
+    const forwardNeighbourEdges = (key: string): PoolInfo[] => {
+      const edges = adjacency.get(key) ?? [];
       return [...edges]
         .sort((a, b) => {
           const ag = a.to.toLowerCase() === goalKey;
@@ -478,19 +557,18 @@ export class UniswapV3Provider implements RoutingProvider {
     ];
 
     for (let hop = 0; hop < MAX_HOPS; hop++) {
-      // Gather every expansion candidate, then quote them all at once.
       const requests: { a: TokenConfig; b: TokenConfig; fee: number; amount: bigint; exactOut: boolean }[] = [];
       const meta: { node: (typeof frontier)[number]; nextKey: string; fee: number }[] = [];
 
       for (const node of frontier) {
         const used = new Set(node.path.map(poolKey));
         const last = node.path[node.path.length - 1];
-        for (const edge of neighbourEdges(node.key)) {
+        for (const edge of forwardNeighbourEdges(node.key)) {
           const nextKey = edge.to.toLowerCase();
           if (used.has(nextKey)) continue;
           const nextToken = this.tokenByKey.get(nextKey);
           if (!nextToken) continue;
-          requests.push({ a: last, b: nextToken, fee: edge.fee, amount, exactOut });
+          requests.push({ a: last, b: nextToken, fee: edge.fee, amount, exactOut: false });
           meta.push({ node, nextKey, fee: edge.fee });
         }
       }
@@ -515,7 +593,6 @@ export class UniswapV3Provider implements RoutingProvider {
         else expansions.push(candidate);
       });
 
-      // A direct hit at this hop count is optimal — stop early.
       if (goals.length) {
         goals.sort((a, b) => (a.cost < b.cost ? -1 : a.cost > b.cost ? 1 : 0));
         return { path: goals[0].path, fees: goals[0].fees };
@@ -531,6 +608,24 @@ export class UniswapV3Provider implements RoutingProvider {
     }
 
     return null;
+  }
+
+  /**
+   * Exact *input* along a multi-hop path, re-checking the live amount after
+   * each hop (never reusing the final output amount for intermediate hops).
+   */
+  private async exactAmountIn(
+    path: TokenConfig[],
+    fees: number[],
+    amountIn: bigint,
+  ): Promise<bigint | null> {
+    let out = amountIn;
+    for (let i = 0; i < path.length - 1; i++) {
+      const step = await this.quoteSingle(path[i], path[i + 1], fees[i], out, false);
+      if (step === null) return null;
+      out = step;
+    }
+    return out;
   }
 
   private async resolveHops(path: TokenConfig[], fees: number[]): Promise<RouteHop[] | null> {
@@ -569,13 +664,7 @@ export class UniswapV3Provider implements RoutingProvider {
       }
       return needed;
     }
-    let out = amount;
-    for (let i = 0; i < path.length - 1; i++) {
-      const r = await this.quoteSingle(path[i], path[i + 1], fees[i], out, false);
-      if (r === null) return null;
-      out = r;
-    }
-    return out;
+    return this.exactAmountIn(path, fees, amount);
   }
 
   async quote(req: RouteQuoteRequest): Promise<RouteQuoteResult> {

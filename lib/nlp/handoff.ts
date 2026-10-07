@@ -22,6 +22,14 @@ export type ComposeHandoff = {
   amountMode: AmountMode;
   /** The token quantity the user asked for, when they named one. */
   tokenAmount?: string;
+  /**
+   * The source asset the user's instruction deterministically fixes, when it
+   * does. "Send 10 MON" fixes the source to MON; a USD-value intent
+   * ("$10 worth of MON") does not, so the source stays the user's choice.
+   */
+  sourceAsset?: string;
+  /** How the source was established — mirrors the composer's payTokenSource. */
+  sourceOrigin?: "intent";
 };
 
 export type HandoffResult =
@@ -87,6 +95,11 @@ export function draftToHandoff(
       receiveAmountUsd: toDecimalString(usd),
       amountMode: "recipient_receives",
       tokenAmount: draft.amount,
+      // A token-quantity instruction ("10 MON") fixes the *source* asset too:
+      // the user named what they want to spend, so we must not later suggest a
+      // different asset to pay with.
+      sourceAsset: draft.asset,
+      sourceOrigin: "intent",
     },
     summary: `${draft.amount} ${draft.asset}`,
   };

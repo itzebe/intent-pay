@@ -3,17 +3,26 @@
 import { AnimatePresence, motion } from "framer-motion";
 import type { Quote } from "@/lib/domain/intent";
 import type { TokenConfig } from "@/lib/config/tokens";
-import { formatAmount, formatGasUsd, formatImpact, formatUsd, usdTokenLabel } from "@/lib/format";
+import { formatAmount, formatGasUsd, formatImpact } from "@/lib/format";
+import { planEconomics } from "@/lib/execution/plan";
 import { Spinner, Warning } from "@/components/ui/Icons";
 import type { QuoteError } from "@/lib/hooks/usePayment";
+import type { Readiness } from "@/lib/domain/readiness";
 
-/** Live calculation readout. Updates on every intent change. */
+/**
+ * Compact payment details.
+ *
+ * The flow itself (Pay with → Recipient gets) is shown above; this card only
+ * carries the handful of facts a payer needs: rate, route (only when a
+ * conversion is required), network fee, and the guaranteed minimum.
+ */
 export function LiveCalculation({
   quote,
   quoting,
   error,
   payToken,
   receiveToken,
+  readiness,
   onUseAlternative,
 }: {
   quote: Quote | null;
@@ -21,12 +30,20 @@ export function LiveCalculation({
   error: QuoteError | null;
   payToken: TokenConfig;
   receiveToken: TokenConfig;
+  readiness?: Readiness;
   onUseAlternative?: (symbol: string) => void;
 }) {
+  const econ = quote ? planEconomics(quote) : null;
+  const isConversion = Boolean(quote) && quote!.route.kind === "swap";
+  const rate =
+    quote && quote.rate > 0
+      ? `1 ${payToken.symbol} ≈ ${formatAmount(String(quote.rate))} ${receiveToken.symbol}`
+      : null;
+
   return (
     <div className="rounded-2xl border border-white/[0.07] bg-ink-800/40 p-4">
       <div className="mb-3 flex items-center justify-between">
-        <span className="label">Live calculation</span>
+        <span className="label">Details</span>
         <AnimatePresence>
           {quoting && (
             <motion.span
@@ -53,14 +70,17 @@ export function LiveCalculation({
             <div className="flex items-start gap-2">
               <Warning className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
               <div>
+                {/* A specific, actionable headline — never a bare "Route unavailable". */}
                 <p className="text-sm font-semibold text-amber-100">
-                  {error.code === "route_unavailable" ? "Route unavailable" : "Can't price this yet"}
+                  {readiness && !readiness.ready ? readiness.cta : "Can't price this yet"}
                 </p>
-                <p className="mt-0.5 text-xs text-white/60">{error.message}</p>
+                <p className="mt-0.5 text-xs text-white/60">
+                  {readiness?.message ?? error.message}
+                </p>
                 {error.code === "route_unavailable" && error.alternatives?.length ? (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {error.alternatives
-                      .filter((s) => s !== receiveToken.symbol)
+                      .filter((s) => s !== receiveToken.symbol && s !== payToken.symbol)
                       .slice(0, 5)
                       .map((s) => (
                         <button
@@ -68,7 +88,7 @@ export function LiveCalculation({
                           onClick={() => onUseAlternative?.(s)}
                           className="rounded-full border border-white/[0.12] bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-white/80 transition hover:border-white/25"
                         >
-                          {s}
+                          Pay with {s}
                         </button>
                       ))}
                   </div>
@@ -84,33 +104,28 @@ export function LiveCalculation({
             exit={{ opacity: 0 }}
             className="space-y-2.5"
           >
-            <Row label="You pay" value={usdTokenLabel(quote.payUsd, payToken.symbol)} usd={`${formatAmount(quote.payAmount)} ${payToken.symbol}`} />
-            <Row label="Recipient receives" value={usdTokenLabel(quote.receiveUsd, receiveToken.symbol)} usd={`${formatAmount(quote.receiveAmount)} ${receiveToken.symbol}`} strong />
-            <Row label="Conversion" value={quote.route.path.join(" → ")} mono />
-            {formatImpact(quote.priceImpact) && (
+            {rate && <Row label="Rate" value={rate} />}
+            {isConversion && (
+              <Row label="Route" value={`${quote.route.path.join(" → ")} · Uniswap V3`} mono />
+            )}
+            {isConversion && formatImpact(quote.priceImpact) && (
               <Row label="Price impact" value={formatImpact(quote.priceImpact)!} />
             )}
-            <div className="hairline pt-2.5">
+            <Row
+              label="Network fee"
+              value={
+                quote.networkCostUsdAvailable === false
+                  ? "Unavailable"
+                  : formatGasUsd(quote.networkCostUsd)
+              }
+            />
+            {econ && (
               <Row
-                label="Estimated network cost"
-                value={
-                  quote.networkCostUsdAvailable === false
-                    ? "Unavailable"
-                    : formatGasUsd(quote.networkCostUsd)
-                }
+                label={econ.exact ? "Recipient receives" : "Minimum received"}
+                value={`${formatAmount(econ.minimumReceived)} ${receiveToken.symbol}`}
+                sub={econ.exact ? "exact output" : `${(econ.slippageBps / 100).toFixed(2)}% slippage`}
               />
-              <Row
-                label="Total sender cost"
-                value={
-                  quote.networkCostUsdAvailable === false
-                    ? `≥ ${formatUsd(quote.totalSenderCostUsd)} + gas`
-                    : formatUsd(quote.totalSenderCostUsd)
-                }
-              />
-            </div>
-            <p className="pt-1 text-[10px] uppercase tracking-wider text-white/30">
-              {priceProvenance(quote)}
-            </p>
+            )}
           </motion.div>
         ) : (
           <motion.p
@@ -127,43 +142,25 @@ export function LiveCalculation({
   );
 }
 
-/** Plain-language label for where the live prices came from. */
-function priceProvenance(quote: Quote): string {
-  if (quote.receivePriceUnavailable) return "Recipient token price unavailable";
-  const kind = (s?: string) =>
-    s === "stable" ? "stablecoin peg"
-      : s === "market" ? "market price"
-        : s === "dex" ? "DEX price"
-          : s === "onchain" ? "on-chain price"
-            : "reference price";
-  return `Priced at ${kind(quote.receivePriceSource)}`;
-}
-
 function Row({
   label,
   value,
-  usd,
-  strong,
+  sub,
   mono,
 }: {
   label: string;
   value: string;
-  usd?: string;
-  strong?: boolean;
+  sub?: string;
   mono?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-xs text-white/45">{label}</span>
       <span className="flex items-baseline gap-2 text-right">
-        <span
-          className={`num ${strong ? "text-sm font-semibold text-white" : "text-sm text-white/85"} ${
-            mono ? "font-mono text-[12px]" : ""
-          }`}
-        >
+        <span className={`num text-sm text-white/85 ${mono ? "font-mono text-[12px]" : ""}`}>
           {value}
         </span>
-        {usd && <span className="num text-[11px] text-white/35">{usd}</span>}
+        {sub && <span className="num text-[11px] text-white/35">{sub}</span>}
       </span>
     </div>
   );

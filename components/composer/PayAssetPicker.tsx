@@ -24,6 +24,7 @@ export function PayAssetPicker({
   balances,
   selected,
   recommended,
+  payTokenIsSet = true,
   onSelect,
   availability,
   catalog,
@@ -35,6 +36,8 @@ export function PayAssetPicker({
   balances: Balance[];
   selected: string;
   recommended: string | null;
+  /** False while the source is only an optimizer suggestion, not a choice. */
+  payTokenIsSet?: boolean;
   onSelect: (symbol: string) => void;
   availability?: Record<string, boolean | null>;
   catalog: TokenConfig[];
@@ -50,6 +53,9 @@ export function PayAssetPicker({
   const optionFor = (symbol: string) =>
     optimizer?.options.find((o) => o.symbol === symbol);
   const bestSymbol = optimizer?.best?.symbol ?? recommended;
+  // A recommendation is not a selection: don't render the suggested asset as
+  // already chosen until the user actually picks one.
+  const activeSelection = payTokenIsSet ? selected : null;
 
   return (
     <div>
@@ -60,6 +66,12 @@ export function PayAssetPicker({
         </span>
       </div>
 
+      {!payTokenIsSet && (
+        <p className="mb-2 text-xs text-white/45">
+          Choose the asset you want to pay with.
+        </p>
+      )}
+
       <div className="rounded-2xl border border-white/[0.08] bg-ink-900/50 p-3">
         {funded.length === 0 ? (
           <div className="px-1 py-2 text-sm text-white/45">
@@ -68,7 +80,7 @@ export function PayAssetPicker({
         ) : (
           <div className="flex flex-wrap gap-2">
             {funded.map((b) => {
-              const isSelected = b.token.symbol === selected;
+              const isSelected = b.token.symbol === activeSelection;
               const isRecommended = b.token.symbol === bestSymbol && !isSelected;
               const opt = optionFor(b.token.symbol);
               const unusable = opt && !opt.ok;
@@ -125,9 +137,9 @@ export function PayAssetPicker({
         </button>
       </div>
 
-      {selectedBalance && selectedBalance.usd === 0 && (
+      {activeSelection && selectedBalance && selectedBalance.usd === 0 && (
         <p className="mt-2 text-xs text-amber-300/80">
-          You don&apos;t hold any {selected}. Pick a funded asset above.
+          You don&apos;t hold any {activeSelection}. Pick a funded asset above.
         </p>
       )}
 

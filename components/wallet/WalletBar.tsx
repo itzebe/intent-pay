@@ -74,9 +74,12 @@ export function ConnectButton({
 export function BalanceOverview({
   balances,
   loading,
+  connected = true,
 }: {
   balances: { token: { symbol: string; tint: string }; amount: string; usd: number }[];
   loading?: boolean;
+  /** False when no wallet is connected — balances are *unknown*, not zero. */
+  connected?: boolean;
 }) {
   const total = balances.reduce((s, b) => s + b.usd, 0);
   const funded = balances.filter((b) => b.usd > 0);
@@ -85,12 +88,19 @@ export function BalanceOverview({
     <div className="rounded-2xl border border-white/[0.07] bg-ink-800/40 p-4">
       <div className="flex items-center justify-between">
         <span className="label">Your wallet</span>
-        <span className="num text-sm font-semibold text-white">
-          ${total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-        </span>
+        {/* Never show a verified $0.00 when we simply have no wallet. */}
+        {connected && !loading ? (
+          <span className="num text-sm font-semibold text-white">
+            ${total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </span>
+        ) : (
+          <span className="text-xs text-white/35">—</span>
+        )}
       </div>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
-        {loading ? (
+        {!connected ? (
+          <span className="text-xs text-white/40">Connect your wallet to see balances</span>
+        ) : loading ? (
           <span className="text-xs text-white/40">Reading balances…</span>
         ) : funded.length === 0 ? (
           <span className="text-xs text-white/40">No supported balances</span>

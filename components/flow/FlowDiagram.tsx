@@ -4,14 +4,21 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 import type { Quote } from "@/lib/domain/intent";
 import type { TokenConfig } from "@/lib/config/tokens";
-import { formatAmount, shortAddress, usdTokenLabel } from "@/lib/format";
+import { formatAmount, formatImpact, shortAddress, usdTokenLabel } from "@/lib/format";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 import { ArrowDown, Sparkle } from "@/components/ui/Icons";
 
 /**
- * The signature visual: the payment as a transformation, not a swap form.
- * A token travels down the flow each time the quote recalculates, so the
- * motion communicates "your asset becomes theirs".
+ * The payment as a transformation, not a swap form.
+ *
+ * Hierarchy (only the source/destination quantities matter to the user):
+ *
+ *   PAY WITH            [token]  <amount>
+ *        ↓  (conversion, ONLY when the assets differ)
+ *   RECIPIENT GETS      [token]  <amount>
+ *
+ * When the user pays directly with the receive asset, no conversion row is
+ * shown at all — it reads as an ordinary payment.
  */
 export function FlowDiagram({
   quote,
@@ -34,15 +41,14 @@ export function FlowDiagram({
     setTravelKey((k) => k + 1);
   }, [quote?.quotedAt, quote?.payAmount, quote?.receiveAmount]);
 
-  const routeLabel = quote
-    ? quote.route.path.join(" → ")
-    : `${payToken.symbol} → ${receiveToken.symbol}`;
+  // A conversion is only shown when the two assets genuinely differ.
+  const isConversion = Boolean(quote) && quote!.route.kind === "swap";
+  const impact = quote ? formatImpact(quote.priceImpact) : null;
 
   return (
     <div className="relative">
-      {/* Node 1 — your asset */}
       <FlowNode
-        kicker="You pay"
+        kicker="Pay with"
         accent={payToken.tint}
         leading={<TokenBadge token={payToken} size={38} />}
         title={payToken.symbol}
@@ -50,14 +56,21 @@ export function FlowDiagram({
         sub={quote ? `${formatAmount(quote.payAmount)} ${payToken.symbol}` : undefined}
       />
 
-      <Connector label={routeLabel} traveling={Boolean(quote)} reduce={reduce} travelKey={travelKey} tint={payToken.tint} />
+      {isConversion && (
+        <Connector
+          label={`${payToken.symbol} → ${receiveToken.symbol} · Uniswap V3`}
+          traveling={Boolean(quote)}
+          reduce={reduce}
+          travelKey={travelKey}
+          tint={payToken.tint}
+        />
+      )}
 
-      {/* Node 2 — recipient */}
       <FlowNode
-        kicker="Recipient receives"
+        kicker="Recipient gets"
         accent={receiveToken.tint}
         leading={<TokenBadge token={receiveToken} size={38} />}
-        title={recipientValid ? shortAddress(recipient) : "Recipient address"}
+        title={recipientValid ? shortAddress(recipient) : "recipient address"}
         value={quote ? usdTokenLabel(quote.receiveUsd, receiveToken.symbol) : "—"}
         sub={quote ? `${formatAmount(quote.receiveAmount)} ${receiveToken.symbol}` : undefined}
         emphasis
@@ -74,8 +87,8 @@ export function FlowDiagram({
             <Sparkle className="h-3.5 w-3.5 text-mono-soft" />
             <span>
               {quote.route.kind === "direct"
-                ? "Direct transfer — no conversion needed"
-                : `Best route found on Monad · ${quote.route.hops.length || 1} hop${(quote.route.hops.length || 1) > 1 ? "s" : ""}`}
+                ? "Direct payment — no conversion needed"
+                : `Converted on Monad${impact ? ` · impact ${impact}` : ""}`}
             </span>
           </motion.div>
         )}
@@ -117,7 +130,9 @@ function FlowNode({
       <div className="min-w-0 flex-1">
         <div className="label">{kicker}</div>
         <div className="mt-0.5 flex items-baseline gap-2">
-          <span className={`num truncate ${emphasis ? "text-lg font-semibold" : "text-base font-medium"} text-white`}>
+          <span
+            className={`num truncate ${emphasis ? "text-lg font-semibold" : "text-base font-medium"} text-white`}
+          >
             {value}
           </span>
           <span className="truncate text-xs text-white/45">{title}</span>
@@ -146,7 +161,14 @@ function Connector({
       <div className="relative flex h-10 w-9 items-center justify-center">
         <svg width="20" height="40" viewBox="0 0 20 40" className="text-white/15">
           <path d="M10 2 V30" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 4" />
-          <path d="M5 28 L10 34 L15 28" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M5 28 L10 34 L15 28"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
         <AnimatePresence>
           {traveling && !reduce && (

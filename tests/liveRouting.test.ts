@@ -104,4 +104,28 @@ describe.skipIf(!LIVE)("live routing on Monad mainnet (chain 143)", () => {
     expect(res.alternatives).not.toContain("DUST");
     expect(res.alternatives).toContain("USDC");
   }, 120_000);
+
+  it("multi-hop exact output preserves the recipient amount (regression: forward-quote bug)", async () => {
+    // WETH -> MON has no direct pool; it must route WETH -> USDC -> MON. The old
+    // path search quoted the *forward* hop with the final MON amount (18-dp)
+    // against USDC (6-dp), so this valid route looked unavailable.
+    const res = await quote("WETH", "MON", "10");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.route.path[0]).toBe("WETH");
+    expect(res.route.path.at(-1)).toBe("MON");
+    expect(res.route.path.length).toBeGreaterThan(2); // genuinely multi-hop
+    expect(Number(res.receiveAmount)).toBeGreaterThan(0);
+    expect(Number(res.payAmount)).toBeGreaterThan(0);
+  }, 120_000);
+
+  it("does not substitute the requested output asset", async () => {
+    // The requested output asset is authoritative: even though the route passes
+    // through USDC, the recipient receives MON — never USDC.
+    const res = await quote("WETH", "MON", "10");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.route.path.at(-1)).toBe("MON");
+    expect(res.route.hops.at(-1)?.toSymbol).toBe("MON");
+  }, 120_000);
 });

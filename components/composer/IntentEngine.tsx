@@ -41,6 +41,8 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
       receiveToken: result.compose.receiveToken,
       receiveAmountUsd: result.compose.receiveAmountUsd,
       amountMode: result.compose.amountMode,
+      payToken: result.compose.sourceAsset,
+      payTokenSource: result.compose.sourceAsset ? "intent" : undefined,
     });
     onPrefilled?.();
   };

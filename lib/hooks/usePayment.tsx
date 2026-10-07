@@ -20,6 +20,7 @@ import {
 } from "@/lib/domain/freshness";
 import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities";
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
+import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
 
 export type QuoteError = {
   code: string;
@@ -31,7 +32,15 @@ type FlowState = {
   network: MonadNetwork;
   intent: PaymentIntent;
   payToken: string;
-  payTokenIsManual: boolean;
+  /**
+   * How the payment asset was established:
+   *  - "user"      — the user explicitly selected it,
+   *  - "intent"    — deterministically fixed by the user's own instruction
+   *                  (e.g. "Send 10 MON" means pay MON),
+   *  - "recommended" — the optimizer suggested it, which is NOT a commitment.
+   * A payment cannot enter Review while the source is merely "recommended".
+   */
+  payTokenSource: "user" | "intent" | "recommended";
   /** Snapshot of the recipient amount the user explicitly asked for. */
   intendedReceiveAmount: string | null;
   quote: Quote | null;
@@ -52,6 +61,9 @@ type FlowContextValue = FlowState & {
   setReceiveAmount: (amount: string) => void;
   setAmountMode: (mode: AmountMode) => void;
   setPayToken: (symbol: string, manual?: boolean) => void;
+  /** True once the user has explicitly acted to set the recipient address. */
+  recipientConfirmed: boolean;
+  markRecipientConfirmed: (confirmed: boolean) => void;
   setBalances: (balances: Balance[]) => void;
   setBalancesLoading: (loading: boolean) => void;
   /** Register a token resolved by the server (paste-an-address flow). */
@@ -69,6 +81,8 @@ type FlowContextValue = FlowState & {
     receiveToken: string;
     receiveAmountUsd: string;
     amountMode?: AmountMode;
+    payToken?: string;
+    payTokenSource?: "user" | "intent";
   }) => void;
   recommendedPayToken: string | null;
   balanceFor: (symbol: string) => Balance | undefined;
@@ -107,6 +121,11 @@ type FlowContextValue = FlowState & {
     requiredMon: string;
     availableMon: string;
   };
+  /**
+   * Deterministic readiness gate. The Review/Confirm action is only reachable
+   * when `readiness.ready` is true; the CTA label comes from here too.
+   */
+  readiness: Readiness;
 };
 
 const FlowContext = createContext<FlowContextValue | null>(null);
@@ -129,7 +148,9 @@ export function PaymentProvider({
       amountMode: "recipient_receives",
     },
     payToken: "USDC",
-    payTokenIsManual: false,
+    // The starting form is a helper default, never a commitment: the user must
+    // still choose the asset before Review can be reached.
+    payTokenSource: "recommended",
     intendedReceiveAmount: "5",
     quote: null,
     quoting: false,
@@ -139,6 +160,8 @@ export function PaymentProvider({
     tokensVersion: 0,
     autoRefreshAt: 0,
   });
+
+  const [recipientConfirmed, setRecipientConfirmed] = useState(false);
 
   const [nonce, setNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -253,6 +276,8 @@ export function PaymentProvider({
   }, []);
   const setRecipient = useCallback((recipient: string) => {
     setState((s) => ({ ...s, intent: { ...s.intent, recipient } }));
+    // Typing (or clearing) the address invalidates a previous confirmation.
+    setRecipientConfirmed(false);
   }, []);
   const setReceiveToken = useCallback((symbol: string) => {
     setState((s) => ({ ...s, intent: { ...s.intent, receiveToken: symbol } }));
@@ -275,7 +300,12 @@ export function PaymentProvider({
     }));
   }, []);
   const setPayToken = useCallback((symbol: string, manual = true) => {
-    setState((s) => ({ ...s, payToken: symbol, payTokenIsManual: manual }));
+    setState((s) => ({
+      ...s,
+      payToken: symbol,
+      // An explicit selection is a commitment; an optimizer suggestion is not.
+      payTokenSource: manual ? "user" : "recommended",
+    }));
   }, []);
   const setBalances = useCallback((balances: Balance[]) => {
     setState((s) => ({ ...s, balances }));
@@ -310,6 +340,8 @@ export function PaymentProvider({
       receiveToken: string;
       receiveAmountUsd: string;
       amountMode?: AmountMode;
+      payToken?: string;
+      payTokenSource?: "user" | "intent";
     }) => {
       setState((s) => {
         const amountMode = input.amountMode ?? "recipient_receives";
@@ -322,15 +354,22 @@ export function PaymentProvider({
             receiveAmount: input.receiveAmountUsd,
             amountMode,
           },
-          // Pin the recipient amount as the intent, and hand payment-asset
-          // selection back to the optimizer (the user didn't choose one).
+          // Pin the recipient amount as the intent.
           intendedReceiveAmount:
             amountMode === "recipient_receives" ? input.receiveAmountUsd : null,
-          payTokenIsManual: false,
+          // When the instruction deterministically named a source asset
+          // ("Use USDT to send $10 USDC" / "Send 10 MON"), honour it. When it
+          // did not, the source is only *recommended* by the optimizer and the
+          // user must still confirm it before Review.
+          payToken: input.payToken ?? s.payToken,
+          payTokenSource: input.payToken
+            ? input.payTokenSource ?? "intent"
+            : "recommended",
           quote: null,
           quoteError: null,
         };
       });
+      setRecipientConfirmed(true);
       setNonce((n) => n + 1);
     },
     [],
@@ -361,13 +400,15 @@ export function PaymentProvider({
     return funded[0]?.token.symbol ?? null;
   }, [optimizer, state.balances]);
 
-  // Keep the recommendation in sync until the user chooses manually.
+  // Keep the recommendation in sync until the user chooses manually, or the
+  // instruction already established the source. We never silently override an
+  // explicit choice or an intent-established asset.
   useEffect(() => {
-    if (state.payTokenIsManual) return;
+    if (state.payTokenSource !== "recommended") return;
     if (!recommendedPayToken) return;
     if (recommendedPayToken === state.payToken) return;
     setState((s) => ({ ...s, payToken: recommendedPayToken }));
-  }, [recommendedPayToken, state.payTokenIsManual, state.payToken]);
+  }, [recommendedPayToken, state.payTokenSource, state.payToken]);
 
   // ---- Exact-payment protection -------------------------------------------
   const mismatch = useMemo(() => {
@@ -471,8 +512,46 @@ export function PaymentProvider({
     }
   }, [state.quote, state.balances, capabilities]);
 
+  // ---- Deterministic readiness gate ---------------------------------------
+  // The single authority for whether Review/Confirm is reachable. Visual state
+  // is never the only gate: `onConfirm` re-checks readiness and freshness.
+  const payTokenIsSet = state.payTokenSource === "user" || state.payTokenSource === "intent";
+  const readiness = useMemo(
+    () =>
+      computeReadiness({
+        recipient: state.intent.recipient,
+        recipientConfirmed,
+        payTokenIsSet,
+        payToken: state.payToken,
+        receiveToken: state.intent.receiveToken,
+        quoting: state.quoting,
+        quote: state.quote,
+        quoteError: state.quoteError,
+        quoteStale,
+        sufficiency,
+        gasSufficiency,
+        mismatchActive: Boolean(mismatch?.active),
+      }),
+    [
+      state.intent.recipient,
+      recipientConfirmed,
+      payTokenIsSet,
+      state.payToken,
+      state.intent.receiveToken,
+      state.quoting,
+      state.quote,
+      state.quoteError,
+      quoteStale,
+      sufficiency,
+      gasSufficiency,
+      mismatch,
+    ],
+  );
+
   const value: FlowContextValue = {
     ...state,
+    recipientConfirmed,
+    markRecipientConfirmed: setRecipientConfirmed,
     setNetwork,
     setRecipient,
     setReceiveToken,
@@ -496,6 +575,7 @@ export function PaymentProvider({
     quoteStale,
     sufficiency,
     gasSufficiency,
+    readiness,
   };
 
   return <FlowContext.Provider value={value}>{children}</FlowContext.Provider>;

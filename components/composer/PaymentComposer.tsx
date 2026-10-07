@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { TokenConfig } from "@/lib/config/tokens";
-import { isEvmAddress } from "@/lib/format";
+import { formatAmount, isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
@@ -54,10 +54,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   }, [liveBalances, wallet.address, flow.mode]);
 
   // Routability is discovered, not hardcoded: in live mode we ask the routing
-  // layer which tokens actually have a liquid route right now.
+  // layer which tokens were actually probed and have a liquid route. Tokens we
+  // haven't probed stay `null` (unknown) rather than being shown as unsupported.
   const availability = useMemo(() => {
-    const map: Record<string, boolean> = {};
-    for (const t of catalog.tokens) map[t.symbol] = t.routable !== false;
+    const map: Record<string, boolean | null> = {};
+    for (const t of catalog.tokens) {
+      if (typeof t.routable === "boolean") map[t.symbol] = t.routable;
+    }
     return map;
   }, [catalog.tokens]);
 
@@ -176,7 +179,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             className="grid gap-5 p-5 sm:grid-cols-[1.05fr_0.95fr] sm:gap-6 sm:p-6"
           >
             {/* left: intent */}
-            <div className="space-y-4">
+            <div className="min-w-0 space-y-4">
               <Step n={1}>
                 <RecipientField
                   value={flow.intent.recipient}
@@ -246,16 +249,14 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 >
                   <Warning className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    Not enough {flow.payToken}. You need {flow.sufficiency.required}{" "}
-                    {flow.payToken} but hold {flow.sufficiency.available}. Short by{" "}
-                    {flow.sufficiency.shortfall} {flow.payToken}.
+                    {`Not enough ${flow.payToken}. You need ${formatAmount(flow.sufficiency.required)} ${flow.payToken} but hold ${formatAmount(flow.sufficiency.available)}. Short by ${formatAmount(flow.sufficiency.shortfall)} ${flow.payToken}.`}
                   </span>
                 </motion.div>
               )}
             </div>
 
             {/* right: live result */}
-            <div className="space-y-4">
+            <div className="min-w-0 space-y-4">
               <FlowDiagram
                 quote={flow.quote}
                 payToken={flow.payTokenConfig}

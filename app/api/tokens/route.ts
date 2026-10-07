@@ -1,23 +1,26 @@
 import { NextResponse } from "next/server";
 import type { Address } from "viem";
-import { allTokens, SEED_TOKENS } from "@/lib/config/tokens";
+import { allTokens, SEED_TOKENS, catalogVersion, type TokenConfig } from "@/lib/config/tokens";
 import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
-import { resolveToken, searchTokens } from "@/lib/server/discovery";
+import { ensureCatalog, resolveToken, searchTokens } from "@/lib/server/discovery";
+import { getCatalog } from "@/lib/server/tokenList";
+import { WMON_ADDRESS } from "@/lib/providers/constants";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Token discovery endpoint.
  *
- *  GET /api/tokens                    — the catalog (seed + curated), optionally
+ *  GET /api/tokens                    — the catalog (seed + official list),
  *                                       annotated with live routability
  *  GET /api/tokens?q=usdc             — search by symbol / name / address
  *  GET /api/tokens?address=0x…        — resolve + read metadata for one token
  *
- * Nothing here is an allow-list: a token that is not in the curated list can
- * still be resolved by address, and its routability is determined by the
- * routing layer rather than by membership in an array.
+ * The catalog comes from the *runtime* discovery source, not a shipped array,
+ * so a token added upstream after deployment is searchable with no rebuild.
+ * Nothing here is an allow-list: an address that is not listed can still be
+ * resolved on chain, and routability is decided by the routing layer.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -27,20 +30,25 @@ export async function GET(req: Request) {
   const address = url.searchParams.get("address");
   const withAvailability = url.searchParams.get("availability") !== "0";
 
-  let routable: Set<string> | null = null;
+  // Install the runtime catalog (fetched + cached by the discovery source).
+  const catalogInfo = await ensureCatalog(network);
+
+  // Tri-state availability: true (probed + liquid), false (probed, no
+  // liquidity), null (not probed yet — the answer comes from a real quote).
+  let routability: Map<string, boolean> | null = null;
   if (mode === "live" && withAvailability) {
     try {
       const provider = getRoutingProvider("live", network);
-      const keys = await (provider as any).routableKeys?.();
-      routable = keys instanceof Set ? (keys as Set<string>) : null;
+      routability = await (provider as any).routability?.() ?? null;
     } catch {
-      routable = null;
+      routability = null;
     }
   }
 
-  const annotate = (address: string, seed: boolean) => {
-    if (routable === null) return seed;
-    return routable.has(address.toLowerCase());
+  const annotate = (addr: string, pool: string): boolean | null => {
+    if (routability === null) return null;
+    const v = routability.get(addr.toLowerCase()) ?? routability.get(pool.toLowerCase());
+    return typeof v === "boolean" ? v : null;
   };
 
   // ---- Resolve a single address ------------------------------------------
@@ -60,18 +68,9 @@ export async function GET(req: Request) {
       found: resolved.exists,
       listed: resolved.listed,
       problem: resolved.problem,
-      routable: resolved.exists ? annotate(t.address, Boolean(t.seed)) : false,
-      token: {
-        symbol: t.symbol,
-        name: t.name,
-        address: t.address,
-        decimals: t.decimals,
-        native: Boolean(t.native),
-        tint: t.tint,
-        logoURI: t.logoURI,
-        source: resolved.source,
-        seed: Boolean(t.seed),
-      },
+      routable: resolved.exists ? annotate(t.address, poolKeyOf(t)) : false,
+      catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
+      token: serializeToken(t, resolved.source),
     });
   }
 
@@ -79,25 +78,23 @@ export async function GET(req: Request) {
   if (query !== null) {
     const results = searchTokens(query, 40).map((r) => ({
       ...r,
-      tint: undefined,
-      routable: routable === null ? true : routable.has(r.address.toLowerCase()),
+      routable: annotate(r.address, r.address),
     }));
-    return NextResponse.json({ ok: true, mode, network, query, results });
+    return NextResponse.json({
+      ok: true,
+      mode,
+      network,
+      query,
+      catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
+      results,
+    });
   }
 
   // ---- Catalog ------------------------------------------------------------
   const catalog = allTokens().map((t) => ({
-    symbol: t.symbol,
-    name: t.name,
-    address: t.address,
-    decimals: t.decimals,
-    native: Boolean(t.native),
-    tint: t.tint,
-    logoURI: t.logoURI,
+    ...serializeToken(t, t.source),
     fallbackUsd: t.fallbackUsd,
-    source: t.source,
-    seed: Boolean(t.seed),
-    routable: annotate(t.address, Boolean(t.seed)),
+    routable: annotate(t.address, poolKeyOf(t)),
   }));
 
   return NextResponse.json({
@@ -107,8 +104,29 @@ export async function GET(req: Request) {
     /** Seeds are the shipped defaults; the rest is discovered at runtime. */
     seedCount: SEED_TOKENS.length,
     count: catalog.length,
+    /** Where the catalog came from: the live list or the shipped fallback. */
+    catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
     tokens: catalog,
   });
+}
+
+function poolKeyOf(t: { native?: boolean; address: string }): string {
+  // Native MON is pooled as WMON; compare on the pool address.
+  return t.native ? WMON_ADDRESS.toLowerCase() : t.address;
+}
+
+function serializeToken(t: TokenConfig, source?: string) {
+  return {
+    symbol: t.symbol,
+    name: t.name,
+    address: t.address as Address,
+    decimals: t.decimals,
+    native: Boolean(t.native),
+    tint: t.tint,
+    logoURI: t.logoURI,
+    source: source ?? t.source,
+    seed: Boolean(t.seed),
+  };
 }
 
 /** POST /api/tokens — register a token the user pasted (server-side metadata read). */
@@ -123,6 +141,8 @@ export async function POST(req: Request) {
   const network: MonadNetwork = body?.network === "testnet" ? "testnet" : "mainnet";
   const mode: AppMode = body?.mode === "live" ? "live" : "demo";
 
+  await ensureCatalog(network);
+
   const resolved = await resolveToken(address, network);
   if (!resolved) {
     return NextResponse.json(
@@ -132,13 +152,16 @@ export async function POST(req: Request) {
   }
   const t = resolved.token;
 
-  let routable = false;
+  let routable: boolean | null = null;
   if (mode === "live" && resolved.exists) {
     try {
-      const keys = await (getRoutingProvider("live", network) as any).routableKeys?.();
-      routable = keys instanceof Set ? (keys as Set<string>).has(t.address.toLowerCase()) : false;
+      const map = (await (getRoutingProvider("live", network) as any).routability?.()) as
+        | Map<string, boolean>
+        | null;
+      if (map) routable = map.get(t.address.toLowerCase()) ?? map.get(poolKeyOf(t)) ?? null;
+      else routable = null;
     } catch {
-      routable = false;
+      routable = null;
     }
   }
 
@@ -148,16 +171,7 @@ export async function POST(req: Request) {
     listed: resolved.listed,
     problem: resolved.problem,
     routable,
-    token: {
-      symbol: t.symbol,
-      name: t.name,
-      address: t.address as Address,
-      decimals: t.decimals,
-      native: Boolean(t.native),
-      tint: t.tint,
-      logoURI: t.logoURI,
-      source: resolved.source,
-      seed: Boolean(t.seed),
-    },
+    catalog: { count: (await getCatalog(network)).tokens.length, version: catalogVersion() },
+    token: serializeToken(t, resolved.source),
   });
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { discoverWalletBalances } from "@/lib/server/discovery";
+import { discoverWalletBalances, ensureCatalog } from "@/lib/server/discovery";
 import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { isEvmAddress } from "@/lib/format";
@@ -36,6 +36,9 @@ export async function GET(req: Request) {
   }
 
   try {
+    // Discover against the runtime catalog so a wallet's non-shipped holdings
+    // (e.g. a token added to the official list after deploy) are still found.
+    await ensureCatalog(network);
     const provider = getRoutingProvider("live", network);
     const { balances } = await discoverWalletBalances(
       address as `0x${string}`,

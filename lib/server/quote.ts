@@ -55,11 +55,15 @@ export async function buildQuote(
   });
 
   if (!routeResult.ok) {
+    // The requested tokens can't be alternatives to themselves.
+    const alternatives = routeResult.alternatives?.filter(
+      (s) => s !== payToken.symbol && s !== receiveToken.symbol,
+    );
     return {
       ok: false,
       code: routeResult.code,
       message: routeResult.message,
-      alternatives: routeResult.alternatives,
+      alternatives,
     };
   }
 

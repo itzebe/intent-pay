@@ -92,7 +92,9 @@ export function ReviewSheet({
               <div className="space-y-2 rounded-2xl border border-white/[0.06] bg-ink-900/60 p-4 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Routing provider</span>
-                  <span className="font-mono text-white/70">Uniswap V3 · Monad</span>
+                  <span className="font-mono text-white/70">
+                    {quote.mode === "demo" ? "Simulated · Demo mode" : "Uniswap V3 · Monad"}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Slippage protection</span>

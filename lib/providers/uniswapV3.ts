@@ -2,9 +2,12 @@ import { encodeFunctionData, decodeFunctionResult, parseAbi, type Address, type 
 import { getPublicClient } from "@/lib/server/rpc";
 import {
   allTokens,
+  catalogVersion,
   configFromCurated,
   curatedCatalog,
   getToken,
+  isUsdAnchor,
+  USD_ANCHOR_SYMBOLS,
   type TokenConfig,
 } from "@/lib/config/tokens";
 import { formatUnits, parseUnits } from "@/lib/domain/math";
@@ -27,7 +30,6 @@ const QUOTER_ABI = parseAbi([
 ]);
 
 const ZERO = "0x0000000000000000000000000000000000000000";
-const NATIVE_POOL_KEY = WMON_ADDRESS;
 
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11" as Address;
 const AGGREGATE3_ABI = parseAbi([
@@ -77,8 +79,12 @@ export class UniswapV3Provider implements RoutingProvider {
   readonly name = "uniswap-v3-monad";
   readonly mode = "live" as const;
 
-  private graph: { adjacency: Map<string, PoolInfo[]>; basisKeys: Set<string>; at: number } | null =
-    null;
+  private graph: {
+    adjacency: Map<string, PoolInfo[]>;
+    basisKeys: Set<string>;
+    at: number;
+    catalogVersion: string;
+  } | null = null;
   private tokenByKey = new Map<string, TokenConfig>();
   private priceCache = new Map<string, { value: UsdPrice; at: number }>();
   private availCache = new Map<string, { value: string[]; at: number }>();
@@ -108,9 +114,19 @@ export class UniswapV3Provider implements RoutingProvider {
     for (const t of allTokens()) add(t);
     const native = getToken("MON");
     if (native) add(native);
-    const list = [...byKey.values()];
-    for (const t of list) this.tokenByKey.set(poolKey(t), t);
-    return list;
+    return [...byKey.values()];
+  }
+
+  /**
+   * Keep the key->token index in sync with the runtime registry.
+   *
+   * This must run for *every* basis token, not just the seeds: a token
+   * discovered after the graph was first built (e.g. newly listed upstream, or
+   * pasted by the user) has to be resolvable by key, otherwise the path search
+   * cannot traverse to it even though its pool is in the graph.
+   */
+  private indexTokens(tokens: TokenConfig[]): void {
+    for (const t of tokens) this.tokenByKey.set(poolKey(t), t);
   }
 
   /**
@@ -149,7 +165,10 @@ export class UniswapV3Provider implements RoutingProvider {
       add(c);
       if (out.length >= MAX_BASIS_TOKENS) break;
     }
-    return out.slice(0, MAX_BASIS_TOKENS);
+    const basis = out.slice(0, MAX_BASIS_TOKENS);
+    // Every basis token must be resolvable by key for the path search.
+    this.indexTokens(basis);
+    return basis;
   }
 
   // -------------------------------------------------------------------------
@@ -157,7 +176,11 @@ export class UniswapV3Provider implements RoutingProvider {
   // -------------------------------------------------------------------------
 
   private async ensureGraph(endpoints: TokenConfig[]): Promise<Map<string, PoolInfo[]>> {
-    const fresh = this.graph && Date.now() - this.graph.at < GRAPH_TTL_MS;
+    const version = catalogVersion();
+    // A catalog change (e.g. a token list refresh) must not be served from a
+    // graph that was built before the new tokens were known.
+    const sameCatalog = this.graph?.catalogVersion === version;
+    const fresh = this.graph && sameCatalog && Date.now() - this.graph.at < GRAPH_TTL_MS;
     if (fresh && this.coversEndpoints(endpoints)) return this.graph!.adjacency;
 
     const basis = this.basisTokens(endpoints);
@@ -215,8 +238,9 @@ export class UniswapV3Provider implements RoutingProvider {
     });
 
     // Merge into the existing graph so a later, narrower quote keeps the pools
-    // discovered for a previous, wider one.
-    if (this.graph) {
+    // discovered for a previous, wider one. Start from scratch when the catalog
+    // itself changed, so stale tokens can't linger.
+    if (this.graph && sameCatalog) {
       for (const [k, edges] of adjacency) {
         const prev = this.graph.adjacency.get(k) ?? [];
         const merged = [...prev];
@@ -232,7 +256,7 @@ export class UniswapV3Provider implements RoutingProvider {
       return this.graph.adjacency;
     }
 
-    this.graph = { adjacency, basisKeys, at: Date.now() };
+    this.graph = { adjacency, basisKeys, at: Date.now(), catalogVersion: version };
     return adjacency;
   }
 
@@ -249,17 +273,25 @@ export class UniswapV3Provider implements RoutingProvider {
     calls: { address: Address; abi: any; functionName: string; args: readonly unknown[] }[],
   ): Promise<(T | null)[]> {
     if (calls.length === 0) return [];
+    // Batch through Multicall3.aggregate3 in a single eth_call. This is far
+    // more reliable than the JSON-RPC `eth_call` batch that viem's multicall
+    // emits (Monad's public RPC intermittently drops entries in a batch), and
+    // it returns per-call success flags so a single bad call can't poison the
+    // whole read.
     try {
-      const results = await this.client().multicall({
-        contracts: calls as any,
-        allowFailure: true,
-        batchSize: 512,
-      });
-      return (results as any[]).map((r) =>
-        r && r.status === "success" ? (r.result as T) : null,
+      const results = await this.aggregate3<T>(calls);
+      const failed = results.filter((r) => r === null).length;
+      if (failed > 0 && failed === results.length) {
+        // Every call failed — fall back so a broken aggregate can't look like
+        // "no pools exist".
+        throw new Error("aggregate3 returned no successful calls");
+      }
+      return results;
+    } catch (err) {
+      console.warn(
+        `[routing] aggregate3 failed for ${calls.length} calls, falling back to sequential reads:`,
+        (err as Error)?.message,
       );
-    } catch {
-      console.error("[routing] multicall failed, falling back to sequential reads", calls.length);
       const out: (T | null)[] = [];
       for (const c of calls) {
         try {
@@ -270,6 +302,47 @@ export class UniswapV3Provider implements RoutingProvider {
       }
       return out;
     }
+  }
+
+  /** One eth_call to Multicall3.aggregate3, decoding each raw return. */
+  private async aggregate3<T>(
+    calls: { address: Address; abi: any; functionName: string; args: readonly unknown[] }[],
+  ): Promise<(T | null)[]> {
+    const CHUNK = 800;
+    const out: (T | null)[] = [];
+    for (let i = 0; i < calls.length; i += CHUNK) {
+      const slice = calls.slice(i, i + CHUNK).map((c) => ({
+        target: c.address,
+        allowFailure: true,
+        callData: encodeFunctionData({ abi: c.abi, functionName: c.functionName, args: c.args }),
+      }));
+      const res = (await this.client().readContract({
+        address: MULTICALL3_ADDRESS,
+        abi: AGGREGATE3_ABI as any,
+        functionName: "aggregate3",
+        args: [slice],
+      })) as readonly { success: boolean; returnData: string }[];
+
+      res.forEach((r, idx) => {
+        if (!r?.success || !r.returnData || r.returnData === "0x") {
+          out.push(null);
+          return;
+        }
+        const call = calls[i + idx];
+        try {
+          out.push(
+            decodeFunctionResult({
+              abi: call.abi,
+              functionName: call.functionName,
+              data: r.returnData as `0x${string}`,
+            }) as T,
+          );
+        } catch {
+          out.push(null);
+        }
+      });
+    }
+    return out;
   }
 
   /** Quote several hops in one round-trip.
@@ -514,7 +587,7 @@ export class UniswapV3Provider implements RoutingProvider {
           ok: false,
           code: "route_unavailable",
           message: `We can't determine a price for ${priceToken.symbol}, so this payment can't be quoted.`,
-          alternatives: await this.availableSymbols(),
+          alternatives: await this.reachableSymbols(payToken, [receiveToken]),
         };
       }
       const units = Number(req.amount) / price.usd;
@@ -548,7 +621,7 @@ export class UniswapV3Provider implements RoutingProvider {
         ok: false,
         code: "route_unavailable",
         message: "No supported liquidity route can currently satisfy this payment.",
-        alternatives: await this.availableSymbols(),
+        alternatives: await this.reachableSymbols(payToken, [receiveToken]),
       };
     }
 
@@ -559,7 +632,7 @@ export class UniswapV3Provider implements RoutingProvider {
         ok: false,
         code: "route_unavailable",
         message: "No supported liquidity route can currently satisfy this payment.",
-        alternatives: await this.availableSymbols(),
+        alternatives: await this.reachableSymbols(payToken, [receiveToken]),
       };
     }
 
@@ -603,14 +676,13 @@ export class UniswapV3Provider implements RoutingProvider {
    * only assumption; it is never used to fabricate a swap rate).
    */
   private async computePrice(token: TokenConfig): Promise<UsdPrice> {
-    const stableSymbols = ["USDC", "USDT", "AUSD"];
-    const stables = stableSymbols
+    const stables = [...USD_ANCHOR_SYMBOLS]
       .map((s) => getToken(s))
       .filter((t): t is TokenConfig => Boolean(t))
       .filter((t) => !eq(t.address, token.address));
 
-    // A stablecoin is $1 by definition of the peg.
-    if (stableSymbols.includes(token.symbol)) return { usd: 1, source: "stable" };
+    // A USD anchor is $1 by definition of the peg.
+    if (isUsdAnchor(token)) return { usd: 1, source: "stable" };
 
     const probeUnits = parseUnits("1", token.decimals);
 
@@ -625,6 +697,39 @@ export class UniswapV3Provider implements RoutingProvider {
 
     if (token.fallbackUsd > 0) return { usd: token.fallbackUsd, source: "fallback" };
     return { usd: 0, source: "fallback" };
+  }
+
+  /**
+   * Symbols reachable *from a given token* over the current pool graph.
+   *
+   * This is what "available alternatives" should mean: a token that merely has
+   * liquidity somewhere is not necessarily payable from the asset the sender
+   * holds. Offering such a token would send the user into another dead end, so
+   * reachability — not mere pool existence — decides the list.
+   */
+  private async reachableSymbols(from: TokenConfig, exclude: TokenConfig[] = []): Promise<string[]> {
+    if (!this.graph) {
+      await this.ensureGraph(this.seedTokens().filter((t) => t.seed));
+    }
+    const adjacency = this.graph?.adjacency;
+    if (!adjacency) return [];
+    const excluded = new Set([from, ...exclude].map((t) => poolKey(t)));
+    const start = poolKey(from);
+    const seen = new Set<string>([start]);
+    const queue: string[] = [start];
+    const symbols = new Set<string>();
+    while (queue.length) {
+      const key = queue.shift()!;
+      for (const edge of adjacency.get(key) ?? []) {
+        const next = edge.to.toLowerCase();
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+        const t = this.tokenByKey.get(next);
+        if (t && !excluded.has(next)) symbols.add(t.symbol);
+      }
+    }
+    return [...symbols].sort();
   }
 
   async availableSymbols(): Promise<string[]> {
@@ -652,6 +757,31 @@ export class UniswapV3Provider implements RoutingProvider {
     }
     const out = new Set<string>();
     for (const [k, edges] of this.graph?.adjacency ?? []) if (edges.length > 0) out.add(k);
+    return out;
+  }
+
+  /**
+   * Routability for every token the app knows about, keyed by both the token's
+   * contract address and its pool address (native MON -> WMON).
+   *
+   * Only tokens that were actually probed are reported. A token that is not in
+   * this map is *unknown*, not "not payable" — the honest answer for it comes
+   * from attempting a real quote, never from absence in a cache.
+   */
+  async routability(): Promise<Map<string, boolean>> {
+    if (!this.graph) {
+      await this.ensureGraph(this.seedTokens().filter((t) => t.seed));
+    }
+    const adjacency = this.graph?.adjacency ?? new Map<string, PoolInfo[]>();
+    const out = new Map<string, boolean>();
+    for (const token of allTokens()) {
+      const pool = poolKey(token);
+      const probed = this.graph?.basisKeys.has(pool) ?? false;
+      if (!probed) continue;
+      const liquid = (adjacency.get(pool)?.length ?? 0) > 0;
+      out.set(token.address.toLowerCase(), liquid);
+      out.set(pool, liquid);
+    }
     return out;
   }
 

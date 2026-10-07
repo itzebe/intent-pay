@@ -73,7 +73,7 @@ export function buildPaymentPlan(
   const id = (k: string) => `${k}-${n++}`;
 
   // ---- Same asset: a direct transfer -------------------------------------
-  if (route.kind === "direct" || route.hops.length === 0) {
+  if (route.kind === "direct") {
     const amount = parseUnits(quote.payAmount, payToken.decimals);
     if (payToken.native) {
       steps.push({ id: id("transfer"), kind: "transfer", label: `Send MON to recipient`, token: null, to: recipient, amount });
@@ -81,6 +81,23 @@ export function buildPaymentPlan(
       steps.push({ id: id("transfer"), kind: "transfer", label: `Send ${payToken.symbol} to recipient`, token: payToken, to: recipient, amount });
     }
     return { steps, primaryStepId: steps[0].id, executable: true };
+  }
+
+  // A demo (or otherwise simulated) swap has no pool data to construct a real
+  // transaction from, so describe the transformation rather than pretending it
+  // is a direct transfer. The execution layer never sends this plan on-chain.
+  if (route.hops.length === 0) {
+    steps.push({
+      id: id("swap"),
+      kind: "swap",
+      label: `Convert ${payToken.symbol} → ${receiveToken.symbol}`,
+      direction: quote.exactOutput ? "exact_out" : "exact_in",
+      tokens: [],
+      fees: [],
+      recipient,
+      limit: 0n,
+    });
+    return { steps, primaryStepId: steps[0].id, executable: false };
   }
 
   // ---- Swaps --------------------------------------------------------------

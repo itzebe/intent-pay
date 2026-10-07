@@ -3,7 +3,7 @@ import { buildQuote } from "@/lib/server/quote";
 import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { AmountMode, PaymentIntent } from "@/lib/domain/intent";
-import { resolveToken } from "@/lib/server/discovery";
+import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { getToken } from "@/lib/config/tokens";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +55,10 @@ export async function POST(req: Request) {
   const net: MonadNetwork = network === "testnet" ? "testnet" : "mainnet";
 
   try {
+    // Install the runtime catalog before resolving, so a symbol that only
+    // exists in the live list resolves even if it was never shipped.
+    await ensureCatalog(net);
+
     // Resolve both sides to real token configs (symbol or address).
     const [receiveResolved, payResolved] = await Promise.all([
       resolveToken(receiveToken, net),

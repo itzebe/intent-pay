@@ -9,11 +9,13 @@ import {
   getToken,
   getTokenByAddress,
   registerToken,
+  setActiveCatalog,
   tintForAddress,
   type CuratedToken,
   type TokenConfig,
 } from "@/lib/config/tokens";
 import { isEvmAddress } from "@/lib/format";
+import { getCatalog } from "./tokenList";
 
 /**
  * Token discovery layer.
@@ -27,6 +29,19 @@ import { isEvmAddress } from "@/lib/format";
  * availability (3) is answered by the routing provider, because that is where
  * liquidity lives.
  */
+
+/**
+ * Ensure the runtime catalog is installed from the discovery source. Safe to
+ * call on every request — the source is cached and de-duplicated.
+ */
+export async function ensureCatalog(network: MonadNetwork = "mainnet"): Promise<{
+  count: number;
+  source: string;
+}> {
+  const catalog = await getCatalog(network);
+  setActiveCatalog(catalog.tokens, catalog.version);
+  return { count: catalog.tokens.length, source: catalog.source };
+}
 
 export type ResolvedToken = {
   token: TokenConfig;
@@ -239,17 +254,49 @@ export type TokenSearchResult = {
   decimals: number;
   logoURI?: string;
   listed: boolean;
+  /** Where the metadata came from (list / seed / onchain / wallet). */
+  source?: string;
 };
 
 /**
- * Search the catalog by symbol, name, or address. Results are a *starting
- * point* — the caller still asks the routing layer whether each is payable.
+ * Search the catalog *and* the runtime registry by symbol, name, or address.
+ *
+ * Results are a *starting point* — the caller still asks the routing layer
+ * whether each is payable. Including the registry means a token the user
+ * pasted (or that was found in their wallet) is searchable afterwards, not
+ * just the official list.
  */
 export function searchTokens(query: string, limit = 30): TokenSearchResult[] {
   const needle = (query ?? "").trim().toLowerCase();
-  const entries = curatedCatalog();
 
-  const scored: { score: number; entry: CuratedToken }[] = [];
+  const entries: TokenSearchResult[] = curatedCatalog().map((e) => ({
+    address: e.address,
+    symbol: e.symbol,
+    name: e.name,
+    decimals: e.decimals,
+    logoURI: e.logoURI,
+    listed: true,
+    source: "list",
+  }));
+
+  // Merge anything discovered at runtime that the catalog doesn't contain.
+  const seen = new Set(entries.map((e) => keyOf(e.address)));
+  for (const t of allTokens()) {
+    const k = keyOf(t.address);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    entries.push({
+      address: t.address,
+      symbol: t.symbol,
+      name: t.name,
+      decimals: t.decimals,
+      logoURI: t.logoURI,
+      listed: false,
+      source: t.source,
+    });
+  }
+
+  const scored: { score: number; entry: TokenSearchResult }[] = [];
   for (const e of entries) {
     const sym = e.symbol.toLowerCase();
     const name = e.name.toLowerCase();
@@ -266,14 +313,7 @@ export function searchTokens(query: string, limit = 30): TokenSearchResult[] {
   }
 
   scored.sort((a, b) => a.score - b.score || a.entry.symbol.localeCompare(b.entry.symbol));
-  return scored.slice(0, limit).map(({ entry }) => ({
-    address: entry.address,
-    symbol: entry.symbol,
-    name: entry.name,
-    decimals: entry.decimals,
-    logoURI: entry.logoURI,
-    listed: true,
-  }));
+  return scored.slice(0, limit).map(({ entry }) => entry);
 }
 
 // ---------------------------------------------------------------------------

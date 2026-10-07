@@ -1,5 +1,6 @@
 import { NATIVE_ADDRESS } from "./chains";
 import { CURATED_TOKENS, type CuratedToken } from "./curated";
+import { WMON_ADDRESS } from "@/lib/providers/constants";
 
 /**
  * A payment asset. All token metadata is data — the UI never branches on a
@@ -103,9 +104,6 @@ export const SEED_TOKENS: TokenConfig[] = [
   },
 ];
 
-/** Tokens used to bootstrap the demo wallet (a realistic Monad mix). */
-export const DEMO_TOKEN_SYMBOLS = ["USDT", "USDC", "MON"] as const;
-
 /** Deterministic accent colour so discovered tokens still look intentional. */
 export function tintForAddress(address: string): string {
   const palette = [
@@ -189,6 +187,28 @@ export function tokenBySymbol(symbol: string): TokenConfig {
   return t;
 }
 
+/**
+ * The address used by Uniswap pools for a token. The native asset has no
+ * contract, so it is pooled in its wrapped form (WMON). Lives here so the
+ * config layer can compare tokens the way the router does.
+ */
+export function poolAddressOf(token: TokenConfig): string {
+  return (token.native ? WMON_ADDRESS : token.address).toLowerCase();
+}
+
+/**
+ * Tokens treated as $1 USD anchors when pricing other tokens. This is a *peg
+ * assumption* (never used to fabricate a swap rate), kept here as
+ * configuration rather than inside the routing layer. Extending it is a config
+ * change, not a code change; a token not listed is still priced on chain via
+ * the quoter, so a newly listed stablecoin is never mispriced as free.
+ */
+export const USD_ANCHOR_SYMBOLS = new Set(["USDC", "USDT", "AUSD"]);
+
+export function isUsdAnchor(token: TokenConfig): boolean {
+  return USD_ANCHOR_SYMBOLS.has(token.symbol);
+}
+
 /** Everything currently known, seeds first, then alphabetical. */
 export function allTokens(): TokenConfig[] {
   return [...registry.values()].sort((a, b) => {
@@ -209,9 +229,37 @@ export function payableTokens(): TokenConfig[] {
 
 // ---------------------------------------------------------------------------
 // Curated catalog (a discovery seed for search, not a hard allow-list)
+//
+// The *active* catalog is set at runtime from the discovery source (the official
+// Monad list, fetched live). The static CURATED_TOKENS array is only the
+// fallback used before a fetch succeeds / when offline. This is what lets a
+// token added upstream after deployment become searchable without a rebuild.
 // ---------------------------------------------------------------------------
 
-/** The official Monad token list entries, plus our seed tokens. */
+let activeCatalog: CuratedToken[] | null = null;
+let activeVersion = "static";
+
+/** Install the runtime catalog (from the discovery source). */
+export function setActiveCatalog(tokens: CuratedToken[], version: string): void {
+  activeCatalog = tokens;
+  activeVersion = version;
+  // Register every entry so symbol/address lookups resolve app-wide without a
+  // separate resolve step. Rank-safe: never downgrades a seed record.
+  for (const t of tokens) configFromCurated(t);
+}
+
+/** Bumped whenever the active catalog changes, so caches can invalidate. */
+export function catalogVersion(): string {
+  return activeVersion;
+}
+
+/** Drop back to the shipped snapshot (used when discovery is unavailable). */
+export function resetCatalog(): void {
+  activeCatalog = null;
+  activeVersion = "static";
+}
+
+/** The official Monad token list entries (active catalog, plus our seeds). */
 export function curatedCatalog(): CuratedToken[] {
   const seen = new Set<string>();
   const out: CuratedToken[] = [];
@@ -227,7 +275,7 @@ export function curatedCatalog(): CuratedToken[] {
       logoURI: t.logoURI,
     });
   }
-  for (const t of CURATED_TOKENS) {
+  for (const t of activeCatalog ?? CURATED_TOKENS) {
     const k = key(t.address);
     if (seen.has(k)) continue;
     seen.add(k);

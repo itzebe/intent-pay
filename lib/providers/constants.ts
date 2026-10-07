@@ -17,6 +17,3 @@ export const WMON_ADDRESS =
 
 /** Fee tiers probed when discovering pools. */
 export const FEE_TIERS = [100, 500, 3000, 10000] as const;
-
-/** Intermediate tokens considered when building 2-hop routes. */
-export const HUB_SYMBOLS = ["USDC", "USDT", "WMON", "WETH", "AUSD"] as const;

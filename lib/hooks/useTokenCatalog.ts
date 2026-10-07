@@ -5,20 +5,33 @@ import { SEED_TOKENS, registerToken, type TokenConfig } from "@/lib/config/token
 import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 
+/**
+ * `routable` is tri-state on purpose:
+ *   true  — probed and has a liquid route
+ *   false — probed and has no liquid route
+ *   null  — not probed yet; the honest answer comes from a real quote
+ */
 export type CatalogToken = TokenConfig & {
-  /** Whether a liquid route currently exists (live mode only). */
-  routable?: boolean;
+  routable?: boolean | null;
   listed?: boolean;
+};
+
+export type CatalogInfo = {
+  count: number;
+  source: "remote" | "fallback" | string;
+  version: string;
 };
 
 /**
  * Loads the token catalog from the discovery API and registers every entry in
- * the runtime registry. This is what lets a token that is not a shipped seed —
- * e.g. one added to the official Monad list after deployment — appear in the UI
- * with no code change.
+ * the runtime registry. The catalog is fetched live from the official Monad
+ * list, so a token added upstream after deployment appears here with no code
+ * change. Works in both modes: discovery is a data concern, not a live-quote
+ * concern.
  */
 export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
   const [tokens, setTokens] = useState<CatalogToken[]>(SEED_TOKENS as CatalogToken[]);
+  const [info, setInfo] = useState<CatalogInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,6 +45,7 @@ export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
         const list = (json.tokens as CatalogToken[]) ?? [];
         for (const t of list) registerToken(t);
         setTokens(list.length ? list : (SEED_TOKENS as CatalogToken[]));
+        setInfo(json.catalog ?? null);
         setError(null);
       })
       .catch(() => {
@@ -45,14 +59,15 @@ export function useTokenCatalog(mode: AppMode, network: MonadNetwork) {
     };
   }, [mode, network]);
 
-  return { tokens, loading, error };
+  return { tokens, info, loading, error };
 }
 
 export type ResolvedTokenResponse = {
   ok: boolean;
   found?: boolean;
   listed?: boolean;
-  routable?: boolean;
+  /** true = payable, false = no route, null/undefined = unknown (unprobed). */
+  routable?: boolean | null;
   problem?: string;
   code?: string;
   message?: string;

@@ -31,7 +31,7 @@ export function PayAssetPicker({
   selected: string;
   recommended: string | null;
   onSelect: (symbol: string) => void;
-  availability?: Record<string, boolean>;
+  availability?: Record<string, boolean | null>;
   catalog: TokenConfig[];
   mode: AppMode;
   network: MonadNetwork;

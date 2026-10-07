@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DemoProvider } from "@/lib/providers/demo";
-import { tokenBySymbol } from "@/lib/config/tokens";
+import { configFromCurated, tokenBySymbol } from "@/lib/config/tokens";
 
 const provider = new DemoProvider();
 const network = "mainnet" as const;
@@ -84,5 +84,26 @@ describe("DemoProvider routing (USD-denominated intent)", () => {
     const a = await provider.quote(args);
     const b = await provider.quote(args);
     expect(a.ok && b.ok && a.payAmount === b.payAmount && a.receiveAmount === b.receiveAmount).toBe(true);
+  });
+
+  it("prices a token discovered at runtime (not a shipped seed)", async () => {
+    const discovered = configFromCurated({
+      address: "0x00000000000000000000000000000000000000Cd",
+      symbol: "RUNTIME",
+      name: "Runtime Token",
+      decimals: 18,
+    });
+    const res = await provider.quote({
+      network,
+      usd: true,
+      payToken: tokenBySymbol("USDT"),
+      receiveToken: discovered,
+      mode: "recipient_receives",
+      amount: "5",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.route.path).toEqual(["USDT", "RUNTIME"]);
+    expect(Number(res.receiveAmount)).toBeGreaterThan(0);
   });
 });

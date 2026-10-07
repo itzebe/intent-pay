@@ -176,6 +176,9 @@ export async function executePlan(
   network: MonadNetwork,
   callbacks: ExecuteCallbacks = {},
 ): Promise<{ primaryHash?: Hash; results: StepResult[] }> {
+  if (!plan.executable) {
+    throw new ExecutionError("This payment has no executable on-chain route.", "unknown");
+  }
   const client = getClientPublicClient(network);
   const results: StepResult[] = [];
   let primaryHash: Hash | undefined;

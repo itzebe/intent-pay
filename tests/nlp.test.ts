@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDetailed, mergeHints } from "@/lib/nlp/parser";
 import { deriveState, missingField, sanitizePatch, emptyIntent } from "@/lib/nlp/schema";
 import { nextClarification } from "@/lib/nlp/question";
-import { planFromText, applyAsset, applyAddress, applyAmount } from "@/lib/nlp/engine";
+import { planFromText, applyAsset, applyAddress, applyAmount, mergeDraft } from "@/lib/nlp/engine";
 import { draftToHandoff } from "@/lib/nlp/handoff";
 
 const SYMBOLS = ["MON", "USDC", "USDT", "SOL", "WETH", "AUSD"];
@@ -153,6 +153,43 @@ describe("Strict validation of untrusted (LLM) output", () => {
     expect(merged.amount).toBe("10");
     expect(merged.amountType).toBe("USD_VALUE");
     expect(merged.asset).toBe("MON");
+  });
+});
+
+describe("conversational merge — newest explicit values win", () => {
+  it("a restated amount corrects the collected draft", () => {
+    const active = parseDetailed("Send $10", ctx).intent; // USD_VALUE, no asset
+    const parsed = parseDetailed("Send 20 USDC to 0x1111111111111111111111111111111111111111", ctx).intent;
+    const merged = mergeDraft(active, parsed);
+    expect(merged.amount).toBe("20");
+    expect(merged.amountType).toBe("TOKEN_AMOUNT");
+    expect(merged.asset).toBe("USDC");
+    expect(merged.recipientAddress?.toLowerCase()).toBe(
+      "0x1111111111111111111111111111111111111111",
+    );
+  });
+
+  it("a follow-up message carrying nothing leaves collected fields intact", () => {
+    const active = parseDetailed("Send $10", ctx).intent;
+    active.asset = "MON";
+    // "MON" re-answer has no amount/address: nothing should be lost or changed.
+    const parsed = parseDetailed("MON", ctx).intent;
+    const merged = mergeDraft(active, parsed);
+    expect(merged.amount).toBe("10");
+    expect(merged.amountType).toBe("USD_VALUE");
+    expect(merged.asset).toBe("MON");
+  });
+
+  it("an address answer fills only the recipient", () => {
+    const active = parseDetailed("Send $10", ctx).intent;
+    active.asset = "MON";
+    const parsed = parseDetailed("0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4", ctx).intent;
+    const merged = mergeDraft(active, parsed);
+    expect(merged.amount).toBe("10");
+    expect(merged.asset).toBe("MON");
+    expect(merged.recipientAddress?.toLowerCase()).toBe(
+      "0x7a91c4b8e2d9f04ab3c6e81d5f72a0c9e4bd92f4",
+    );
   });
 });
 

@@ -64,6 +64,29 @@ export function planFromDraft(draft: ParsedPaymentIntent): NlpPlan {
   };
 }
 
+/**
+ * Merge the newest parsed message into the collected draft.
+ *
+ * The newest message's explicit values win, so restating an amount, asset, or
+ * address corrects the draft instead of being silently ignored. A message that
+ * carries none of those (an asset pick, an address answer, a bare follow-up)
+ * leaves the previously collected fields in place.
+ */
+export function mergeDraft(
+  active: ParsedPaymentIntent,
+  parsed: ParsedPaymentIntent,
+): ParsedPaymentIntent {
+  const next: ParsedPaymentIntent = { ...active };
+  if (parsed.amount) {
+    next.amount = parsed.amount;
+    next.amountType = parsed.amountType;
+  }
+  if (parsed.asset) next.asset = parsed.asset;
+  if (parsed.recipientAddress) next.recipientAddress = parsed.recipientAddress;
+  if (parsed.recipientName) next.recipientName = parsed.recipientName;
+  return next;
+}
+
 /** Apply a user's asset choice to the draft (validated against known symbols). */
 export function applyAsset(
   draft: ParsedPaymentIntent,

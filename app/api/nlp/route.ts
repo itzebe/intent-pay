@@ -11,7 +11,7 @@ import {
 import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { Balance } from "@/lib/domain/intent";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
-import { planFromDraft, planFromText } from "@/lib/nlp/engine";
+import { mergeDraft, planFromDraft, planFromText } from "@/lib/nlp/engine";
 import { draftToHandoff, type ComposeHandoff } from "@/lib/nlp/handoff";
 import { llmEnabled, extractIntentHint } from "@/lib/nlp/llm";
 import { missingField, emptyIntent, type ParsedPaymentIntent } from "@/lib/nlp/schema";
@@ -60,25 +60,17 @@ export async function POST(req: Request) {
     const hint = llmEnabled() ? await extractIntentHint(text, symbols) : null;
     let plan = planFromText(text, { symbols, network, hint });
 
-    // Conversational slot answers: when the client is answering a follow-up
-    // ("MON" to "which asset?", or an address to "which address?"), the draft
-    // is authoritative for everything already collected — the latest message
-    // only supplies the missing field.
+    // Conversational continuation: the client returns the draft collected so
+    // far, and the newest message is merged into it (newest explicit values
+    // win) so a follow-up answer or a corrected amount both behave correctly.
     const activeDraft = parseDraft(body?.draft);
     if (activeDraft) {
-      if (plan.draft.recipientAddress && !activeDraft.recipientAddress) {
-        activeDraft.recipientAddress = plan.draft.recipientAddress;
-      }
-      if (!activeDraft.amount && plan.draft.amount) {
-        activeDraft.amount = plan.draft.amount;
-        activeDraft.amountType = plan.draft.amountType;
-      }
-      // The parser only fills an asset when the message clearly names one; a
-      // bare symbol answer ("MON") is exactly that. A fresh amount left the
-      // existing asset choice in place.
-      if (plan.draft.asset) activeDraft.asset = plan.draft.asset;
-      if (plan.draft.recipientName) activeDraft.recipientName = plan.draft.recipientName;
-      plan = planFromDraft(activeDraft);
+      // The newest message's explicit values (amount, asset, address, name)
+      // overwrite the collected draft, so restating a field corrects it instead
+      // of being silently dropped. A message carrying none of them — an asset
+      // pick ("MON"), an address answer, or a bare follow-up — leaves the
+      // already-collected fields untouched.
+      plan = planFromDraft(mergeDraft(activeDraft, plan.draft));
     }
 
     const assets = buildAssets(balances);

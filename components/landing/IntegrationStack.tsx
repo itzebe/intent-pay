@@ -14,12 +14,19 @@ type Item = {
   name: string;
   role: string;
   active: boolean;
+  /** Configured but failing to answer — neither "Active" nor "Off". */
+  degraded?: boolean;
   detail: string;
 };
 
 export function IntegrationStack({ network }: { network: MonadNetwork }) {
   const caps = useCapabilities(network);
   if (!caps) return null;
+
+  const alchemyConfigured = caps.gas.alchemyConfigured ?? caps.gas.alchemy;
+  const alchemyReachable = caps.gas.alchemyReachable ?? caps.gas.alchemy;
+  const zerionConfigured = caps.wallet.zerionConfigured ?? caps.wallet.zerion;
+  const zerionReachable = caps.wallet.zerionReachable ?? caps.wallet.zerion;
 
   const items: Item[] = [
     {
@@ -31,18 +38,26 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
     {
       name: "Alchemy",
       role: "RPC · Gas",
-      active: caps.gas.alchemy,
-      detail: caps.gas.sponsorshipConfigured
-        ? "RPC + gas sponsorship ready"
-        : caps.gas.alchemy
-          ? "RPC transport"
-          : "Add an API key to enable",
+      active: alchemyReachable,
+      degraded: alchemyConfigured && !alchemyReachable,
+      detail: !alchemyConfigured
+        ? "Add an API key to enable"
+        : !alchemyReachable
+          ? `Configured, but unreachable${caps.gas.alchemyError ? ` — ${caps.gas.alchemyError}` : ""}`
+          : caps.gas.sponsorshipConfigured
+            ? "RPC + gas sponsorship ready"
+            : "RPC transport",
     },
     {
       name: "Zerion",
       role: "Wallet intelligence",
-      active: caps.wallet.zerion,
-      detail: caps.wallet.zerion ? "Discovering wallet assets" : "Add an API key to enable",
+      active: zerionReachable,
+      degraded: zerionConfigured && !zerionReachable,
+      detail: !zerionConfigured
+        ? "Add an API key to enable"
+        : !zerionReachable
+          ? `Configured, but unreachable${caps.wallet.zerionError ? ` — ${caps.wallet.zerionError}` : ""}`
+          : "Discovering wallet assets",
     },
     {
       name: caps.pricing.primary ? "Alchemy Prices" : "GeckoTerminal · DexScreener",
@@ -65,15 +80,17 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${
                 it.active
                   ? "bg-emerald-400/10 text-emerald-200/90"
-                  : "bg-white/[0.05] text-white/40"
+                  : it.degraded
+                    ? "bg-amber-400/10 text-amber-200/90"
+                    : "bg-white/[0.05] text-white/40"
               }`}
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
-                  it.active ? "bg-emerald-400" : "bg-white/30"
+                  it.active ? "bg-emerald-400" : it.degraded ? "bg-amber-400" : "bg-white/30"
                 }`}
               />
-              {it.active ? "Active" : "Off"}
+              {it.active ? "Active" : it.degraded ? "Check" : "Off"}
             </span>
           </div>
           <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/30">

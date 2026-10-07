@@ -21,11 +21,33 @@ import {
 import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities";
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
+import { resolveGasMode, alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
 
 export type QuoteError = {
   code: string;
   message: string;
   alternatives?: string[];
+};
+
+/** The wallet's EIP-5792 capabilities, as probed from the injected provider. */
+export type WalletGasCapabilities = {
+  atomicBatch: boolean;
+  paymasterService: boolean;
+  erc20GasPayment: boolean;
+};
+
+/**
+ * The resolved gas plan for the current payment. `mode` is only ever a mode the
+ * wallet can actually deliver; `paymasterServiceUrl` is present only when a
+ * paymaster is configured, and is what the wallet is handed to sponsor gas.
+ */
+export type GasInfo = {
+  mode: GasMode;
+  paymasterConfigured: boolean;
+  walletSupportsPaymaster: boolean;
+  walletSupportsErc20Gas: boolean;
+  paymasterServiceUrl?: string;
+  paymasterContext?: Record<string, unknown>;
 };
 
 type FlowState = {
@@ -113,14 +135,22 @@ type FlowContextValue = FlowState & {
   };
   /**
    * Whether the wallet can cover the network fee. Monad fees are paid in MON,
-   * so a wallet that holds the payment asset but no MON is blocked on gas. When
-   * sponsorship / ERC-20 gas is configured this is always "ok".
+   * so a wallet that holds the payment asset but no MON is blocked on gas —
+   * unless gas is actually abstracted (paymaster sponsorship or ERC-20 gas).
+   * Abstracted modes are only reported "ok" when the wallet itself advertises
+   * the capability, never merely because a key is configured.
    */
   gasSufficiency: {
     status: "ok" | "insufficient" | "unknown";
     requiredMon: string;
     availableMon: string;
   };
+  /** How gas will actually be paid, resolved against the connected wallet. */
+  gasMode: GasMode;
+  /** The live gas-mode resolution, including whether the wallet is capable. */
+  gasInfo: GasInfo;
+  /** Report the wallet's EIP-5792 capabilities (from the composer's probe). */
+  setWalletGasCapabilities: (caps: WalletGasCapabilities | null) => void;
   /**
    * Deterministic readiness gate. The Review/Confirm action is only reachable
    * when `readiness.ready` is true; the CTA label comes from here too.
@@ -162,6 +192,7 @@ export function PaymentProvider({
   });
 
   const [recipientConfirmed, setRecipientConfirmed] = useState(false);
+  const [walletGasCaps, setWalletGasCapabilities] = useState<WalletGasCapabilities | null>(null);
 
   const [nonce, setNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -477,15 +508,37 @@ export function PaymentProvider({
     }
   }, [state.quote, state.balances, state.payToken, payTokenConfig]);
 
-  // ---- Network-fee (gas) sufficiency --------------------------------------
-  // Monad fees are paid in MON. A wallet that holds the payment asset but no
-  // MON can't submit — unless a paymaster is configured. We surface this as its
-  // own, plainly-worded state so the user never sees a raw "insufficient funds"
-  // error. When sponsorship is configured we don't claim a MON shortfall.
+  // ---- Gas handling (abstracted when the wallet can actually deliver it) ---
+  // The key distinction for a wallet that holds USDC but no MON:
+  //   sponsored — a paymaster is configured AND the wallet advertises support,
+  //               so the user pays no MON.
+  //   erc20     — the wallet can charge gas in an ERC-20 (no paymaster needed).
+  //   native    — gas is paid in MON. We only claim a MON shortfall here.
+  // A configured-but-incapable wallet is NEVER reported as abstracted.
+  const gasInfo = useMemo<GasInfo>(() => {
+    const paymasterConfigured = Boolean(capabilities?.gas.sponsorshipConfigured);
+    const walletSupportsPaymaster = Boolean(walletGasCaps?.paymasterService);
+    const walletSupportsErc20Gas = Boolean(walletGasCaps?.erc20GasPayment);
+    const mode = resolveGasMode(paymasterConfigured, walletSupportsPaymaster, walletSupportsErc20Gas);
+    const pubKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
+    const policyId = capabilities?.gas.policyId;
+    const abstracted = mode !== "native";
+    return {
+      mode,
+      paymasterConfigured,
+      walletSupportsPaymaster,
+      walletSupportsErc20Gas,
+      paymasterServiceUrl:
+        abstracted && pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
+      paymasterContext: abstracted && policyId ? { policyId } : undefined,
+    };
+  }, [capabilities, walletGasCaps]);
+
   const gasSufficiency = useMemo(() => {
     const native = state.balances.find((b) => b.token.native);
     const availableMon = native?.amount ?? "0";
-    if (capabilities?.gas.sponsorshipConfigured) {
+    // Gas is abstracted — the user does not need MON for the fee.
+    if (gasInfo.mode !== "native") {
       return { status: "ok" as const, requiredMon: "0", availableMon };
     }
     // No native balance entry means no wallet is connected / balances are not
@@ -510,7 +563,7 @@ export function PaymentProvider({
     } catch {
       return { status: "unknown" as const, requiredMon: "0", availableMon };
     }
-  }, [state.quote, state.balances, capabilities]);
+  }, [state.quote, state.balances, gasInfo]);
 
   // ---- Deterministic readiness gate ---------------------------------------
   // The single authority for whether Review/Confirm is reachable. Visual state
@@ -575,6 +628,9 @@ export function PaymentProvider({
     quoteStale,
     sufficiency,
     gasSufficiency,
+    gasMode: gasInfo.mode,
+    gasInfo,
+    setWalletGasCapabilities,
     readiness,
   };
 

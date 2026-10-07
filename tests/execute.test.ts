@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WalletClient } from "viem";
-import { executePlan, ExecutionError } from "@/lib/execution/execute";
+import { executePlan, executePlanBatched, ExecutionError } from "@/lib/execution/execute";
 import { buildPaymentPlan } from "@/lib/execution/plan";
 import { getToken } from "@/lib/config/tokens";
 import type { Quote } from "@/lib/domain/intent";
@@ -81,5 +81,53 @@ describe("executePlan — transaction rejection handling", () => {
     await expect(executePlan(plan, rejectingWallet(), "mainnet")).rejects.toMatchObject({
       code: "unknown",
     });
+  });
+});
+
+describe("executePlanBatched — rejection and non-confirmation", () => {
+  const providerRejecting = () => ({
+    request: vi.fn(async ({ method }: { method: string }) => {
+      if (method === "wallet_sendCalls") {
+        const err: any = new Error("User rejected the request.");
+        err.code = 4001;
+        throw err;
+      }
+      throw new Error(`unsupported ${method}`);
+    }),
+  });
+
+  it("maps a rejected wallet_sendCalls to a `rejected` error and reports no confirmed step", async () => {
+    const seen: string[] = [];
+    await expect(
+      executePlanBatched(
+        directTransferPlan(),
+        providerRejecting() as any,
+        SENDER,
+        143,
+        "mainnet",
+        {},
+        { onStep: (r) => seen.push(r.status) },
+      ),
+    ).rejects.toMatchObject({ code: "rejected" });
+    expect(seen).not.toContain("confirmed");
+    expect(seen).toContain("failed");
+  });
+
+  it("treats a non-confirmed batch status as a failure, never success", async () => {
+    const provider = {
+      request: vi.fn(async ({ method }: { method: string }) => {
+        if (method === "wallet_sendCalls") return { id: "0xabc" };
+        if (method === "wallet_getCallsStatus") return { status: 500 };
+        throw new Error(`unsupported ${method}`);
+      }),
+    };
+    const seen: string[] = [];
+    await expect(
+      executePlanBatched(directTransferPlan(), provider as any, SENDER, 143, "mainnet", {}, {
+        onStep: (r) => seen.push(r.status),
+      }),
+    ).rejects.toBeInstanceOf(ExecutionError);
+    expect(seen).not.toContain("confirmed");
+    expect(seen).toContain("failed");
   });
 });

@@ -5,12 +5,20 @@ import type { Address, Hash } from "viem";
 /**
  * Alchemy execution capabilities (EIP-5792 wallet call API).
  *
- * Alchemy supports Monad for bundler / gas sponsorship / ERC-20 gas payment.
- * Rather than force a wallet migration, Intent Pay asks the *user's own* wallet
- * whether it supports the EIP-5792 `paymasterService` capability; when it does,
- * the payment's steps are submitted as one atomic batch and gas can be
- * sponsored by the configured Alchemy gas policy. When the wallet (or the
- * policy) is unavailable we fall back to normal MON gas — never a fake claim.
+ * Gas abstraction on Monad is delivered through the *wallet's own* ERC-4337 /
+ * EIP-5792 stack. Monad supports EIP-7702 and has EntryPoint v0.6/v0.7/v0.8
+ * deployed, and Alchemy operates a Bundler + Gas Manager (paymaster) there, but
+ * the smart account lives inside the user's wallet. Intent Pay therefore asks
+ * the wallet (via `wallet_getCapabilities`) whether it can batch and use a
+ * paymaster; when it can, the payment's steps are submitted as one atomic batch
+ * and gas is sponsored by the configured Alchemy gas policy — communicated to
+ * the wallet as an ERC-7677 paymaster *service URL* (the correct EIP-5792 shape;
+ * a bare policy id is not, and is silently ignored).
+ *
+ * When the wallet does not advertise the capability — e.g. MetaMask does not
+ * expose `eth_signAuthorization`, so a dapp cannot force a 7702 upgrade — gas
+ * is paid in MON and the app says so. That is the honest, real fallback; there
+ * is no faked sponsorship.
  *
  * Docs: https://www.alchemy.com/docs/wallets/transactions/sponsor-gas
  */
@@ -45,15 +53,18 @@ const EMPTY_CAPS: WalletCapabilities = {
 export async function getWalletCapabilities(
   provider: Eip1193 | undefined,
   chainId: number,
+  address?: Address,
 ): Promise<WalletCapabilities> {
   if (!provider?.request) return EMPTY_CAPS;
   try {
+    const chainHex = "0x" + chainId.toString(16);
     const res = (await provider.request({
       method: "wallet_getCapabilities",
-      params: [undefined, ["0x" + chainId.toString(16)]],
+      // EIP-5792: [address?, [chainIds]] — some wallets require the address.
+      params: [address, [chainHex]],
     })) as Record<string, any> | undefined;
     if (!res || typeof res !== "object") return EMPTY_CAPS;
-    const caps = res["0x" + chainId.toString(16)] ?? res[chainId.toString()] ?? {};
+    const caps = res[chainHex] ?? res[chainId.toString()] ?? {};
     const atomic = caps?.atomic?.status ?? caps?.atomic;
     return {
       atomicBatch: atomic === "supported" || atomic === "ready" || atomic === true,
@@ -71,8 +82,14 @@ export type SendCallsOptions = {
   from: Address;
   chainId: number;
   calls: Call[];
-  /** When set and the wallet supports it, gas is sponsored by this policy. */
-  policyId?: string;
+  /**
+   * ERC-7677 paymaster service URL. The wallet calls this to obtain paymaster
+   * fields; it is the *correct* shape for the EIP-5792 `paymasterService`
+   * capability (a bare policy id is not, and is silently ignored by wallets).
+   */
+  paymasterServiceUrl?: string;
+  /** ERC-7677 paymaster context (e.g. an Alchemy gas policy id). */
+  paymasterContext?: Record<string, unknown>;
   /** Request ERC-20 gas payment instead of sponsorship, when supported. */
   erc20GasPayment?: boolean;
 };
@@ -87,7 +104,15 @@ export async function sendCalls(
   opts: SendCallsOptions,
 ): Promise<string> {
   const capabilities: Record<string, unknown> = {};
-  if (opts.policyId) capabilities.paymasterService = { policyId: opts.policyId };
+  if (opts.paymasterServiceUrl) {
+    capabilities.paymasterService = {
+      url: opts.paymasterServiceUrl,
+      ...(opts.paymasterContext ? { context: opts.paymasterContext } : {}),
+      // Marked optional so a wallet without paymaster support still processes
+      // the calls (ERC-7677) rather than rejecting the whole batch.
+      optional: true,
+    };
+  }
   if (opts.erc20GasPayment) capabilities.erc20GasPayment = { optional: true };
 
   const payload = {
@@ -111,6 +136,45 @@ export async function sendCalls(
   const id = typeof res === "string" ? res : res?.id;
   if (!id) throw new Error("The wallet did not return a call id.");
   return id;
+}
+
+/** Alchemy chain slug for the ERC-7677 paymaster service URL. */
+export const ALCHEMY_MONAD_SLUG = "monad-mainnet";
+
+/**
+ * The ERC-7677 paymaster service URL for Alchemy Gas Manager on Monad.
+ *
+ * This is what an EIP-5792 wallet is handed (via the `paymasterService`
+ * capability) so it can request sponsored or ERC-20 gas fields. The key is a
+ * public Alchemy key, safe to expose to the wallet.
+ */
+export function alchemyPaymasterServiceUrl(apiKey: string): string {
+  return `https://${ALCHEMY_MONAD_SLUG}.g.alchemy.com/v2/${apiKey}`;
+}
+
+export type GasMode = "sponsored" | "erc20" | "native";
+
+/**
+ * Decide how gas will actually be paid for this payment.
+ *
+ * The distinction that matters for the "0 MON" case:
+ *  - `sponsored` — a paymaster service is configured AND the wallet advertises
+ *    the capability, so the user pays no MON at all.
+ *  - `erc20`     — the wallet advertises ERC-20 gas payment but no paymaster is
+ *    configured; the wallet may still charge gas in a token it supports.
+ *  - `native`    — gas is paid in MON. This is the honest fallback.
+ *
+ * `walletSupportsPaymaster` is the result of the live `wallet_getCapabilities`
+ * probe; `paymasterConfigured` is the server's Alchemy gas-policy status.
+ */
+export function resolveGasMode(
+  paymasterConfigured: boolean,
+  walletSupportsPaymaster: boolean,
+  walletSupportsErc20Gas: boolean,
+): GasMode {
+  if (paymasterConfigured && walletSupportsPaymaster) return "sponsored";
+  if (walletSupportsErc20Gas) return "erc20";
+  return "native";
 }
 
 export type CallsStatus = {

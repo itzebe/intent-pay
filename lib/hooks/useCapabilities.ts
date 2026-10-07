@@ -11,10 +11,18 @@ import type { MonadNetwork } from "@/lib/config/chains";
 export type Capabilities = {
   routing: { provider: string; chain: string; live: boolean };
   pricing: { primary: string | null; fallbacks: string[] };
-  wallet: { zerion: boolean };
+  wallet: {
+    zerion: boolean;
+    zerionConfigured?: boolean;
+    zerionReachable?: boolean;
+    zerionError?: string;
+  };
   gas: {
     rpc: "alchemy" | "public";
     alchemy: boolean;
+    alchemyConfigured?: boolean;
+    alchemyReachable?: boolean;
+    alchemyError?: string;
     sponsorshipConfigured: boolean;
     erc20GasConfigured: boolean;
     policyId?: string;
@@ -24,8 +32,15 @@ export type Capabilities = {
 const FALLBACK: Capabilities = {
   routing: { provider: "uniswap-v3", chain: "monad", live: true },
   pricing: { primary: null, fallbacks: [] },
-  wallet: { zerion: false },
-  gas: { rpc: "public", alchemy: false, sponsorshipConfigured: false, erc20GasConfigured: false },
+  wallet: { zerion: false, zerionConfigured: false, zerionReachable: false },
+  gas: {
+    rpc: "public",
+    alchemy: false,
+    alchemyConfigured: false,
+    alchemyReachable: false,
+    sponsorshipConfigured: false,
+    erc20GasConfigured: false,
+  },
 };
 
 export function useCapabilities(network: MonadNetwork) {

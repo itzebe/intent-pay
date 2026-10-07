@@ -58,7 +58,7 @@ export function ReviewSheet({
     gasMode === "sponsored"
       ? { value: "Sponsored", sub: "by Alchemy" }
       : gasMode === "erc20"
-        ? { value: `Paid in ${payToken.symbol}`, sub: "via Alchemy" }
+        ? { value: "Paid in an ERC-20", sub: "chosen by your wallet" }
         : quote.networkCostUsdAvailable === false
           ? { value: "Unavailable", sub: "no live MON price" }
           : { value: formatGasUsd(quote.networkCostUsd), sub: undefined };
@@ -151,7 +151,7 @@ export function ReviewSheet({
                     {gasMode === "sponsored"
                       ? "Sponsored (Alchemy)"
                       : gasMode === "erc20"
-                        ? `ERC-20 gas (Alchemy)`
+                        ? "Paid in an ERC-20 (chosen by your wallet)"
                         : "Paid in MON"}
                   </span>
                 </div>

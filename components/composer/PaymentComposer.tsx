@@ -60,22 +60,31 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   useEffect(() => {
     if (!wallet.provider) {
       setWalletCaps(null);
+      flow.setWalletGasCapabilities(null);
       return;
     }
     let cancelled = false;
-    getWalletCapabilities(wallet.provider, NETWORKS[flow.network].chainId).then((caps) => {
-      if (!cancelled) setWalletCaps(caps);
+    getWalletCapabilities(wallet.provider, NETWORKS[flow.network].chainId, wallet.address).then((caps) => {
+      if (cancelled) return;
+      setWalletCaps(caps);
+      // Report to the flow so the readiness gate and review reflect the real
+      // gas mode (never a configured-but-incapable claim).
+      flow.setWalletGasCapabilities({
+        atomicBatch: caps.atomicBatch,
+        paymasterService: caps.paymasterService,
+        erc20GasPayment: caps.erc20GasPayment,
+      });
     });
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flow.network, wallet.provider, wallet.address]);
 
-  // Effective gas mode for this payment: what the user should expect.
-  const gasMode: "sponsored" | "erc20" | "native" =
-    flow.capabilities?.gas.sponsorshipConfigured && walletCaps?.paymasterService
-      ? "sponsored"
-      : "native";
+  // Effective gas mode for this payment: what the user should expect. Comes from
+  // the flow's resolved gas plan, which only claims abstraction the wallet can
+  // actually deliver.
+  const gasMode = flow.gasMode;
 
   // Live balances for a connected wallet (live mode only).
   const { balances: liveBalances, loading: liveLoading } = useLiveBalances(
@@ -181,13 +190,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
     try {
       // Prefer an atomic EIP-5792 batch when the wallet supports it and the plan
-      // has more than one step — one approval instead of N. Falls back to
+      // has more than one step — one approval instead of N. A single-step
+      // payment still goes through `wallet_sendCalls` when gas is abstracted,
+      // because that is the only path a paymaster can sponsor. Falls back to
       // sequential transactions if the wallet rejects the batch.
       const useBatch =
         plan.executable &&
-        plan.steps.length > 1 &&
-        walletCaps?.atomicBatch &&
-        wallet.provider;
+        Boolean(wallet.provider) &&
+        Boolean(walletCaps?.atomicBatch) &&
+        (plan.steps.length > 1 || gasMode !== "native");
 
       let primaryHash: `0x${string}` | undefined;
       let stepHashes: `0x${string}`[] = [];
@@ -200,10 +211,12 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             NETWORKS[flow.network].chainId,
             flow.network,
             {
-              policyId:
-                flow.capabilities?.gas.sponsorshipConfigured
-                  ? flow.capabilities.gas.policyId
-                  : undefined,
+              // Correct EIP-5792/ERC-7677 shape: a paymaster service URL (the
+              // wallet requests paymaster fields from it), with the gas policy
+              // passed as context. Only set when the wallet can use it.
+              paymasterServiceUrl: flow.gasInfo.paymasterServiceUrl,
+              paymasterContext: flow.gasInfo.paymasterContext,
+              erc20GasPayment: flow.gasInfo.mode === "erc20",
             },
             { onStep },
           );
@@ -394,7 +407,11 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                         flow.gasSufficiency.requiredMon,
                       )} MON). Your wallet holds ${formatAmount(
                         flow.gasSufficiency.availableMon,
-                      )} MON.`}
+                      )} MON. Wallet abstraction is unavailable: ${
+                        !flow.gasInfo.paymasterConfigured
+                          ? "no paymaster is configured for this deployment"
+                          : "your wallet does not advertise sponsored (EIP-5792) gas"
+                      }, so this payment must be paid in MON.`}
                     </span>
                   </motion.div>
                 )}

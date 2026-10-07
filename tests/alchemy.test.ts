@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { getWalletCapabilities, sendCalls, waitForCalls } from "@/lib/execution/alchemy";
+import {
+  getWalletCapabilities,
+  sendCalls,
+  waitForCalls,
+  resolveGasMode,
+  alchemyPaymasterServiceUrl,
+} from "@/lib/execution/alchemy";
 import { gasCapabilities } from "@/lib/server/gasCapabilities";
 
 /** A minimal EIP-1193 stub that records requests and returns canned results. */
@@ -37,19 +43,25 @@ describe("Alchemy EIP-5792 wallet capabilities", () => {
     expect(caps).toEqual({ atomicBatch: false, paymasterService: false, erc20GasPayment: false });
   });
 
-  it("sendCalls includes the paymaster policy and returns the batch id", async () => {
+  it("sendCalls sends the ERC-7677 paymaster service URL + context, not a bare policy id", async () => {
     const provider = providerWith({ wallet_sendCalls: () => ({ id: "0xabc" }) });
     const id = await sendCalls(provider as any, {
       from: "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4",
       chainId: 143,
       calls: [{ to: "0x0000000000000000000000000000000000000001" as const }],
-      policyId: "pol_123",
+      paymasterServiceUrl: "https://monad-mainnet.g.alchemy.com/v2/key",
+      paymasterContext: { policyId: "pol_123" },
     });
     expect(id).toBe("0xabc");
     const [call] = provider.calls;
     expect(call.method).toBe("wallet_sendCalls");
     expect(call.params[0].chainId).toBe("0x8f");
-    expect(call.params[0].capabilities.paymasterService.policyId).toBe("pol_123");
+    expect(call.params[0].capabilities.paymasterService.url).toBe(
+      "https://monad-mainnet.g.alchemy.com/v2/key",
+    );
+    expect(call.params[0].capabilities.paymasterService.context.policyId).toBe("pol_123");
+    // A bare policy id is not a valid capability shape and must not be sent.
+    expect(call.params[0].capabilities.paymasterService.policyId).toBeUndefined();
   });
 
   it("waitForCalls resolves confirmed from the EIP-5792 status code", async () => {
@@ -100,5 +112,32 @@ describe("gas capabilities (server config)", () => {
     expect(caps.sponsorshipConfigured).toBe(true);
     expect(caps.policyId).toBe("pol");
     restore();
+  });
+});
+
+describe("gas mode resolution (0-MON case)", () => {
+  it("is native when neither a paymaster nor an ERC-20-gas wallet is available", () => {
+    expect(resolveGasMode(false, false, false)).toBe("native");
+  });
+
+  it("does not claim sponsored merely because a paymaster is configured", () => {
+    // Configured paymaster, but the wallet does not advertise support → native.
+    expect(resolveGasMode(true, false, false)).toBe("native");
+  });
+
+  it("is sponsored only when a paymaster is configured AND the wallet supports it", () => {
+    expect(resolveGasMode(true, true, false)).toBe("sponsored");
+  });
+
+  it("is erc20 when the wallet pays gas in a token but no paymaster is configured", () => {
+    expect(resolveGasMode(false, false, true)).toBe("erc20");
+    // Paymaster capability alone (wallet) without server config stays native.
+    expect(resolveGasMode(false, true, false)).toBe("native");
+  });
+
+  it("builds the Alchemy Monad paymaster service URL", () => {
+    expect(alchemyPaymasterServiceUrl("abc")).toBe(
+      "https://monad-mainnet.g.alchemy.com/v2/abc",
+    );
   });
 });

@@ -369,7 +369,7 @@ export async function executePlanBatched(
   sender: Address,
   chainId: number,
   network: MonadNetwork,
-  opts: { policyId?: string; erc20GasPayment?: boolean } = {},
+  opts: { paymasterServiceUrl?: string; paymasterContext?: Record<string, unknown>; erc20GasPayment?: boolean } = {},
   callbacks: ExecuteCallbacks = {},
 ): Promise<{ primaryHash?: Hash; results: StepResult[] }> {
   if (!plan.executable) {
@@ -387,7 +387,8 @@ export async function executePlanBatched(
       from: sender,
       chainId,
       calls: calls.map((c) => c.call),
-      policyId: opts.policyId,
+      paymasterServiceUrl: opts.paymasterServiceUrl,
+      paymasterContext: opts.paymasterContext,
       erc20GasPayment: opts.erc20GasPayment,
     });
   } catch (err) {

@@ -97,6 +97,64 @@ async function rawCall(
   }
 }
 
+/** ERC-20 function selectors, read as raw eth_call data. */
+const SELECTOR = {
+  symbol: "0x95d89b41",
+  name: "0x06fdde03",
+  decimals: "0x313ce567",
+} as const;
+
+/**
+ * Read a token's own metadata straight from its contract.
+ *
+ * This is the authoritative read used both for tokens we have never seen and
+ * for confirming metadata an external source (Zerion) reported. Returns null
+ * when the contract has no code or does not expose ERC-20 decimals — never a
+ * guessed value.
+ */
+async function readOnChainMetadata(
+  address: string,
+  network: MonadNetwork,
+): Promise<{ symbol?: string; name?: string; decimals: number } | null> {
+  const client = getPublicClient(network);
+  const code = await client.getBytecode({ address: address as Address }).catch(() => undefined);
+  if (!code || code === "0x") return null;
+
+  const [symbolHex, nameHex, decimalsHex] = await Promise.all([
+    rawCall(network, address, SELECTOR.symbol),
+    rawCall(network, address, SELECTOR.name),
+    rawCall(network, address, SELECTOR.decimals),
+  ]);
+
+  const decimals = parseUint(decimalsHex);
+  if (decimals === null || decimals < 0 || decimals > 36) return null;
+
+  return {
+    symbol: decodeText(symbolHex),
+    name: decodeText(nameHex),
+    decimals,
+  };
+}
+
+/** Parse an eth_call word into a number, or null when it is empty/malformed. */
+function parseUint(hex: string | undefined): number | null {
+  if (!hex || hex === "0x" || hex.length <= 2) return null;
+  try {
+    const n = Number(BigInt(hex));
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Confirm a known token's metadata on chain (used for external sources). */
+async function confirmOnChain(
+  address: string,
+  network: MonadNetwork,
+): Promise<{ symbol?: string; name?: string; decimals: number } | null> {
+  return readOnChainMetadata(address, network);
+}
+
 /**
  * Resolve a token from a contract address by reading the chain. Used for
  * addresses that are not in the official list — the "new token tomorrow" case.
@@ -132,6 +190,29 @@ export async function resolveByAddress(
   // Already known (seed / list / previously discovered) — no need to hit the RPC.
   const known = getTokenByAddress(address);
   if (known && known.source !== "onchain") {
+    // A token an external intelligence source (Zerion) reported carries that
+    // source's decimals, which are *not* authoritative. Before we let it be
+    // spent, confirm the contract's own decimals on chain so a wrong scale can
+    // never cause a mis-scaled payment. On failure we keep the reported value
+    // but mark it unverified rather than inventing one.
+    if (known.source === "wallet") {
+      const verified = await confirmOnChain(address, network);
+      if (verified) {
+        registerToken({
+          ...known,
+          decimals: verified.decimals,
+          symbol: verified.symbol ?? known.symbol,
+          name: verified.name ?? known.name,
+          source: "onchain",
+        });
+        return finish({
+          token: getTokenByAddress(address)!,
+          exists: true,
+          source: "onchain",
+          listed: curatedHas(address),
+        });
+      }
+    }
     return finish({
       token: known,
       exists: true,
@@ -140,44 +221,33 @@ export async function resolveByAddress(
     });
   }
 
-  const client = getPublicClient(network);
-  const code = await client.getBytecode({ address: address as Address }).catch(() => undefined);
-  if (!code || code === "0x") {
+  const meta = await readOnChainMetadata(address, network);
+  if (!meta) {
+    // Distinguish "no contract" from "contract without ERC-20 decimals" by a
+    // second, cheap code check — the user-facing reason differs.
+    const client = getPublicClient(network);
+    const code = await client.getBytecode({ address: address as Address }).catch(() => undefined);
+    const hasCode = Boolean(code && code !== "0x");
     return finish({
       token: placeholder(address),
-      exists: false,
+      exists: hasCode,
       source: "onchain",
       listed: false,
-      problem: "No token contract exists at that address on Monad.",
-    });
-  }
-
-  const [symbolHex, nameHex, decimalsHex] = await Promise.all([
-    rawCall(network, address, "0x95d89b41"), // symbol()
-    rawCall(network, address, "0x06fdde03"), // name()
-    rawCall(network, address, "0x313ce567"), // decimals()
-  ]);
-
-  const decimals = decimalsHex ? Number(BigInt(decimalsHex)) : NaN;
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
-    return finish({
-      token: placeholder(address),
-      exists: true,
-      source: "onchain",
-      listed: false,
-      problem: "That contract doesn't expose standard ERC-20 decimals.",
+      problem: hasCode
+        ? "That contract doesn't expose standard ERC-20 decimals."
+        : "No token contract exists at that address on Monad.",
     });
   }
 
   const curated = curatedCatalog().find((c) => keyOf(c.address) === keyOf(address));
-  const symbol = decodeText(symbolHex) ?? curated?.symbol ?? "UNKNOWN";
-  const name = decodeText(nameHex) ?? curated?.name ?? "Unknown token";
+  const symbol = meta.symbol ?? curated?.symbol ?? "UNKNOWN";
+  const name = meta.name ?? curated?.name ?? "Unknown token";
 
   const token = registerToken({
     symbol,
     name,
     address: address as Address,
-    decimals,
+    decimals: meta.decimals,
     fallbackUsd: 0,
     tint: tintForAddress(address),
     source: "onchain",

@@ -86,6 +86,16 @@ export async function POST(req: Request) {
       });
     }
 
+    // The payment asset must also be a real token — otherwise we would quote a
+    // payment the sender could never actually sign.
+    if (payResolved && !payResolved.exists) {
+      return NextResponse.json({
+        ok: false,
+        code: "unsupported_token",
+        message: payResolved.problem ?? "That payment asset doesn't exist on Monad.",
+      });
+    }
+
     const intent: PaymentIntent = {
       recipient,
       // Always store the canonical symbol so the UI can display it.

@@ -60,4 +60,15 @@ export interface RoutingProvider {
   priceUsd(token: TokenConfig, network: "mainnet" | "testnet"): Promise<UsdPrice>;
   /** Tokens that currently have at least one liquid route. */
   availableSymbols(network: "mainnet" | "testnet"): Promise<string[]>;
+  /**
+   * Whether a *specific* token currently has a usable route. Optional: not
+   * every provider can answer this, and a provider that can't must not be
+   * treated as "no route".
+   */
+  isRoutable?(token: TokenConfig, network?: "mainnet" | "testnet"): Promise<boolean>;
+  /**
+   * Routability for every token the provider knows, keyed by contract *and*
+   * pool address. Only tokens that were actually probed appear. Optional.
+   */
+  routability?(network?: "mainnet" | "testnet"): Promise<Map<string, boolean>>;
 }

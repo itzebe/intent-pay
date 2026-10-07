@@ -39,7 +39,7 @@ export function useOptimizer(
 
   const fundedKey = balances
     .filter((b) => b.usd > 0)
-    .map((b) => `${b.token.symbol}:${b.amount}`)
+    .map((b) => `${b.token.address}:${b.amount}`)
     .sort()
     .join(",");
 
@@ -67,7 +67,7 @@ export function useOptimizer(
             mode,
             network,
             balances: balances.map((b) => ({
-              token: { symbol: b.token.symbol },
+              token: { symbol: b.token.symbol, address: b.token.address },
               amount: b.amount,
               usd: b.usd,
             })),

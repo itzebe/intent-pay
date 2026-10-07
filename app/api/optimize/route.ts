@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { ensureCatalog } from "@/lib/server/discovery";
+import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { optimizePayment } from "@/lib/server/optimizer";
 import type { AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { AmountMode, Balance, PaymentIntent } from "@/lib/domain/intent";
-import { getToken } from "@/lib/config/tokens";
+import { getToken, getTokenByAddress, type TokenConfig } from "@/lib/config/tokens";
+import { isEvmAddress } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -36,13 +37,31 @@ export async function POST(req: Request) {
     amountMode,
   };
 
-  // Rebuild Balance objects from the wire payload (resolve metadata by symbol).
+  // Rebuild Balance objects from the wire payload. A wallet balance may name
+  // its token by symbol *or* by contract address — the latter is what lets a
+  // dynamically discovered token (never shipped in source) be optimized on a
+  // cold server instance. Resolution order: runtime registry -> catalog -> chain.
   const rawBalances: any[] = Array.isArray(body?.balances) ? body.balances : [];
+
+  try {
+    await ensureCatalog(network);
+  } catch {
+    /* catalog is best-effort; registry + chain resolution still work */
+  }
+
   const balances: Balance[] = [];
   for (const b of rawBalances) {
     const symbol = b?.token?.symbol ?? b?.symbol;
-    const token = symbol ? getToken(symbol) : undefined;
+    const address = b?.token?.address ?? b?.address;
+
+    let token: TokenConfig | undefined;
+    if (typeof address === "string" && isEvmAddress(address)) {
+      token = (await resolveToken(address, network))?.token ?? getTokenByAddress(address);
+    } else if (typeof symbol === "string") {
+      token = getToken(symbol);
+    }
     if (!token) continue;
+
     balances.push({
       token,
       amount: String(b?.amount ?? "0"),
@@ -51,7 +70,6 @@ export async function POST(req: Request) {
   }
 
   try {
-    await ensureCatalog(network);
     const result = await optimizePayment(intent, balances, mode, network);
     return NextResponse.json({ ok: true, network, ...result });
   } catch (err) {

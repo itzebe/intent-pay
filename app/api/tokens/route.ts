@@ -5,7 +5,7 @@ import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ensureCatalog, resolveToken, searchTokens } from "@/lib/server/discovery";
 import { getCatalog } from "@/lib/server/tokenList";
-import { getPriceResolver } from "@/lib/server/pricing";
+import { getTokenIntelligence } from "@/lib/domain/tokenState";
 import { WMON_ADDRESS } from "@/lib/providers/constants";
 
 export const dynamic = "force-dynamic";
@@ -62,9 +62,24 @@ export async function GET(req: Request) {
       );
     }
     const t = resolved.token;
-    const price = resolved.exists
-      ? await getPriceResolver().resolve(t, network).catch(() => null)
+
+    // Genuinely probe this *specific* token's routability when asked, instead
+    // of reporting "unknown" because it wasn't in a batch-probed graph. This is
+    // what lets a token launched after deployment answer "can I pay with it?"
+    // without ever having been added to a source list.
+    let routable = annotate(t.address, poolKeyOf(t));
+    if (mode === "live" && resolved.exists && routable === null) {
+      try {
+        routable = await getRoutingProvider("live", network).isRoutable?.(t, network) ?? null;
+      } catch {
+        routable = null;
+      }
+    }
+
+    const intelligence = resolved.exists
+      ? await getTokenIntelligence(t, { network, routable })
       : null;
+
     return NextResponse.json({
       ok: true,
       mode,
@@ -72,9 +87,12 @@ export async function GET(req: Request) {
       found: resolved.exists,
       listed: resolved.listed,
       problem: resolved.problem,
-      routable: resolved.exists ? annotate(t.address, poolKeyOf(t)) : false,
+      routable: resolved.exists ? routable : false,
+      state: intelligence?.state ?? "UNKNOWN",
+      stateFlags: intelligence?.flags ?? ["UNKNOWN"],
+      payable: intelligence?.payable ?? false,
       catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
-      price,
+      price: intelligence?.price ?? null,
       token: serializeToken(t, resolved.source),
     });
   }
@@ -171,8 +189,8 @@ export async function POST(req: Request) {
   }
 
   // Live price resolution (market -> DEX -> on-chain), independent of routing.
-  const price = resolved.exists
-    ? await getPriceResolver().resolve(t, network).catch(() => null)
+  const intelligence = resolved.exists
+    ? await getTokenIntelligence(t, { network, routable, probeRoute: routable === null })
     : null;
 
   return NextResponse.json({
@@ -181,7 +199,10 @@ export async function POST(req: Request) {
     listed: resolved.listed,
     problem: resolved.problem,
     routable,
-    price,
+    state: intelligence?.state ?? "UNKNOWN",
+    stateFlags: intelligence?.flags ?? ["UNKNOWN"],
+    payable: intelligence?.payable ?? false,
+    price: intelligence?.price ?? null,
     catalog: { count: (await getCatalog(network)).tokens.length, version: catalogVersion() },
     token: serializeToken(t, resolved.source),
   });

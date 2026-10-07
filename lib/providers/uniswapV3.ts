@@ -147,9 +147,12 @@ export class UniswapV3Provider implements RoutingProvider {
     for (const t of endpoints) add(t);
 
     const seeds = this.seedTokens();
-    // Known-liquid seed tokens (stablecoins, WETH, WMON) first.
+    // Known-liquid seed tokens (stablecoins, WETH, WMON) first. The native asset
+    // is included on purpose: it is pooled as WMON and is the usual intermediate
+    // for multi-hop routes, so omitting it makes a cold graph unable to find
+    // e.g. USDC -> MON -> <new token> even though those pools exist.
     for (const t of seeds) {
-      if (t.seed && !t.native) add(t);
+      if (t.seed) add(t);
       if (out.length >= MAX_BASIS_TOKENS) break;
     }
     // Then anything we have already measured liquidity for.
@@ -795,11 +798,16 @@ export class UniswapV3Provider implements RoutingProvider {
     return out;
   }
 
-  /** A token has a route if it participates in at least one liquid pool. */
+  /**
+   * A token has a route if it participates in at least one liquid pool.
+   *
+   * The token is passed as an *endpoint* so it is always included in the probe
+   * set (basis tokens are capped, so relying on it already being in a previous
+   * graph would give a false "no route" for a freshly discovered token).
+   */
   async isRoutable(token: TokenConfig): Promise<boolean> {
-    if (!this.graph) {
-      await this.ensureGraph(this.seedTokens().filter((t) => t.seed));
-    }
+    const endpoints = [token, ...this.seedTokens().filter((t) => t.seed)];
+    await this.ensureGraph(endpoints);
     const edges = this.graph?.adjacency.get(poolKey(token));
     return Boolean(edges && edges.length > 0);
   }

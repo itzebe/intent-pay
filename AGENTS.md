@@ -84,6 +84,29 @@ whether they are configured. `.env.example` documents every key.
 - Exact-payment protection only fires on over-delivery. A shortfall is expected
   in "I spend" mode.
 
+## Token states (honesty model)
+
+`lib/domain/tokenState.ts` derives one canonical state per token:
+`UNKNOWN → DISCOVERED → PRICE_AVAILABLE/PRICE_UNAVAILABLE →
+ROUTE_AVAILABLE/ROUTE_UNAVAILABLE → PAYABLE`. `PAYABLE` requires existence,
+metadata, a trustworthy price *and* a real route. `/api/tokens` exposes
+`state`, `stateFlags` and `payable`; never treat "the token resolves" as
+"the token is payable".
+
+## Dynamic asset discovery
+
+- A wallet balance may arrive keyed by **symbol or contract address**. The
+  optimizer resolves address → runtime registry → chain, so a token never
+  shipped in source is still optimizable (`/api/optimize`, `useOptimizer`).
+- External metadata (Zerion `source: "wallet"`) is **not** authoritative.
+  `resolveByAddress` re-reads `decimals()`/`symbol()` on chain before the token
+  can be spent, so a wrong reported scale can never mis-scale a payment.
+- `isRoutable(token)` probes with the token as an **endpoint**; it must not rely
+  on a cached graph, or a freshly discovered token answers a false "no route".
+- `basisTokens()` includes the **native MON** (pooled as WMON). It is the usual
+  intermediate for multi-hop routes; omitting it makes a cold graph unable to
+  find e.g. `USDC -> MON -> <new token>` even though those pools exist.
+
 ## Routing gotchas (Monad / Uniswap V3)
 
 - **QuoterV2 returns its result by reverting.** `client.multicall()` discards

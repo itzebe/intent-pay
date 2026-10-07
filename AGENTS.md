@@ -54,11 +54,18 @@ whether they are configured. `.env.example` documents every key.
 - **Zerion** — `lib/server/zerion.ts`. HTTP Basic auth (key as username, empty
   password) against `https://api.zerion.io`; supplies wallet asset discovery and
   USD valuation. Balances that get spent are still confirmed on-chain
-  (`lib/server/discovery.ts`); Zerion never decides execution. Returns `[]` on
-  any failure — never treat that as "empty wallet".
+  (`lib/server/discovery.ts`); Zerion never decides execution. Use
+  `fetchZerionResult()` when you must tell a provider **failure** from an empty
+  wallet: it returns `status: "ok" | "disabled" | "error"`. `fetchZerionAssets()`
+  is the back-compat list-only wrapper (a failure still yields `[]`). A
+  configured-but-failing Zerion means the wallet's holdings are *unknown*, not
+  empty — `/api/balances` exposes `sources.zerionStatus` / `zerionError`.
 - **Market prices** — `lib/server/pricing/*`. Alchemy Prices (when keyed) →
   GeckoTerminal → DexScreener → on-chain Uniswap quote. Every price carries a
-  `source` label surfaced in the UI. Never fabricate a rate.
+  `source` label surfaced in the UI. Never fabricate a rate. Prices also carry
+  a freshness `status`: `LIVE` (within TTL) / `STALE` (last-known-good served
+  after a refresh failure) / `UNAVAILABLE` (no numeric price — never shown as
+  `$0.00`). See `lib/server/pricing/resolver.ts`, `priceStatus()`.
 - **Pay-asset optimizer** — `lib/server/optimizer.ts` + `/api/optimize` rank the
   wallet's assets for the current intent; the composer uses it to recommend the
   best pay asset (replacing the old naive pick). `lib/hooks/useOptimizer.ts`.
@@ -68,6 +75,11 @@ whether they are configured. `.env.example` documents every key.
   `lib/server/http.ts` a shared `TtlCache`. Tests that touch tokens or cached
   providers must use unique addresses/keys per test or they leak state between
   cases (see `tests/pricing.test.ts`, `tests/zerion.test.ts`).
+- **Live routing tests** (`tests/liveRouting.test.ts`, gated on
+  `MONAD_LIVE_TESTS=1`) call `ensureCatalog("mainnet")` in `beforeAll` to
+  mirror production. Without it the bounded route graph cannot discover
+  intermediates that only exist in the live list (e.g. `cbBTC -> EURW -> USDC`)
+  and a real route looks unavailable.
 
 
 ## Conventions
@@ -124,7 +136,17 @@ metadata, a trustworthy price *and* a real route. `/api/tokens` exposes
 - The native MON endpoint is `0x0` and is wrapped to WMON (`NATIVE_POOL_KEY`)
   for pool lookup; `priceUsd` handles the native basis token.
 
+## Quote freshness (execution guard)
+
+`lib/domain/freshness.ts` (client-safe) owns the single definition of a
+stale quote: `QUOTE_MAX_AGE_MS` (20s hard limit) and `QUOTE_REFRESH_AFTER_MS`
+(15s proactive refresh). The composer recomputes `quoteStale` each render,
+auto-refreshes before expiry, disables Review/Confirm while stale, and
+`onConfirm` re-checks it so a price the user saw is never the price they
+sign. `lib/server/quote.ts` re-exports `isQuoteStale` for server callers.
+
 ## Testing the flow
+
 
 `/api/quote` accepts a JSON body and is the fastest way to exercise routing
 without a wallet:

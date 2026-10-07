@@ -3,7 +3,7 @@ import { discoverWalletBalances, ensureCatalog } from "@/lib/server/discovery";
 import { getRoutingProvider, type AppMode } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { isEvmAddress } from "@/lib/format";
-import { fetchZerionAssets, tokenFromZerion, zerionEnabled } from "@/lib/server/zerion";
+import { fetchZerionResult, tokenFromZerion, zerionEnabled } from "@/lib/server/zerion";
 
 export const dynamic = "force-dynamic";
 
@@ -47,8 +47,11 @@ export async function GET(req: Request) {
     await ensureCatalog(network);
     const provider = getRoutingProvider("live", network);
 
-    // Zerion asset intelligence (best-effort; [] when unconfigured/unavailable).
-    const zerionAssets = await fetchZerionAssets(address, network);
+    // Zerion asset intelligence (best-effort). We distinguish a *failure* from
+    // an genuinely empty wallet: a configured-but-failing Zerion means the
+    // wallet's cross-token holdings are unknown, not absent, and we say so.
+    const zerion = await fetchZerionResult(address, network);
+    const zerionAssets = zerion.assets;
     const externalAssets = zerionAssets.map(tokenFromZerion);
     const zerionByAddress = new Map(
       zerionAssets.map((a) => [a.address.toLowerCase(), a]),
@@ -69,8 +72,11 @@ export async function GET(req: Request) {
       /** Which intelligence sources actually contributed. */
       sources: {
         onchain: true,
-        zerion: zerionEnabled() && zerionAssets.length > 0,
+        zerion: zerion.status === "ok" && zerionAssets.length > 0,
         zerionConfigured: zerionEnabled(),
+        /** "ok" | "disabled" | "error" — a failure is never an empty wallet. */
+        zerionStatus: zerion.status,
+        zerionError: zerion.status === "error" ? zerion.reason : undefined,
       },
       balances: balances.map((b) => {
         const z = zerionByAddress.get(b.token.address.toLowerCase());

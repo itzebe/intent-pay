@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeAll } from "vitest";
 import { UniswapV3Provider } from "@/lib/providers/uniswapV3";
 import { getToken } from "@/lib/config/tokens";
+import { ensureCatalog } from "@/lib/server/discovery";
 
 /**
  * Live integration tests against real Monad mainnet.
@@ -32,9 +33,14 @@ async function quote(pay: string, receive: string, usd = "5") {
 
 describe.skipIf(!LIVE)("live routing on Monad mainnet (chain 143)", () => {
   beforeAll(async () => {
+    // Mirror production: install the runtime catalog from the live Monad list
+    // before routing. Production calls ensureCatalog on every API request; an
+    // isolated test must do the same or the bounded route graph cannot discover
+    // intermediates that only exist in the list (e.g. cbBTC -> EURW -> USDC).
+    await ensureCatalog("mainnet");
     // Warm the graph once so the suite is not dominated by discovery.
     await provider.availableSymbols();
-  }, 120_000);
+  }, 180_000);
 
   it("USDT -> USDC quotes with a real route", async () => {
     const res = await quote("USDT", "USDC");

@@ -188,6 +188,17 @@ export function TokenList({
               <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/45">
                 {paste.price.label}
               </span>
+              {paste.price.usd !== null && paste.price.status && (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] ${
+                    paste.price.status === "LIVE"
+                      ? "bg-emerald-400/10 text-emerald-200/80"
+                      : "bg-amber-400/10 text-amber-200/80"
+                  }`}
+                >
+                  {paste.price.status}
+                </span>
+              )}
             </div>
           )}
           <RouteState routable={paste.routable} />

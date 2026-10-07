@@ -93,6 +93,8 @@ export type TokenIntelligence = {
     usd: number | null;
     source: string;
     label: string;
+    /** Price freshness: LIVE / STALE / UNAVAILABLE. */
+    status: "LIVE" | "STALE" | "UNAVAILABLE";
   } | null;
 };
 
@@ -138,7 +140,7 @@ export async function getTokenIntelligence(
     capabilities,
     payable: state === "PAYABLE",
     price: price
-      ? { usd: price.usd, source: price.source, label: price.label }
+      ? { usd: price.usd, source: price.source, label: price.label, status: price.status }
       : null,
   };
 }

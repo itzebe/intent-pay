@@ -3,6 +3,7 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { getToken, type TokenConfig } from "@/lib/config/tokens";
 import type { Quote, QuoteResult, QuoteRequest } from "@/lib/domain/intent";
 import { validateRecipient, validateUsdAmount } from "@/lib/domain/validation";
+import { isQuoteStale } from "@/lib/domain/freshness";
 import { estimateNetworkCost } from "./gas";
 import { gasCapabilities } from "./gasCapabilities";
 
@@ -114,9 +115,7 @@ export async function buildQuote(
   return { ok: true, quote };
 }
 
-/** Re-quote when a previously produced quote is older than `maxAgeMs`. */
-export function isQuoteStale(quote: Quote, maxAgeMs = 20_000): boolean {
-  return Date.now() - quote.quotedAt > maxAgeMs;
-}
+/** Re-exported for callers that import staleness from the quote layer. */
+export { isQuoteStale };
 
 export type { TokenConfig };

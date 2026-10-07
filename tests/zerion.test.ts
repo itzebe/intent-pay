@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { fetchZerionAssets, tokenFromZerion, zerionEnabled } from "@/lib/server/zerion";
+import {
+  fetchZerionAssets,
+  fetchZerionResult,
+  tokenFromZerion,
+  zerionEnabled,
+} from "@/lib/server/zerion";
 
 // A fresh wallet per test: the adapter caches by address for 30s.
 let n = 0;
@@ -99,6 +104,39 @@ describe("Zerion wallet intelligence", () => {
     global.fetch = mockFetch(401, { errors: [] });
     const assets = await fetchZerionAssets(freshWallet());
     expect(assets).toEqual([]);
+  });
+
+  it("reports a provider failure as status 'error', not an empty wallet", async () => {
+    process.env.ZERION_API_KEY = "zk_test";
+    global.fetch = mockFetch(401, { errors: [] });
+    const res = await fetchZerionResult(freshWallet());
+    expect(res.status).toBe("error");
+    expect(res.assets).toEqual([]);
+    expect(res.reason).toMatch(/401/);
+  });
+
+  it("reports 'disabled' (not 'error') when unconfigured", async () => {
+    global.fetch = vi.fn();
+    const res = await fetchZerionResult(freshWallet());
+    expect(res.status).toBe("disabled");
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports 'ok' with an authoritative (possibly empty) list on success", async () => {
+    process.env.ZERION_API_KEY = "zk_test";
+    global.fetch = mockFetch(200, { data: [] });
+    const res = await fetchZerionResult(freshWallet());
+    expect(res.status).toBe("ok");
+    expect(res.assets).toEqual([]);
+  });
+
+  it("treats a network throw as status 'error', not 'disabled'", async () => {
+    process.env.ZERION_API_KEY = "zk_test";
+    global.fetch = vi.fn(async () => {
+      throw new Error("ECONNRESET");
+    }) as unknown as typeof fetch;
+    const res = await fetchZerionResult(freshWallet());
+    expect(res.status).toBe("error");
   });
 
   it("registers a normalized asset as a payable token", async () => {

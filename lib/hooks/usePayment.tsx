@@ -16,6 +16,10 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { demoBalances } from "@/lib/demo/wallet";
 import { parseUnits } from "@/lib/domain/math";
 import { isEvmAddress } from "@/lib/format";
+import {
+  isQuoteStale,
+  QUOTE_REFRESH_AFTER_MS,
+} from "@/lib/domain/freshness";
 import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities";
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 
@@ -44,6 +48,8 @@ type FlowState = {
   simulateMove: number;
   /** Bumped whenever the token registry gains a discovered token. */
   tokensVersion: number;
+  /** Wall-clock (ms) when the current quote finished resolving. */
+  autoRefreshAt: number;
 };
 
 type FlowContextValue = FlowState & {
@@ -78,6 +84,11 @@ type FlowContextValue = FlowState & {
     current: string;
     difference: string;
   } | null;
+  /**
+   * True when the live quote is older than its freshness window. Execution must
+   * be blocked until a fresh quote is produced, so we never sign a stale price.
+   */
+  quoteStale: boolean;
   sufficiency: {
     status: "ok" | "insufficient" | "unknown";
     required: string;
@@ -116,6 +127,7 @@ export function PaymentProvider({
     balancesLoading: false,
     simulateMove: 0,
     tokensVersion: 0,
+    autoRefreshAt: 0,
   });
 
   const [nonce, setNonce] = useState(0);
@@ -192,6 +204,7 @@ export function PaymentProvider({
             quote: q,
             quoting: false,
             quoteError: null,
+            autoRefreshAt: Date.now(),
             tokensVersion: learned ? s.tokensVersion + 1 : s.tokensVersion,
             // In "I spend" mode the recipient amount is derived, so the intent
             // snapshot tracks the current implied value rather than a fixed one.
@@ -360,6 +373,24 @@ export function PaymentProvider({
     };
   }, [state.intendedReceiveAmount, state.quote, state.intent.receiveToken]);
 
+  // ---- Quote freshness -----------------------------------------------------
+  // A quote is only trustworthy for a short window. We auto-refresh shortly
+  // before it goes stale, and while it is stale the UI blocks execution so a
+  // price the user saw is never the price they sign.
+  const quoteStale = state.mode === "live" && isQuoteStale(state.autoRefreshAt);
+
+  // Proactively refresh as the quote approaches staleness (delay 0 when it has
+  // already aged out, so a long-idle tab recovers immediately).
+  useEffect(() => {
+    if (state.mode !== "live" || !state.quote || !state.autoRefreshAt) return;
+    const delay = Math.max(
+      0,
+      QUOTE_REFRESH_AFTER_MS - (Date.now() - state.autoRefreshAt),
+    );
+    const timer = setTimeout(() => setNonce((n) => n + 1), delay);
+    return () => clearTimeout(timer);
+  }, [state.mode, state.quote, state.autoRefreshAt]);
+
   // ---- Balance sufficiency -------------------------------------------------
   const sufficiency = useMemo(() => {
     const q = state.quote;
@@ -411,6 +442,7 @@ export function PaymentProvider({
     optimizer,
     optimizerLoading,
     mismatch,
+    quoteStale,
     sufficiency,
   };
 

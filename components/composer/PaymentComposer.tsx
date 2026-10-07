@@ -101,6 +101,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     !flow.quoting &&
     !flow.quoteError &&
     flow.sufficiency.status !== "insufficient" &&
+    // A stale price must be refreshed before it can be reviewed or signed.
+    !flow.quoteStale &&
     !flow.mismatch?.active;
 
   const onReview = useCallback(() => {
@@ -143,6 +145,14 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
     if (!wallet.address || !wallet.walletClient) {
       setError("Connect your wallet to pay on Monad.");
+      return;
+    }
+
+    // Stale-quote guard: never sign a price the user saw minutes ago. If the
+    // quote aged out, force a fresh one and ask them to review again.
+    if (flow.quoteStale) {
+      flow.refreshQuote();
+      setError("This price expired. We're refreshing it — review and confirm again.");
       return;
     }
     const onChain = await wallet.ensureMonad();
@@ -236,6 +246,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     flow.receiveTokenConfig,
     flow.intent.recipient,
     flow.capabilities,
+    flow.quoteStale,
     plan,
     wallet,
     walletCaps,
@@ -401,6 +412,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   <>No route available</>
                 ) : flow.sufficiency.status === "insufficient" ? (
                   <>Insufficient balance</>
+                ) : flow.quoteStale ? (
+                  <>
+                    <Spinner className="h-4 w-4 animate-spin" /> Refreshing price…
+                  </>
                 ) : (
                   <>
                     <Lock className="h-4 w-4" /> Review payment

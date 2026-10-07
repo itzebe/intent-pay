@@ -20,7 +20,22 @@ import { fetchWithTimeout, TtlCache } from "@/lib/server/http";
  */
 
 const TTL_MS = 30 * 1000;
-const cache = new TtlCache<string, ZerionAsset[]>(TTL_MS);
+
+/**
+ * Provider outcome. `error` means Zerion was configured and reachable in
+ * principle but the request failed — the caller must NOT interpret that as
+ * "this wallet holds nothing".
+ */
+export type ZerionStatus = "ok" | "disabled" | "error";
+
+export type ZerionResult = {
+  assets: ZerionAsset[];
+  status: ZerionStatus;
+  /** Why it failed, when status is "error". */
+  reason?: string;
+};
+
+const cache = new TtlCache<string, ZerionResult>(TTL_MS);
 
 export type ZerionAsset = {
   symbol: string;
@@ -76,17 +91,19 @@ function authHeader(): string {
 }
 
 /**
- * Fetch + normalize a wallet's Monad fungible positions.
+ * Fetch + normalize a wallet's Monad fungible positions, reporting *why* it
+ * returned nothing.
  *
- * Returns [] on any failure (missing key, network error, non-200). The caller
- * must treat [] as "Zerion contributed nothing" and continue with on-chain
- * data — never as "the wallet is empty".
+ * The caller must distinguish: `disabled` (no credentials — Zerion never had a
+ * chance), `error` (configured but the request failed — the wallet's holdings
+ * are *unknown*, not empty), and `ok` (an authoritative, possibly empty, list).
  */
-export async function fetchZerionAssets(
+export async function fetchZerionResult(
   address: string,
   _network: MonadNetwork = "mainnet",
-): Promise<ZerionAsset[]> {
-  if (!zerionEnabled() || !isEvmAddress(address)) return [];
+): Promise<ZerionResult> {
+  if (!zerionEnabled()) return { assets: [], status: "disabled" };
+  if (!isEvmAddress(address)) return { assets: [], status: "ok" };
   const key = address.toLowerCase();
 
   return cache.get(key, async () => {
@@ -100,9 +117,14 @@ export async function fetchZerionAssets(
         headers: { accept: "application/json", authorization: authHeader() },
         timeoutMs: 7000,
       });
-      if (!res.ok) return [];
+      // A non-OK response is a provider failure — never an empty wallet.
+      if (!res.ok) {
+        return { assets: [], status: "error", reason: `Zerion responded ${res.status}` };
+      }
       const json = (await res.json()) as PositionsResponse;
-      if (!Array.isArray(json.data)) return [];
+      if (!Array.isArray(json.data)) {
+        return { assets: [], status: "error", reason: "Unexpected Zerion response shape" };
+      }
 
       const out: ZerionAsset[] = [];
       const seen = new Set<string>();
@@ -145,11 +167,23 @@ export async function fetchZerionAssets(
           logoURI: info?.icon?.url,
         });
       }
-      return out;
-    } catch {
-      return [];
+      return { assets: out, status: "ok" };
+    } catch (err) {
+      return { assets: [], status: "error", reason: (err as Error)?.message ?? "Zerion unreachable" };
     }
   });
+}
+
+/**
+ * Back-compat wrapper: the asset list only. Same semantics as before — a
+ * failure yields [], so callers that only need assets never break. New callers
+ * that must tell failure apart from empty should use `fetchZerionResult`.
+ */
+export async function fetchZerionAssets(
+  address: string,
+  network: MonadNetwork = "mainnet",
+): Promise<ZerionAsset[]> {
+  return (await fetchZerionResult(address, network)).assets;
 }
 
 /**

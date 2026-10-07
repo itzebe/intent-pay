@@ -25,7 +25,26 @@ export type ResolvedPrice = {
   at: number;
   /** How long the resolver considers it fresh. */
   ttlMs: number;
+  /** Freshness of the price, so callers can distinguish live data from stale. */
+  status: PriceStatus;
 };
+
+/**
+ * Price freshness.
+ *   LIVE        — resolved within its TTL
+ *   STALE       — a real price, but older than its TTL (shown with a caveat)
+ *   UNAVAILABLE — no trustworthy price (never rendered as $0.00)
+ */
+export type PriceStatus = "LIVE" | "STALE" | "UNAVAILABLE";
+
+/** Derive the freshness status from a resolved price and the current time. */
+export function priceStatus(
+  price: Pick<ResolvedPrice, "usd" | "at" | "ttlMs">,
+  now = Date.now(),
+): PriceStatus {
+  if (!(price.usd && price.usd > 0)) return "UNAVAILABLE";
+  return now - price.at > price.ttlMs ? "STALE" : "LIVE";
+}
 
 const TTL_MS = 45 * 1000;
 
@@ -61,6 +80,10 @@ const labelFor = (kind: PriceSourceKind): string => {
 export class PriceResolver {
   private market: PriceProvider[];
   private cache: TtlCache<string, ResolvedPrice>;
+  /** Last genuine price per key, so a provider outage can serve STALE data. */
+  private lastGood = new Map<string, ResolvedPrice>();
+  /** How long a last-known-good price may be served as STALE before giving up. */
+  private staleGraceMs = 15 * 60 * 1000;
 
   constructor(market: PriceProvider[] = marketProviders) {
     this.market = market;
@@ -74,13 +97,13 @@ export class PriceResolver {
   /** Resolve a USD price, trying each layer in order. */
   async resolve(token: TokenConfig, network: MonadNetwork = "mainnet"): Promise<ResolvedPrice> {
     const key = `${network}:${poolAddressOf(token)}`;
-    return this.cache.get(key, async () => {
+    const fresh = await this.cache.get(key, async () => {
       const at = Date.now();
 
       // A configured USD anchor is $1 by definition of the peg. This is an
       // explicit config assumption, surfaced as such — never a fake quote.
       if (isUsdAnchor(token)) {
-        return { usd: 1, source: "stable", label: labelFor("stable"), at, ttlMs: TTL_MS };
+        return { usd: 1, source: "stable", label: labelFor("stable"), at, ttlMs: TTL_MS, status: "LIVE" };
       }
 
       const q = this.query(network, token);
@@ -89,7 +112,7 @@ export class PriceResolver {
         const usd = await provider.price(q).catch(() => null);
         if (usd && usd > 0) {
           const kind: PriceSourceKind = provider.name === "alchemy" ? "market" : "dex";
-          return { usd, source: kind, label: labelFor(kind), at, ttlMs: TTL_MS };
+          return { usd, source: kind, label: labelFor(kind), at, ttlMs: TTL_MS, status: "LIVE" };
         }
       }
 
@@ -98,7 +121,7 @@ export class PriceResolver {
         const provider = getRoutingProvider("live", network);
         const onchain = await provider.priceUsd(token, network);
         if (onchain.usd > 0 && onchain.source !== "fallback") {
-          return { usd: onchain.usd, source: "onchain", label: labelFor("onchain"), at, ttlMs: TTL_MS };
+          return { usd: onchain.usd, source: "onchain", label: labelFor("onchain"), at, ttlMs: TTL_MS, status: "LIVE" };
         }
       } catch {
         /* fall through */
@@ -107,11 +130,25 @@ export class PriceResolver {
       // A shipped reference price is still legitimate for known assets — but it
       // is labelled as such, and unknown tokens get nothing.
       if (token.fallbackUsd > 0) {
-        return { usd: token.fallbackUsd, source: "fallback", label: labelFor("fallback"), at, ttlMs: TTL_MS };
+        return { usd: token.fallbackUsd, source: "fallback", label: labelFor("fallback"), at, ttlMs: TTL_MS, status: "LIVE" };
       }
 
-      return { usd: null, source: "unavailable", label: labelFor("unavailable"), at, ttlMs: TTL_MS };
+      return { usd: null, source: "unavailable", label: labelFor("unavailable"), at, ttlMs: TTL_MS, status: "UNAVAILABLE" };
     });
+
+    if (fresh.usd && fresh.usd > 0) {
+      this.lastGood.set(key, fresh);
+      return fresh;
+    }
+
+    // Fresh resolution found nothing. If we priced this token recently, serve
+    // the last-known value explicitly as STALE rather than showing "unavailable"
+    // just because a provider is momentarily down.
+    const prev = this.lastGood.get(key);
+    if (prev && Date.now() - prev.at <= this.staleGraceMs) {
+      return { ...prev, status: "STALE" };
+    }
+    return fresh;
   }
 
   /** Convenience for callers that only need the number (null when unknown). */

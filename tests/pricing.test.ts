@@ -3,6 +3,7 @@ import { getMarketPriceUsd } from "@/lib/server/pricing/market";
 import { GeckoTerminalPriceProvider } from "@/lib/server/pricing/geckoTerminal";
 import { DexScreenerPriceProvider } from "@/lib/server/pricing/dexscreener";
 import { AlchemyPriceProvider } from "@/lib/server/pricing/alchemyPrice";
+import { priceStatus } from "@/lib/server/pricing/resolver";
 import { getToken, type TokenConfig } from "@/lib/config/tokens";
 
 const USDC = getToken("USDC")!;
@@ -95,3 +96,18 @@ describe("market price providers (real response shapes)", () => {
     expect(result?.usd).toBeCloseTo(1.01, 4);
   });
 });
+
+describe("price freshness status", () => {
+  const now = 2_000_000;
+
+  it("is UNAVAILABLE when there is no numeric price (never $0.00)", () => {
+    expect(priceStatus({ usd: null, at: now, ttlMs: 45_000 }, now)).toBe("UNAVAILABLE");
+    expect(priceStatus({ usd: 0, at: now, ttlMs: 45_000 }, now)).toBe("UNAVAILABLE");
+  });
+
+  it("is LIVE within its TTL and STALE after it", () => {
+    expect(priceStatus({ usd: 1.23, at: now - 10_000, ttlMs: 45_000 }, now)).toBe("LIVE");
+    expect(priceStatus({ usd: 1.23, at: now - 60_000, ttlMs: 45_000 }, now)).toBe("STALE");
+  });
+});
+

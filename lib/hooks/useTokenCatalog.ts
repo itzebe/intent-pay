@@ -66,6 +66,8 @@ export type ResolvedPrice = {
   usd: number | null;
   source: "stable" | "market" | "dex" | "onchain" | "fallback" | "unavailable";
   label: string;
+  /** Price freshness: LIVE / STALE / UNAVAILABLE. */
+  status?: "LIVE" | "STALE" | "UNAVAILABLE";
 };
 
 export type ResolvedTokenResponse = {

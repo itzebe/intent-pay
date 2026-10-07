@@ -33,6 +33,8 @@ export function ReviewSheet({
   networkLabel,
   gasMode = "native",
   batchable = false,
+  quotedAt,
+  quoteStale = false,
 }: {
   quote: Quote;
   payToken: TokenConfig;
@@ -48,11 +50,18 @@ export function ReviewSheet({
   gasMode?: "sponsored" | "erc20" | "native";
   /** The connected wallet can submit the plan as one atomic batch. */
   batchable?: boolean;
+  /** Unix ms the current quote was produced — shown as a live timestamp. */
+  quotedAt?: number;
+  /** True when the quote has aged out; the review is then not executable. */
+  quoteStale?: boolean;
 }) {
   const [showDetails, setShowDetails] = useState(false);
 
   const impact = formatImpact(quote.priceImpact);
   const econ = planEconomics(quote);
+  const quoteTime = quotedAt
+    ? new Date(quotedAt).toLocaleTimeString("en-US", { hour12: false })
+    : null;
 
   const gasRow =
     gasMode === "sponsored"
@@ -76,6 +85,13 @@ export function ReviewSheet({
         <p className="text-center text-xs font-medium uppercase tracking-[0.14em] text-white/40">
           Review payment
         </p>
+
+        {quoteStale && (
+          <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.08] px-3 py-2 text-xs text-amber-100">
+            <Warning className="h-4 w-4 shrink-0" />
+            <span>This quote expired. Refreshing a live price — confirm again once it updates.</span>
+          </div>
+        )}
 
         <div className="mt-4 text-center">
           <div className="mb-3 flex justify-center">
@@ -106,6 +122,11 @@ export function ReviewSheet({
             sub={econ.exact ? "exact output" : `${(econ.slippageBps / 100).toFixed(2)}% slippage`}
           />
           <SummaryRow label="Network" value={networkLabel} />
+          <SummaryRow
+            label="Quote"
+            value={quoteTime ? `Live · ${quoteTime}` : "Live"}
+            sub={quoteStale ? "stale — refreshing" : "fresh"}
+          />
           <SummaryRow
             label="Estimated network cost"
             value={gasRow.value}
@@ -210,8 +231,16 @@ export function ReviewSheet({
           <button onClick={onBack} className="btn-ghost px-4" disabled={confirming}>
             Back
           </button>
-          <button onClick={onConfirm} className="btn-primary flex-1" disabled={confirming}>
-            {confirming ? "Sending…" : `Confirm & Send ${usdTokenLabel(quote.receiveUsd, receiveToken.symbol)}`}
+          <button
+            onClick={onConfirm}
+            className="btn-primary flex-1"
+            disabled={confirming || quoteStale}
+          >
+            {confirming
+              ? "Sending…"
+              : quoteStale
+                ? "Refreshing price…"
+                : `Confirm & Send ${usdTokenLabel(quote.receiveUsd, receiveToken.symbol)}`}
           </button>
         </div>
       </div>

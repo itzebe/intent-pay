@@ -10,17 +10,22 @@ import {
   useState,
 } from "react";
 import { getToken, allTokens, registerToken, type TokenConfig } from "@/lib/config/tokens";
-import type { AmountMode, Balance, PaymentIntent, Quote } from "@/lib/domain/intent";
+import type { AmountMode, Balance, Quote } from "@/lib/domain/intent";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { parseUnits } from "@/lib/domain/math";
-import { isEvmAddress } from "@/lib/format";
+import { isQuoteStale, QUOTE_REFRESH_AFTER_MS } from "@/lib/domain/freshness";
 import {
-  isQuoteStale,
-  QUOTE_REFRESH_AFTER_MS,
-} from "@/lib/domain/freshness";
+  initialIntent,
+  isQuotable,
+  reduceIntent,
+  toPaymentIntent,
+  type CanonicalIntent,
+  type IntentPatch,
+} from "@/lib/domain/canonicalIntent";
 import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities";
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
+import { createLatestGuard } from "@/lib/domain/latest";
 import { resolveGasMode, alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
 
 export type QuoteError = {
@@ -51,21 +56,15 @@ export type GasInfo = {
 };
 
 type FlowState = {
-  network: MonadNetwork;
-  intent: PaymentIntent;
-  payToken: string;
-  /**
-   * How the payment asset was established:
-   *  - "user"      — the user explicitly selected it,
-   *  - "intent"    — deterministically fixed by the user's own instruction
-   *                  (e.g. "Send 10 MON" means pay MON),
-   *  - "recommended" — the optimizer suggested it, which is NOT a commitment.
-   * A payment cannot enter Review while the source is merely "recommended".
-   */
-  payTokenSource: "user" | "intent" | "recommended";
-  /** Snapshot of the recipient amount the user explicitly asked for. */
-  intendedReceiveAmount: string | null;
+  /** The canonical, versioned intent — the single source of truth. */
+  intent: CanonicalIntent;
   quote: Quote | null;
+  /**
+   * The intent version the current quote was computed for. A quote whose
+   * `quoteVersion` differs from `intent.version` belongs to a previous request
+   * and must never be displayed or signed.
+   */
+  quoteVersion: number;
   quoting: boolean;
   quoteError: QuoteError | null;
   balances: Balance[];
@@ -74,15 +73,27 @@ type FlowState = {
   tokensVersion: number;
   /** Wall-clock (ms) when the current quote finished resolving. */
   autoRefreshAt: number;
+  /** The connected wallet account, tracked so an account change invalidates. */
+  walletAccount: string | undefined;
+  /** Bumped periodically to drive live balance/gas revalidation. */
+  revalidationTick: number;
+  /** Snapshot of the recipient amount the user explicitly asked for. */
+  intendedReceiveAmount: string | null;
 };
 
 type FlowContextValue = FlowState & {
+  /** Raw natural-language instruction, part of the canonical intent. */
+  setText: (text: string) => void;
   setNetwork: (network: MonadNetwork) => void;
   setRecipient: (recipient: string) => void;
   setReceiveToken: (symbol: string) => void;
   setReceiveAmount: (amount: string) => void;
   setAmountMode: (mode: AmountMode) => void;
   setPayToken: (symbol: string, manual?: boolean) => void;
+  /** Apply an arbitrary canonical-intent patch (always version-checked). */
+  patchIntent: (patch: IntentPatch) => void;
+  /** Report the connected wallet account so a change invalidates the flow. */
+  setWalletAccount: (address: string | undefined) => void;
   /** True once the user has explicitly acted to set the recipient address. */
   recipientConfirmed: boolean;
   markRecipientConfirmed: (confirmed: boolean) => void;
@@ -94,9 +105,9 @@ type FlowContextValue = FlowState & {
   /** Restore the transaction to the intended recipient amount. */
   correctToIntended: () => void;
   /**
-   * Pre-fill the composer from a completed natural-language intent. Used by the
-   * Intent Engine card: it copies the collected fields in and lets the existing
-   * quote/route/review flow take over from there.
+   * Pre-fill the canonical intent from a completed natural-language intent.
+   * Produces a new intent version; the existing quote → review → approval flow
+   * takes over from there.
    */
   prefillFromIntent: (input: {
     recipient: string;
@@ -123,8 +134,8 @@ type FlowContextValue = FlowState & {
     difference: string;
   } | null;
   /**
-   * True when the live quote is older than its freshness window. Execution must
-   * be blocked until a fresh quote is produced, so we never sign a stale price.
+   * True when the live quote is older than its freshness window, or when it was
+   * computed for a different intent version than the current one.
    */
   quoteStale: boolean;
   sufficiency: {
@@ -133,13 +144,6 @@ type FlowContextValue = FlowState & {
     available: string;
     shortfall: string;
   };
-  /**
-   * Whether the wallet can cover the network fee. Monad fees are paid in MON,
-   * so a wallet that holds the payment asset but no MON is blocked on gas —
-   * unless gas is actually abstracted (paymaster sponsorship or ERC-20 gas).
-   * Abstracted modes are only reported "ok" when the wallet itself advertises
-   * the capability, never merely because a key is configured.
-   */
   gasSufficiency: {
     status: "ok" | "insufficient" | "unknown";
     requiredMon: string;
@@ -162,33 +166,26 @@ const FlowContext = createContext<FlowContextValue | null>(null);
 
 const MISM = 0.005; // 0.5% tolerance for the exact-payment protection
 
-export function PaymentProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const [state, setState] = useState<FlowState>({
-    network: "mainnet",
-    // The form composer is USD-denominated ("recipient receives $X of TOKEN").
-    // Defaults are arbitrary starting points the user edits — not demo data.
-    intent: {
-      recipient: "",
-      receiveToken: "USDC",
-      receiveAmount: "5",
-      amountMode: "recipient_receives",
-    },
-    payToken: "USDC",
-    // The starting form is a helper default, never a commitment: the user must
-    // still choose the asset before Review can be reached.
-    payTokenSource: "recommended",
-    intendedReceiveAmount: "5",
-    quote: null,
-    quoting: false,
-    quoteError: null,
-    balances: [],
-    balancesLoading: false,
-    tokensVersion: 0,
-    autoRefreshAt: 0,
+/** How often to revalidate balances/gas while a wallet is connected. */
+const REVALIDATE_INTERVAL_MS = 12_000;
+
+export function PaymentProvider({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<FlowState>(() => {
+    const intent = initialIntent();
+    return {
+      intent,
+      quote: null,
+      quoteVersion: 0,
+      quoting: false,
+      quoteError: null,
+      balances: [],
+      balancesLoading: false,
+      tokensVersion: 0,
+      autoRefreshAt: 0,
+      walletAccount: undefined,
+      revalidationTick: 0,
+      intendedReceiveAmount: intent.receiveAmount,
+    };
   });
 
   const [recipientConfirmed, setRecipientConfirmed] = useState(false);
@@ -196,148 +193,108 @@ export function PaymentProvider({
 
   const [nonce, setNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  // Latest-only guard: a slow request for an earlier intent version can never
+  // overwrite the result of a newer one.
+  const latestRef = useRef(createLatestGuard());
 
   const receiveTokenConfig = useMemo(
     () => getToken(state.intent.receiveToken) ?? allTokens()[0],
-    // tokensVersion re-reads the registry after a discovered token registers.
     [state.intent.receiveToken, state.tokensVersion],
   );
   const payTokenConfig = useMemo(
-    () => getToken(state.payToken) ?? allTokens()[1] ?? allTokens()[0],
-    [state.payToken, state.tokensVersion],
+    () => getToken(state.intent.payToken) ?? allTokens()[1] ?? allTokens()[0],
+    [state.intent.payToken, state.tokensVersion],
   );
 
-  // ---- Auto quote (debounced) ---------------------------------------------
-  useEffect(() => {
-    const { intent, payToken, network } = state;
-    // Don't spam the network for obviously invalid input.
-    if (!isEvmAddress(intent.recipient) || !intent.receiveAmount) {
-      setState((s) => ({ ...s, quote: null, quoteError: null, quoting: false }));
-      return;
-    }
+  // ---- Canonical intent mutation ------------------------------------------
+  // Every edit goes through the reducer, which bumps the version only when an
+  // execution-relevant field actually changed. A version change discards the
+  // quote and any error from the previous request so a stale result can never
+  // be shown for the new one.
+  const patchIntent = useCallback((patch: IntentPatch) => {
+    setState((s) => {
+      const intent = reduceIntent(s.intent, patch);
+      if (intent === s.intent) return s;
+      return {
+        ...s,
+        intent,
+        quote: null,
+        quoteVersion: 0,
+        quoting: false,
+        quoteError: null,
+        autoRefreshAt: 0,
+      };
+    });
+  }, []);
 
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+  const setText = useCallback((text: string) => patchIntent({ text }), [patchIntent]);
+  const setNetwork = useCallback(
+    (network: MonadNetwork) => {
+      patchIntent({ network });
+      // A different chain invalidates the wallet's capabilities and gas plan.
+      setWalletGasCapabilities(null);
+    },
+    [patchIntent],
+  );
+  const setRecipient = useCallback(
+    (recipient: string) => {
+      patchIntent({ recipient });
+      // Typing (or clearing) the address invalidates a previous confirmation.
+      setRecipientConfirmed(false);
+    },
+    [patchIntent],
+  );
+  const setReceiveToken = useCallback(
+    (symbol: string) => patchIntent({ receiveToken: symbol }),
+    [patchIntent],
+  );
+  const setReceiveAmount = useCallback(
+    (amount: string) => {
+      patchIntent({ receiveAmount: amount });
+      setState((s) =>
+        s.intent.amountMode === "recipient_receives"
+          ? { ...s, intendedReceiveAmount: amount }
+          : s,
+      );
+    },
+    [patchIntent],
+  );
+  const setAmountMode = useCallback(
+    (mode: AmountMode) => {
+      patchIntent({ amountMode: mode });
+      setState((s) => ({
+        ...s,
+        intendedReceiveAmount: mode === "recipient_receives" ? s.intent.receiveAmount : null,
+      }));
+    },
+    [patchIntent],
+  );
+  const setPayToken = useCallback(
+    (symbol: string, manual = true) =>
+      patchIntent({ payToken: symbol, payTokenSource: manual ? "user" : "recommended" }),
+    [patchIntent],
+  );
 
-    setState((s) => ({ ...s, quoting: true, quoteError: null }));
+  const setWalletAccount = useCallback((address: string | undefined) => {
+    setState((s) => {
+      if (s.walletAccount === address) return s;
+      // An account change invalidates balances, allowances, smart-account state,
+      // paymaster eligibility and the whole transaction payload. Drop the quote
+      // so it is rebuilt from scratch for the new account.
+      return {
+        ...s,
+        walletAccount: address,
+        balances: [],
+        quote: null,
+        quoteVersion: 0,
+        quoteError: null,
+        autoRefreshAt: 0,
+      };
+    });
+    setWalletGasCapabilities(null);
+    setNonce((n) => n + 1);
+  }, []);
 
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch("/api/quote", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...intent,
-            payToken,
-            network,
-          }),
-          signal: controller.signal,
-        });
-        const json = await res.json();
-        if (controller.signal.aborted) return;
-        if (json.ok) {
-          const q = json.quote as Quote;
-          q.gasLimit = q.gasLimit ? (BigInt(q.gasLimit) as unknown as bigint) : undefined;
-          q.gasPriceWei = q.gasPriceWei ? (BigInt(q.gasPriceWei) as unknown as bigint) : undefined;
-          // Register any discovered tokens (route hops, resolved endpoints) so
-          // the UI and the transaction builder can resolve them by symbol.
-          let learned = false;
-          for (const t of [q.payToken, q.receiveToken, ...(q.route.tokens ?? [])]) {
-            if (t?.address) {
-              const before = getToken(t.symbol)?.address;
-              registerToken(t);
-              if (before?.toLowerCase() !== t.address.toLowerCase()) learned = true;
-            }
-          }
-          setState((s) => ({
-            ...s,
-            quote: q,
-            quoting: false,
-            quoteError: null,
-            autoRefreshAt: Date.now(),
-            tokensVersion: learned ? s.tokensVersion + 1 : s.tokensVersion,
-            // In "I spend" mode the recipient amount is derived, so the intent
-            // snapshot tracks the current implied value rather than a fixed one.
-            intendedReceiveAmount:
-              s.intent.amountMode === "i_spend"
-                ? q.receiveUsd.toFixed(2)
-                : s.intendedReceiveAmount,
-          }));
-        } else {
-          setState((s) => ({
-            ...s,
-            quote: null,
-            quoting: false,
-            quoteError: {
-              code: json.code ?? "provider_error",
-              message: json.message ?? "Could not build a quote.",
-              alternatives: json.alternatives,
-            },
-          }));
-        }
-      } catch (err) {
-        if ((err as Error)?.name === "AbortError") return;
-        setState((s) => ({
-          ...s,
-          quote: null,
-          quoting: false,
-          quoteError: { code: "provider_error", message: "Couldn't reach the routing service." },
-        }));
-      }
-    }, 320);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [
-    state.intent.recipient,
-    state.intent.receiveToken,
-    state.intent.receiveAmount,
-    state.intent.amountMode,
-    state.payToken,
-    state.network,
-    nonce,
-  ]);
-
-  // ---- Setters -------------------------------------------------------------
-  const setNetwork = useCallback((network: MonadNetwork) => {
-    setState((s) => ({ ...s, network, quote: null, quoteError: null }));
-  }, []);
-  const setRecipient = useCallback((recipient: string) => {
-    setState((s) => ({ ...s, intent: { ...s.intent, recipient } }));
-    // Typing (or clearing) the address invalidates a previous confirmation.
-    setRecipientConfirmed(false);
-  }, []);
-  const setReceiveToken = useCallback((symbol: string) => {
-    setState((s) => ({ ...s, intent: { ...s.intent, receiveToken: symbol } }));
-  }, []);
-  const setReceiveAmount = useCallback((amount: string) => {
-    setState((s) => ({
-      ...s,
-      intent: { ...s.intent, receiveAmount: amount },
-      intendedReceiveAmount:
-        s.intent.amountMode === "recipient_receives" ? amount : s.intendedReceiveAmount,
-    }));
-  }, []);
-  const setAmountMode = useCallback((mode: AmountMode) => {
-    setState((s) => ({
-      ...s,
-      intent: { ...s.intent, amountMode: mode },
-      quote: null,
-      // "Recipient receives" pins the entered amount; "I spend" derives it.
-      intendedReceiveAmount: mode === "recipient_receives" ? s.intent.receiveAmount : null,
-    }));
-  }, []);
-  const setPayToken = useCallback((symbol: string, manual = true) => {
-    setState((s) => ({
-      ...s,
-      payToken: symbol,
-      // An explicit selection is a commitment; an optimizer suggestion is not.
-      payTokenSource: manual ? "user" : "recommended",
-    }));
-  }, []);
   const setBalances = useCallback((balances: Balance[]) => {
     setState((s) => ({ ...s, balances }));
   }, []);
@@ -353,14 +310,11 @@ export function PaymentProvider({
   const correctToIntended = useCallback(() => {
     setState((s) => {
       if (!s.intendedReceiveAmount) return s;
-      return {
-        ...s,
-        intent: {
-          ...s.intent,
-          amountMode: "recipient_receives",
-          receiveAmount: s.intendedReceiveAmount,
-        },
-      };
+      const intent = reduceIntent(s.intent, {
+        amountMode: "recipient_receives",
+        receiveAmount: s.intendedReceiveAmount,
+      });
+      return { ...s, intent, quote: null, quoteVersion: 0, quoteError: null };
     });
     setNonce((n) => n + 1);
   }, []);
@@ -374,29 +328,27 @@ export function PaymentProvider({
       payToken?: string;
       payTokenSource?: "user" | "intent";
     }) => {
+      const amountMode = input.amountMode ?? "recipient_receives";
       setState((s) => {
-        const amountMode = input.amountMode ?? "recipient_receives";
+        const intent = reduceIntent(s.intent, {
+          recipient: input.recipient,
+          receiveToken: input.receiveToken,
+          receiveAmount: input.receiveAmountUsd,
+          amountMode,
+          // When the instruction deterministically named a source asset
+          // ("Send 10 MON"), honour it. When it did not, the source is only
+          // *recommended* and the user must still confirm it before Review.
+          ...(input.payToken
+            ? { payToken: input.payToken, payTokenSource: input.payTokenSource ?? "intent" }
+            : {}),
+        });
         return {
           ...s,
-          intent: {
-            ...s.intent,
-            recipient: input.recipient,
-            receiveToken: input.receiveToken,
-            receiveAmount: input.receiveAmountUsd,
-            amountMode,
-          },
-          // Pin the recipient amount as the intent.
+          intent,
           intendedReceiveAmount:
             amountMode === "recipient_receives" ? input.receiveAmountUsd : null,
-          // When the instruction deterministically named a source asset
-          // ("Use USDT to send $10 USDC" / "Send 10 MON"), honour it. When it
-          // did not, the source is only *recommended* by the optimizer and the
-          // user must still confirm it before Review.
-          payToken: input.payToken ?? s.payToken,
-          payTokenSource: input.payToken
-            ? input.payTokenSource ?? "intent"
-            : "recommended",
           quote: null,
+          quoteVersion: 0,
           quoteError: null,
         };
       });
@@ -412,21 +364,18 @@ export function PaymentProvider({
   );
 
   // ---- Configured infrastructure -------------------------------------------
-  const capabilities = useCapabilities(state.network);
+  const capabilities = useCapabilities(state.intent.network);
 
   // ---- Gas-aware payment optimizer -----------------------------------------
-  // Ranks every funded asset as a way to satisfy the intent, weighing route
-  // availability, amount, and network cost. This is what makes the
-  // recommendation honest: a token is only "best" if it can actually pay.
+  const paymentIntent = useMemo(() => toPaymentIntent(state.intent), [state.intent]);
   const { result: optimizer, loading: optimizerLoading } = useOptimizer(
-    state.intent,
+    paymentIntent,
     state.balances,
-    state.network,
+    state.intent.network,
   );
 
   const recommendedPayToken = useMemo(() => {
     if (optimizer?.best) return optimizer.best.symbol;
-    // Fall back to the largest holding while the optimizer is still thinking.
     const funded = state.balances.filter((b) => b.usd > 0).sort((a, b) => b.usd - a.usd);
     return funded[0]?.token.symbol ?? null;
   }, [optimizer, state.balances]);
@@ -435,18 +384,130 @@ export function PaymentProvider({
   // instruction already established the source. We never silently override an
   // explicit choice or an intent-established asset.
   useEffect(() => {
-    if (state.payTokenSource !== "recommended") return;
+    if (state.intent.payTokenSource !== "recommended") return;
     if (!recommendedPayToken) return;
-    if (recommendedPayToken === state.payToken) return;
-    setState((s) => ({ ...s, payToken: recommendedPayToken }));
-  }, [recommendedPayToken, state.payTokenSource, state.payToken]);
+    if (recommendedPayToken === state.intent.payToken) return;
+    // A recommendation is not an execution commitment, so it must not bump the
+    // intent version (which would needlessly invalidate the quote). Apply it
+    // directly.
+    setState((s) => ({ ...s, intent: { ...s.intent, payToken: recommendedPayToken } }));
+  }, [recommendedPayToken, state.intent.payTokenSource, state.intent.payToken]);
+
+  // ---- Auto quote (debounced, version-guarded) ----------------------------
+  // A slow request that resolves after the intent has moved on must never write
+  // to state. Two guards enforce that: an AbortController and a request id that
+  // is checked against the version the request was issued for.
+  useEffect(() => {
+    const intent = state.intent;
+    if (!isQuotable(intent)) {
+      setState((s) =>
+        s.quote || s.quoting || s.quoteError
+          ? { ...s, quote: null, quoting: false, quoteError: null }
+          : s,
+      );
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const issuedVersion = intent.version;
+    const requestId = latestRef.current.issue(issuedVersion);
+
+    setState((s) => ({ ...s, quoting: true, quoteError: null }));
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...toPaymentIntent(intent),
+            payToken: intent.payToken,
+            network: intent.network,
+          }),
+          signal: controller.signal,
+        });
+        const json = await res.json();
+        // Only the newest request for the current version may update the UI.
+        if (controller.signal.aborted || !latestRef.current.isCurrent(requestId, issuedVersion)) return;
+        setState((s) => {
+          if (s.intent.version !== issuedVersion || !latestRef.current.isCurrent(requestId, issuedVersion)) return s;
+          if (json.ok) {
+            const q = json.quote as Quote;
+            q.gasLimit = q.gasLimit ? (BigInt(q.gasLimit) as unknown as bigint) : undefined;
+            q.gasPriceWei = q.gasPriceWei ? (BigInt(q.gasPriceWei) as unknown as bigint) : undefined;
+            let learned = false;
+            for (const t of [q.payToken, q.receiveToken, ...(q.route.tokens ?? [])]) {
+              if (t?.address) {
+                const before = getToken(t.symbol)?.address;
+                registerToken(t);
+                if (before?.toLowerCase() !== t.address.toLowerCase()) learned = true;
+              }
+            }
+            return {
+              ...s,
+              quote: q,
+              quoteVersion: issuedVersion,
+              quoting: false,
+              quoteError: null,
+              autoRefreshAt: Date.now(),
+              tokensVersion: learned ? s.tokensVersion + 1 : s.tokensVersion,
+              intendedReceiveAmount:
+                s.intent.amountMode === "i_spend"
+                  ? q.receiveUsd.toFixed(2)
+                  : s.intendedReceiveAmount,
+            };
+          }
+          return {
+            ...s,
+            quote: null,
+            quoteVersion: 0,
+            quoting: false,
+            quoteError: {
+              code: json.code ?? "provider_error",
+              message: json.message ?? "Could not build a quote.",
+              alternatives: json.alternatives,
+            },
+          };
+        });
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
+        if (!latestRef.current.isCurrent(requestId, issuedVersion)) return;
+        setState((s) => {
+          if (s.intent.version !== issuedVersion) return s;
+          return {
+            ...s,
+            quote: null,
+            quoteVersion: 0,
+            quoting: false,
+            quoteError: { code: "provider_error", message: "Couldn't reach the routing service." },
+          };
+        });
+      }
+    }, 320);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [state.intent, nonce]);
+
+  // ---- Live revalidation ---------------------------------------------------
+  // A DEX continuously revalidates. Balances and gas eligibility are refreshed
+  // on a timer while a wallet is connected; the composer consumes
+  // `revalidationTick` to re-fetch balances.
+  useEffect(() => {
+    if (!state.walletAccount) return;
+    const id = setInterval(
+      () => setState((s) => ({ ...s, revalidationTick: s.revalidationTick + 1 })),
+      REVALIDATE_INTERVAL_MS,
+    );
+    return () => clearInterval(id);
+  }, [state.walletAccount]);
 
   // ---- Exact-payment protection -------------------------------------------
   const mismatch = useMemo(() => {
-    // The user's intent is a dollar value ("$5.00 SOL"); compare it against the
-    // dollar value the current configuration would actually deliver. Protection
-    // fires only when the recipient would receive MORE than intended — a
-    // shortfall is a normal consequence of "I spend" mode, not an overpayment.
     const intended = state.intendedReceiveAmount;
     if (!intended || !state.quote) return null;
     const a = Number(intended);
@@ -463,19 +524,17 @@ export function PaymentProvider({
   }, [state.intendedReceiveAmount, state.quote, state.intent.receiveToken]);
 
   // ---- Quote freshness -----------------------------------------------------
-  // A quote is only trustworthy for a short window. We auto-refresh shortly
-  // before it goes stale, and while it is stale the UI blocks execution so a
-  // price the user saw is never the price they sign.
-  const quoteStale = isQuoteStale(state.autoRefreshAt);
+  // A quote is stale when it has aged out OR when it belongs to a previous
+  // intent version. Either way execution is blocked until a fresh quote for the
+  // current intent exists.
+  const quoteStale =
+    isQuoteStale(state.autoRefreshAt) || state.quoteVersion !== state.intent.version;
 
   // Proactively refresh as the quote approaches staleness (delay 0 when it has
   // already aged out, so a long-idle tab recovers immediately).
   useEffect(() => {
     if (!state.quote || !state.autoRefreshAt) return;
-    const delay = Math.max(
-      0,
-      QUOTE_REFRESH_AFTER_MS - (Date.now() - state.autoRefreshAt),
-    );
+    const delay = Math.max(0, QUOTE_REFRESH_AFTER_MS - (Date.now() - state.autoRefreshAt));
     const timer = setTimeout(() => setNonce((n) => n + 1), delay);
     return () => clearTimeout(timer);
   }, [state.quote, state.autoRefreshAt]);
@@ -483,13 +542,17 @@ export function PaymentProvider({
   // ---- Balance sufficiency -------------------------------------------------
   const sufficiency = useMemo(() => {
     const q = state.quote;
-    const bal = state.balances.find((b) => b.token.symbol === state.payToken);
+    const bal = state.balances.find((b) => b.token.symbol === state.intent.payToken);
     if (!q || !bal) {
-      return { status: "unknown" as const, required: q?.payAmount ?? "0", available: bal?.amount ?? "0", shortfall: "0" };
+      return {
+        status: "unknown" as const,
+        required: q?.payAmount ?? "0",
+        available: bal?.amount ?? "0",
+        shortfall: "0",
+      };
     }
     try {
       const required = parseUnits(q.payAmount, payTokenConfig.decimals);
-      // Leave a little MON for gas when paying with the native asset.
       const reserve = payTokenConfig.native ? 10_000_000_000_000_000n : 0n;
       const available = parseUnits(bal.amount, payTokenConfig.decimals);
       if (available >= required + reserve) {
@@ -504,17 +567,16 @@ export function PaymentProvider({
         shortfall: shortfall.toFixed(6),
       };
     } catch {
-      return { status: "unknown" as const, required: q.payAmount, available: bal.amount, shortfall: "0" };
+      return {
+        status: "unknown" as const,
+        required: q.payAmount,
+        available: bal.amount,
+        shortfall: "0",
+      };
     }
-  }, [state.quote, state.balances, state.payToken, payTokenConfig]);
+  }, [state.quote, state.balances, state.intent.payToken, payTokenConfig]);
 
   // ---- Gas handling (abstracted when the wallet can actually deliver it) ---
-  // The key distinction for a wallet that holds USDC but no MON:
-  //   sponsored — a paymaster is configured AND the wallet advertises support,
-  //               so the user pays no MON.
-  //   erc20     — the wallet can charge gas in an ERC-20 (no paymaster needed).
-  //   native    — gas is paid in MON. We only claim a MON shortfall here.
-  // A configured-but-incapable wallet is NEVER reported as abstracted.
   const gasInfo = useMemo<GasInfo>(() => {
     const paymasterConfigured = Boolean(capabilities?.gas.sponsorshipConfigured);
     const walletSupportsPaymaster = Boolean(walletGasCaps?.paymasterService);
@@ -528,8 +590,7 @@ export function PaymentProvider({
       paymasterConfigured,
       walletSupportsPaymaster,
       walletSupportsErc20Gas,
-      paymasterServiceUrl:
-        abstracted && pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
+      paymasterServiceUrl: abstracted && pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
       paymasterContext: abstracted && policyId ? { policyId } : undefined,
     };
   }, [capabilities, walletGasCaps]);
@@ -537,12 +598,9 @@ export function PaymentProvider({
   const gasSufficiency = useMemo(() => {
     const native = state.balances.find((b) => b.token.native);
     const availableMon = native?.amount ?? "0";
-    // Gas is abstracted — the user does not need MON for the fee.
     if (gasInfo.mode !== "native") {
       return { status: "ok" as const, requiredMon: "0", availableMon };
     }
-    // No native balance entry means no wallet is connected / balances are not
-    // loaded yet. We don't know the fee position, so don't block on it.
     if (!native) {
       return { status: "unknown" as const, requiredMon: "0", availableMon };
     }
@@ -553,7 +611,6 @@ export function PaymentProvider({
     try {
       const required = q.gasLimit * q.gasPriceWei;
       const requiredMon = Number(required) / 1e18;
-      // The gas price can move between quote and send; require a small buffer.
       const buffered = required + required / 5n;
       const available = parseUnits(availableMon, 18);
       if (available >= buffered) {
@@ -566,19 +623,19 @@ export function PaymentProvider({
   }, [state.quote, state.balances, gasInfo]);
 
   // ---- Deterministic readiness gate ---------------------------------------
-  // The single authority for whether Review/Confirm is reachable. Visual state
-  // is never the only gate: `onConfirm` re-checks readiness and freshness.
-  const payTokenIsSet = state.payTokenSource === "user" || state.payTokenSource === "intent";
+  const payTokenIsSet =
+    state.intent.payTokenSource === "user" || state.intent.payTokenSource === "intent";
   const readiness = useMemo(
     () =>
       computeReadiness({
         recipient: state.intent.recipient,
         recipientConfirmed,
         payTokenIsSet,
-        payToken: state.payToken,
+        payToken: state.intent.payToken,
         receiveToken: state.intent.receiveToken,
         quoting: state.quoting,
-        quote: state.quote,
+        // A quote from a previous intent version must never satisfy the gate.
+        quote: state.quoteVersion === state.intent.version ? state.quote : null,
         quoteError: state.quoteError,
         quoteStale,
         sufficiency,
@@ -587,13 +644,15 @@ export function PaymentProvider({
       }),
     [
       state.intent.recipient,
+      state.intent.payToken,
+      state.intent.receiveToken,
+      state.intent.version,
+      state.quote,
+      state.quoteVersion,
+      state.quoteError,
+      state.quoting,
       recipientConfirmed,
       payTokenIsSet,
-      state.payToken,
-      state.intent.receiveToken,
-      state.quoting,
-      state.quote,
-      state.quoteError,
       quoteStale,
       sufficiency,
       gasSufficiency,
@@ -603,6 +662,7 @@ export function PaymentProvider({
 
   const value: FlowContextValue = {
     ...state,
+    setText,
     recipientConfirmed,
     markRecipientConfirmed: setRecipientConfirmed,
     setNetwork,
@@ -611,6 +671,8 @@ export function PaymentProvider({
     setReceiveAmount,
     setAmountMode,
     setPayToken,
+    patchIntent,
+    setWalletAccount,
     setBalances,
     setBalancesLoading,
     addToken,

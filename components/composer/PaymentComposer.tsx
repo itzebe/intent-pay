@@ -6,14 +6,15 @@ import { formatAmount, isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
-import { buildPaymentPlan, describePlan } from "@/lib/execution/plan";
+import { describePlan, buildPaymentPlan } from "@/lib/execution/plan";
 import { executePlan, executePlanBatched, ExecutionError, type StepResult } from "@/lib/execution/execute";
 import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
+import { prepareSigning } from "@/lib/execution/signGuard";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { NETWORKS } from "@/lib/config/chains";
-import type { Balance } from "@/lib/domain/intent";
+import type { Balance, QuoteResult } from "@/lib/domain/intent";
 import { Modal } from "@/components/ui/Modal";
 import { TokenList } from "@/components/ui/TokenList";
 import { RecipientField } from "./RecipientField";
@@ -40,8 +41,8 @@ function hashOf(results: StepResult[]): `0x${string}`[] {
 
 export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const flow = usePaymentFlow();
-  const wallet = useWallet(flow.network);
-  const catalog = useTokenCatalog(flow.network);
+  const wallet = useWallet(flow.intent.network);
+  const catalog = useTokenCatalog(flow.intent.network);
   const [stage, setStage] = useState<Stage>("compose");
   const [tokenModal, setTokenModal] = useState<null | "receive" | "pay">(null);
   const [steps, setSteps] = useState<StepResult[]>([]);
@@ -54,6 +55,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // Anchor the collected intent steps so a natural-language prefill can scroll
   // the user down to the fields it just filled.
   const composeRef = useRef<HTMLDivElement>(null);
+  // The intent version the current Review was opened for. If the user edits the
+  // intent, the review is no longer executable and we drop straight back to the
+  // composer with a fresh computation.
+  const reviewVersionRef = useRef<number | null>(null);
 
   // Ask the wallet what it supports (EIP-5792 atomic batch + paymaster). This
   // is what lets us offer sponsored / ERC-20 gas only when it can actually work.
@@ -64,11 +69,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       return;
     }
     let cancelled = false;
-    getWalletCapabilities(wallet.provider, NETWORKS[flow.network].chainId, wallet.address).then((caps) => {
+    getWalletCapabilities(wallet.provider, NETWORKS[flow.intent.network].chainId, wallet.address).then((caps) => {
       if (cancelled) return;
       setWalletCaps(caps);
-      // Report to the flow so the readiness gate and review reflect the real
-      // gas mode (never a configured-but-incapable claim).
       flow.setWalletGasCapabilities({
         atomicBatch: caps.atomicBatch,
         paymasterService: caps.paymasterService,
@@ -79,17 +82,21 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.network, wallet.provider, wallet.address]);
+  }, [flow.intent.network, wallet.provider, wallet.address]);
 
-  // Effective gas mode for this payment: what the user should expect. Comes from
-  // the flow's resolved gas plan, which only claims abstraction the wallet can
-  // actually deliver.
-  const gasMode = flow.gasMode;
+  // Report the connected account to the flow. An account change invalidates
+  // balances, gas eligibility and the whole transaction payload.
+  useEffect(() => {
+    flow.setWalletAccount(wallet.address);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallet.address]);
 
-  // Live balances for a connected wallet (live mode only).
+  // Live balances for a connected wallet. `revalidationTick` refreshes them
+  // periodically so a DEX-like flow always shows current holdings.
   const { balances: liveBalances, loading: liveLoading } = useLiveBalances(
     wallet.address,
-    flow.network,
+    flow.intent.network,
+    flow.revalidationTick,
   );
   useEffect(() => {
     if (wallet.address) {
@@ -98,9 +105,25 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveBalances, wallet.address]);
 
+  // A change to the canonical intent after Review invalidates the review: the
+  // user must not be able to execute a transaction for an older version. The
+  // same applies when the quote is dropped entirely (wallet-account change,
+  // network change), which leaves nothing executable to review.
+  useEffect(() => {
+    if (stage !== "review") return;
+    if (!flow.quote || reviewVersionRef.current !== flow.intent.version) {
+      setStage("compose");
+      reviewVersionRef.current = null;
+      setError("Your payment changed. Here's the updated quote — review it again.");
+      setSteps([]);
+      setDelivery(null);
+      setTxHash(undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flow.intent.version, flow.quote, stage]);
+
   // Routability is discovered, not hardcoded: in live mode we ask the routing
-  // layer which tokens were actually probed and have a liquid route. Tokens we
-  // haven't probed stay `null` (unknown) rather than being shown as unsupported.
+  // layer which tokens were actually probed and have a liquid route.
   const availability = useMemo(() => {
     const map: Record<string, boolean | null> = {};
     for (const t of catalog.tokens) {
@@ -110,25 +133,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   }, [catalog.tokens]);
 
   const recipientValid = isEvmAddress(flow.intent.recipient);
-  // The recipient is only "entered" once the user has actually supplied or
-  // confirmed the address; a programmatically prefilled field must still be
-  // acknowledged. Used to decide what the flow reveals.
   const recipientConfirmed = flow.recipientConfirmed && recipientValid;
-
-  // The deterministic readiness gate is the single source of truth for whether
-  // Review is reachable — never visual state alone.
   const canContinue = flow.readiness.ready;
 
-  const onReview = useCallback(() => {
-    // Defence-in-depth: never advance to Review unless the deterministic gate
-    // says every execution input is finalized.
-    if (!flow.readiness.ready || !flow.quote) return;
-    setError(null);
-    setStage("review");
-  }, [flow.readiness.ready, flow.quote]);
-
-  const plan = useMemo(() => {
-    if (!flow.quote) return null;
+  // A descriptive plan for display only; the *signed* plan is rebuilt fresh
+  // inside the signing guard from the current intent.
+  const displayPlan = useMemo(() => {
+    if (!flow.quote) return { steps: [], primaryStepId: "", executable: false };
     try {
       return buildPaymentPlan(
         flow.quote,
@@ -136,16 +147,48 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         flow.intent.recipient as `0x${string}`,
       );
     } catch {
-      return null;
+      return { steps: [], primaryStepId: "", executable: false };
     }
-  }, [flow.quote, wallet.address, flow.intent.recipient]);
+  }, [flow.quote, flow.intent.recipient, wallet.address]);
 
-  // One atomic approval instead of N, when the wallet supports EIP-5792 batches.
-  const batchable =
-    Boolean(walletCaps?.atomicBatch) && Boolean(plan?.executable) && (plan?.steps.length ?? 0) > 1;
+  // Keep the latest intent reachable from inside the async guard so the
+  // version check reads the *current* value, not the one captured at render.
+  const intentRef = useRef(flow.intent);
+  useEffect(() => {
+    intentRef.current = flow.intent;
+  }, [flow.intent]);
 
+  // The live wallet account, so the guard can detect an account switch during
+  // transaction preparation.
+  const accountRef = useRef(wallet.address);
+  useEffect(() => {
+    accountRef.current = wallet.address;
+  }, [wallet.address]);
+
+  const onReview = useCallback(() => {
+    if (!flow.readiness.ready || !flow.quote) return;
+    setError(null);
+    reviewVersionRef.current = flow.intent.version;
+    setStage("review");
+  }, [flow.readiness.ready, flow.quote, flow.intent.version]);
+
+  const reset = useCallback(() => {
+    setStage("compose");
+    reviewVersionRef.current = null;
+    setSteps([]);
+    setError(null);
+    setTxHash(undefined);
+    setDelivery(null);
+    flow.refreshQuote();
+  }, [flow]);
+
+  /**
+   * Signing safety pipeline. Immediately before the wallet is asked to sign we
+   * build a FRESH transaction from the CURRENT intent and fresh live data, and
+   * prove the intent did not change while we were preparing. Calldata is never
+   * reused from an earlier build.
+   */
   const onConfirm = useCallback(async () => {
-    if (!flow.quote || !plan) return;
     setError(null);
     setSteps([]);
     setDelivery(null);
@@ -155,21 +198,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       return;
     }
 
-    // Re-check the deterministic gate at the moment of signing: a stale quote
-    // or a newly-insufficient balance must never be signed.
+    // The approval gate evaluates the CURRENT intent only.
     if (!flow.readiness.ready) {
       flow.refreshQuote();
       setError("This payment changed. Review it again before confirming.");
       return;
     }
 
-    // Stale-quote guard: never sign a price the user saw minutes ago. If the
-    // quote aged out, force a fresh one and ask them to review again.
-    if (flow.quoteStale) {
-      flow.refreshQuote();
-      setError("This price expired. We're refreshing it — review and confirm again.");
-      return;
-    }
     const onChain = await wallet.ensureMonad();
     if (!onChain) {
       setError("Please switch your wallet to Monad to continue.");
@@ -189,16 +224,45 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       });
 
     try {
+      // --- Fresh intent build, immediately before signing -------------------
+      const prepared = await prepareSigning(
+        {
+          intent: flow.intent,
+          sender: wallet.address,
+          recipient: flow.intent.recipient as `0x${string}`,
+        },
+        {
+          fetchBalances: () => fetchBalances(wallet.address!, flow.intent.network),
+          fetchQuote: (intent) => fetchQuote(intent),
+          resolveGas: async () => flow.gasInfo.mode,
+          readGas: async () => ({
+            gasLimit: flow.quote?.gasLimit,
+            gasPriceWei: flow.quote?.gasPriceWei,
+          }),
+          readIntent: () => intentRef.current,
+          readAccount: () => accountRef.current,
+        },
+      );
+
+      if (!prepared.ok) {
+        setError(prepared.message);
+        setStage("compose");
+        reviewVersionRef.current = null;
+        flow.refreshQuote();
+        return;
+      }
+
+      const plan = prepared.plan;
+
       // Prefer an atomic EIP-5792 batch when the wallet supports it and the plan
-      // has more than one step — one approval instead of N. A single-step
-      // payment still goes through `wallet_sendCalls` when gas is abstracted,
-      // because that is the only path a paymaster can sponsor. Falls back to
-      // sequential transactions if the wallet rejects the batch.
+      // needs more than one step, or when gas is abstracted (a single-step
+      // payment must still go through `wallet_sendCalls` for a paymaster to
+      // sponsor it).
       const useBatch =
         plan.executable &&
         Boolean(wallet.provider) &&
         Boolean(walletCaps?.atomicBatch) &&
-        (plan.steps.length > 1 || gasMode !== "native");
+        (plan.steps.length > 1 || prepared.gasMode !== "native");
 
       let primaryHash: `0x${string}` | undefined;
       let stepHashes: `0x${string}`[] = [];
@@ -208,50 +272,40 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             plan,
             wallet.provider!,
             wallet.address,
-            NETWORKS[flow.network].chainId,
-            flow.network,
+            NETWORKS[flow.intent.network].chainId,
+            flow.intent.network,
             {
-              // Correct EIP-5792/ERC-7677 shape: a paymaster service URL (the
-              // wallet requests paymaster fields from it), with the gas policy
-              // passed as context. Only set when the wallet can use it.
               paymasterServiceUrl: flow.gasInfo.paymasterServiceUrl,
               paymasterContext: flow.gasInfo.paymasterContext,
-              erc20GasPayment: flow.gasInfo.mode === "erc20",
+              erc20GasPayment: prepared.gasMode === "erc20",
             },
             { onStep },
           );
           primaryHash = result.primaryHash;
           stepHashes = hashOf(result.results);
         } catch (batchErr) {
-          // If the wallet advertises the capability but the batch still fails
-          // for a non-rejection reason, fall back to sequential execution.
           if (batchErr instanceof ExecutionError && batchErr.code === "rejected") throw batchErr;
-          const result = await executePlan(plan, wallet.walletClient, flow.network, { onStep });
+          const result = await executePlan(plan, wallet.walletClient, flow.intent.network, { onStep });
           primaryHash = result.primaryHash;
           stepHashes = hashOf(result.results);
         }
       } else {
-        const result = await executePlan(plan, wallet.walletClient, flow.network, { onStep });
+        const result = await executePlan(plan, wallet.walletClient, flow.intent.network, { onStep });
         primaryHash = result.primaryHash;
         stepHashes = hashOf(result.results);
       }
 
       setTxHash(primaryHash);
 
-      // Verify the recipient actually received the intended amount — a confirmed
-      // tx is not the same thing as a fulfilled intent. When the output token is
-      // native and a swap is required, the primary receipt is the swap (which
-      // delivers to the sender), so the unwrap/transfer steps must be included
-      // for the recipient's balance change to be observed.
       const hashes = stepHashes.length ? stepHashes : primaryHash ? [primaryHash] : [];
       if (hashes.length) {
         try {
           const check = await verifyDelivery(
-            getClientPublicClient(flow.network),
+            getClientPublicClient(flow.intent.network),
             hashes,
             flow.receiveTokenConfig,
             flow.intent.recipient,
-            flow.quote.receiveAmount,
+            prepared.quote.receiveAmount,
           );
           setDelivery(check);
         } catch {
@@ -266,26 +320,19 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       setError(message);
       setStage("review");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    flow.quote,
-    flow.network,
-    flow.receiveTokenConfig,
-    flow.intent.recipient,
-    flow.capabilities,
-    flow.quoteStale,
+    flow.intent,
     flow.readiness.ready,
-    plan,
-    wallet,
+    flow.receiveTokenConfig,
+    flow.gasInfo,
+    flow.refreshQuote,
+    wallet.address,
+    wallet.walletClient,
+    wallet.provider,
+    wallet.ensureMonad,
     walletCaps,
   ]);
-
-  const reset = useCallback(() => {
-    setStage("compose");
-    setSteps([]);
-    setError(null);
-    setTxHash(undefined);
-    flow.refreshQuote();
-  }, [flow]);
 
   return (
     <div className="card overflow-hidden">
@@ -298,6 +345,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         <div className="flex items-center gap-2">
           <span className="chip text-emerald-200/80">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live · {networkLabel}
+          </span>
+          <span className="chip text-white/45" title="Canonical intent version">
+            v{flow.intent.version}
           </span>
         </div>
       </div>
@@ -312,8 +362,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             transition={{ duration: 0.2 }}
             className="grid gap-5 p-5 sm:grid-cols-[1.05fr_0.95fr] sm:gap-6 sm:p-6"
           >
-            {/* Optional natural-language front door. It only pre-fills the
-                fields below; the same quote → review → approval flow runs. */}
             <div className="sm:col-span-2">
               <IntentEngine
                 onPrefilled={() =>
@@ -321,6 +369,20 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 }
               />
             </div>
+
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="sm:col-span-2 flex items-start gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-xs text-amber-100"
+                >
+                  <Warning className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{error}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* left: intent */}
             <div ref={composeRef} className="min-w-0 scroll-mt-24 space-y-4">
@@ -357,12 +419,14 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               <Step n={3}>
                 <PayAssetPicker
                   balances={flow.balances}
-                  selected={flow.payToken}
-                  payTokenIsSet={flow.payTokenSource === "user" || flow.payTokenSource === "intent"}
+                  selected={flow.intent.payToken}
+                  payTokenIsSet={
+                    flow.intent.payTokenSource === "user" || flow.intent.payTokenSource === "intent"
+                  }
                   recommended={flow.recommendedPayToken}
                   availability={availability}
                   catalog={catalog.tokens}
-                  network={flow.network}
+                  network={flow.intent.network}
                   onAddToken={flow.addToken}
                   optimizer={flow.optimizer}
                   optimizerLoading={flow.optimizerLoading}
@@ -389,7 +453,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 >
                   <Warning className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    {`Not enough ${flow.payToken}. You need ${formatAmount(flow.sufficiency.required)} ${flow.payToken} but hold ${formatAmount(flow.sufficiency.available)}. Short by ${formatAmount(flow.sufficiency.shortfall)} ${flow.payToken}.`}
+                    {`Not enough ${flow.intent.payToken}. You need ${formatAmount(flow.sufficiency.required)} ${flow.intent.payToken} but hold ${formatAmount(flow.sufficiency.available)}. Short by ${formatAmount(flow.sufficiency.shortfall)} ${flow.intent.payToken}.`}
                   </span>
                 </motion.div>
               )}
@@ -435,8 +499,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 receiveToken={flow.receiveTokenConfig}
                 readiness={flow.readiness}
                 onUseAlternative={(s) => {
-                  // Choosing a different receive asset is a real user action;
-                  // reset the source commitment so they rethink the pairing.
                   flow.setReceiveToken(s);
                 }}
               />
@@ -469,7 +531,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           </motion.div>
         )}
 
-        {stage === "review" && flow.quote && plan && (
+        {stage === "review" && flow.quote && (
           <motion.div
             key="review"
             initial={{ opacity: 0, y: 8 }}
@@ -482,14 +544,19 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               payToken={flow.payTokenConfig}
               receiveToken={flow.receiveTokenConfig}
               recipient={flow.intent.recipient}
-              planSteps={describePlan(plan)}
+              planSteps={describePlan(displayPlan)}
               onConfirm={onConfirm}
-              onBack={() => setStage("compose")}
+              onBack={() => {
+                setStage("compose");
+                reviewVersionRef.current = null;
+              }}
               confirming={false}
               error={error}
               networkLabel={networkLabel}
-              gasMode={gasMode}
-              batchable={batchable}
+              gasMode={flow.gasMode}
+              batchable={Boolean(walletCaps?.atomicBatch)}
+              quotedAt={flow.quote.quotedAt}
+              quoteStale={flow.quoteStale}
             />
           </motion.div>
         )}
@@ -506,9 +573,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               <span className="absolute inset-0 rounded-full bg-mono/30 animate-pulseRing" />
               <Spinner className="h-10 w-10 animate-spin text-mono-soft" />
             </div>
-            <h3 className="text-lg font-semibold text-white">
-              Waiting for confirmation…
-            </h3>
+            <h3 className="text-lg font-semibold text-white">Waiting for confirmation…</h3>
             <p className="mt-1 max-w-xs text-sm text-white/45">
               Approve each step in your wallet. Confirmation usually takes under a second on Monad.
             </p>
@@ -544,7 +609,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               receiveUsd={flow.quote.receiveUsd}
               recipient={flow.intent.recipient}
               txHash={txHash}
-              network={flow.network}
+              network={flow.intent.network}
               onReset={reset}
               delivery={delivery}
             />
@@ -559,7 +624,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           balances={flow.balances}
           selected={flow.intent.receiveToken}
           availability={availability}
-          network={flow.network}
+          network={flow.intent.network}
           onAddToken={flow.addToken}
           onSelect={(s) => {
             flow.setReceiveToken(s);
@@ -571,9 +636,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         <TokenList
           tokens={catalog.tokens}
           balances={flow.balances}
-          selected={flow.payToken}
+          selected={flow.intent.payToken}
           availability={availability}
-          network={flow.network}
+          network={flow.intent.network}
           onAddToken={flow.addToken}
           prefer="pay"
           onSelect={(s) => {
@@ -602,11 +667,44 @@ function Step({ n, children }: { n: number; children: React.ReactNode }) {
   );
 }
 
+/** Read fresh balances from the chain for the signing guard. */
+async function fetchBalances(address: string, network: MonadNetwork): Promise<Balance[]> {
+  const res = await fetch(`/api/balances?address=${address}&network=${network}`, { cache: "no-store" });
+  const json = await res.json();
+  return json.ok ? (json.balances as Balance[]) : [];
+}
+
+/** Re-run the full quote pipeline for the signing guard. */
+async function fetchQuote(intent: {
+  recipient: string;
+  receiveToken: string;
+  receiveAmount: string;
+  amountMode: string;
+  payToken: string;
+  network: MonadNetwork;
+}): Promise<QuoteResult> {
+  const res = await fetch("/api/quote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      recipient: intent.recipient,
+      receiveToken: intent.receiveToken,
+      receiveAmount: intent.receiveAmount,
+      amountMode: intent.amountMode,
+      payToken: intent.payToken,
+      network: intent.network,
+    }),
+  });
+  const json = await res.json();
+  if (!json.ok) return { ok: false, code: json.code ?? "provider_error", message: json.message ?? "Could not build a quote." };
+  const q = json.quote;
+  q.gasLimit = q.gasLimit ? (BigInt(q.gasLimit) as unknown as bigint) : undefined;
+  q.gasPriceWei = q.gasPriceWei ? (BigInt(q.gasPriceWei) as unknown as bigint) : undefined;
+  return { ok: true, quote: q };
+}
+
 /** Reads live balances for a connected wallet via the balances API. */
-function useLiveBalances(
-  address: string | undefined,
-  network: MonadNetwork,
-) {
+function useLiveBalances(address: string | undefined, network: MonadNetwork, tick: number) {
   const [balances, setBalances] = useState<Balance[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -629,7 +727,7 @@ function useLiveBalances(
     return () => {
       cancelled = true;
     };
-  }, [address, network]);
+  }, [address, network, tick]);
 
   return { balances, loading };
 }

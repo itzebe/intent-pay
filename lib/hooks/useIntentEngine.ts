@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { Balance } from "@/lib/domain/intent";
 import type { Clarification } from "@/lib/nlp/question";
@@ -12,6 +12,10 @@ import type { ComposeHandoff } from "@/lib/nlp/handoff";
  *
  * It is deliberately self-contained and non-blocking: if the endpoint fails,
  * the hook reports an error and the existing form-based composer keeps working.
+ *
+ * Every request carries a monotonic id. Only the newest response may update the
+ * hook's state, so a slow request for an earlier sentence can never overwrite
+ * the result of a later one.
  */
 
 export type NlpAsset = {
@@ -42,14 +46,12 @@ export type NlpResult = {
   error: { code: string; message: string } | null;
 };
 
-export function useIntentEngine(
-  network: MonadNetwork,
-  balances: Balance[],
-) {
+export function useIntentEngine(network: MonadNetwork, balances: Balance[]) {
   const [draft, setDraft] = useState<ParsedPaymentIntent | null>(null);
   const [result, setResult] = useState<NlpResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reqRef = useRef(0);
 
   const balancesKey = useMemo(
     () =>
@@ -64,6 +66,7 @@ export function useIntentEngine(
     async (text: string) => {
       const message = (text ?? "").trim();
       if (!message) return;
+      const requestId = ++reqRef.current;
       setLoading(true);
       setError(null);
       try {
@@ -83,6 +86,8 @@ export function useIntentEngine(
           }),
         });
         const json = await res.json();
+        // A response for an older sentence must not overwrite a newer one.
+        if (requestId !== reqRef.current) return;
         if (!json?.ok) {
           setError(json?.message ?? "The intent assistant couldn't understand that.");
           return;
@@ -91,11 +96,12 @@ export function useIntentEngine(
         setDraft((json as NlpResult).draft);
         setError(null);
       } catch {
+        if (requestId !== reqRef.current) return;
         setError(
           "The intent assistant is unavailable. You can still set up the payment with the form below.",
         );
       } finally {
-        setLoading(false);
+        if (requestId === reqRef.current) setLoading(false);
       }
     },
     // balancesKey restarts the callback when real balances change.
@@ -104,10 +110,25 @@ export function useIntentEngine(
   );
 
   const reset = useCallback(() => {
+    reqRef.current++;
     setDraft(null);
     setResult(null);
     setError(null);
+    setLoading(false);
   }, []);
 
   return { draft, result, loading, error, submit, reset };
+}
+
+/**
+ * Debounce a value. Used so natural-language input only triggers a parse after
+ * the user pauses typing, not on every keystroke.
+ */
+export function useDebounced<T>(value: T, delayMs = 450): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
 }

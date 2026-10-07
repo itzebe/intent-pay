@@ -11,7 +11,7 @@ import { Bolt, Shield } from "@/components/ui/Icons";
 
 function Shell() {
   const flow = usePaymentFlow();
-  const wallet = useWallet(flow.network);
+  const wallet = useWallet(flow.intent.network);
   const composerRef = useRef<HTMLDivElement>(null);
 
   return (
@@ -53,7 +53,7 @@ function Shell() {
 
         <div ref={composerRef} className="mx-auto mt-10 max-w-5xl scroll-mt-20 px-5">
           <PaymentComposer networkLabel="Monad" />
-          <IntegrationStack network={flow.network} />
+          <IntegrationStack network={flow.intent.network} />
         </div>
 
         <HowItWorks />

@@ -1,0 +1,171 @@
+import { isEvmAddress } from "@/lib/format";
+import type { AmountMode, PaymentIntent } from "@/lib/domain/intent";
+import type { MonadNetwork } from "@/lib/config/chains";
+
+/**
+ * Canonical, versioned payment intent.
+ *
+ * This is the single source of truth for the whole flow. Every UI element reads
+ * from it; nothing downstream keeps its own copy of a payment field. Every edit
+ * that can change what the user would sign produces a new `version`, which is
+ * how the rest of the system knows that any earlier quote, plan, review or
+ * signature preparation is now invalid and must be discarded.
+ *
+ * It is deliberately pure (no React, no network) so the invalidation rules can
+ * be unit-tested in isolation — the safety of the whole flow depends on them.
+ */
+
+/** Which asset the user is spending — the input to the payment. */
+export type PayTokenSource = "user" | "intent" | "recommended";
+
+/**
+ * The fields that make up a payment request. A change to any of these changes
+ * *what would be signed*, so each one bumps the intent version.
+ */
+export type CanonicalFields = {
+  /** The raw natural-language instruction, kept verbatim as the user typed it. */
+  text: string;
+  /** Recipient address. Only ever an explicit 0x value — never inferred. */
+  recipient: string;
+  /** Output/receive asset symbol (what the recipient gets). */
+  receiveToken: string;
+  /** The amount as entered, interpreted per `amountMode`. */
+  receiveAmount: string;
+  /** Whether `receiveAmount` is "what they receive" or "what I spend". */
+  amountMode: AmountMode;
+  /** Source/pay asset symbol (what the user spends). */
+  payToken: string;
+  /** How the pay asset was established. */
+  payTokenSource: PayTokenSource;
+  /** Target chain. */
+  network: MonadNetwork;
+};
+
+export type CanonicalIntent = CanonicalFields & {
+  /** Monotonic version. Increments on every execution-relevant change. */
+  version: number;
+  /**
+   * A stable fingerprint of the execution-relevant fields. Two intents with the
+   * same key would produce the same transaction; the signing guard compares
+   * this before and after fresh preparation to prove nothing drifted.
+   */
+  key: string;
+};
+
+/**
+ * A patch to the intent. Every field is optional; a patch that changes no
+ * execution-relevant field (e.g. a no-op) does not bump the version.
+ */
+export type IntentPatch = Partial<CanonicalFields>;
+
+export const DEFAULT_INTENT: CanonicalFields = {
+  text: "",
+  recipient: "",
+  receiveToken: "USDC",
+  receiveAmount: "5",
+  amountMode: "recipient_receives",
+  payToken: "USDC",
+  payTokenSource: "recommended",
+  network: "mainnet",
+};
+
+export function initialIntent(): CanonicalIntent {
+  return withMeta(DEFAULT_INTENT, 1);
+}
+
+/** True when `a` and `b` are the same request (ignoring version/key). */
+function sameFields(a: CanonicalFields, b: CanonicalFields): boolean {
+  return (
+    a.text === b.text &&
+    a.recipient === b.recipient &&
+    a.receiveToken === b.receiveToken &&
+    a.receiveAmount === b.receiveAmount &&
+    a.amountMode === b.amountMode &&
+    a.payToken === b.payToken &&
+    a.payTokenSource === b.payTokenSource &&
+    a.network === b.network
+  );
+}
+
+/**
+ * Fingerprint of the *execution-relevant* subset. `text` is excluded on
+ * purpose: it is provenance, not an execution parameter. Two requests with the
+ * same recipient/tokens/amount/network/mode produce the same transaction no
+ * matter how they were phrased.
+ */
+export function executionKey(f: CanonicalFields): string {
+  return [
+    f.network,
+    f.amountMode,
+    f.receiveToken,
+    f.receiveAmount,
+    f.payToken,
+    f.recipient.toLowerCase(),
+  ].join("|");
+}
+
+/** Attach version + key to a set of fields. */
+export function withMeta(f: CanonicalFields, version: number): CanonicalIntent {
+  return { ...f, version, key: executionKey(f) };
+}
+
+/**
+ * Apply a patch. The version increments only when an *execution-relevant* field
+ * changed — i.e. when the resulting transaction would differ. Editing the raw
+ * text or the provenance of the source asset (without changing the symbol) does
+ * not bump the version, so it cannot needlessly invalidate an in-flight quote.
+ */
+export function reduceIntent(
+  current: CanonicalIntent,
+  patch: IntentPatch,
+): CanonicalIntent {
+  const next: CanonicalFields = { ...current, ...patch };
+  if (sameFields(current, next)) return current;
+  const keyChanged = executionKey(next) !== current.key;
+  return withMeta(next, keyChanged ? current.version + 1 : current.version);
+}
+
+/** Extract the bare payment intent the quote/route layers consume. */
+export function toPaymentIntent(intent: CanonicalIntent): PaymentIntent {
+  return {
+    recipient: intent.recipient,
+    receiveToken: intent.receiveToken,
+    receiveAmount: intent.receiveAmount,
+    amountMode: intent.amountMode,
+  };
+}
+
+/**
+ * Fields that must be present and valid before a quote can even be requested.
+ * The authoritative readiness gate still runs afterwards; this is only the
+ * cheap precondition that decides whether to hit the network.
+ */
+export function isQuotable(intent: CanonicalIntent): boolean {
+  return (
+    isEvmAddress(intent.recipient.trim()) &&
+    Boolean(intent.receiveAmount.trim()) &&
+    Boolean(intent.receiveToken) &&
+    Boolean(intent.payToken)
+  );
+}
+
+/**
+ * Reset the execution-specific fields a fresh intent must not inherit. A
+ * payment's approval/quote/plan/hash/error are only ever valid for the exact
+ * version that produced them; on any version change they are discarded.
+ */
+export type IntentDerived = {
+  version: number;
+  quote: unknown | null;
+  plan: unknown | null;
+  txHash: string | null;
+  error: string | null;
+};
+
+/** True when previously-derived execution state still belongs to `intent`. */
+export function isDerivedCurrent(
+  derived: { version: number } | null | undefined,
+  intent: CanonicalIntent,
+): boolean {
+  return Boolean(derived && derived.version === intent.version);
+}

@@ -87,6 +87,14 @@ describe("payment readiness gate", () => {
     ).toBe("insufficient_gas");
   });
 
+  it("lets a shortfall proceed only when a funded source covers it (partial split)", () => {
+    const short = { status: "insufficient" as const, required: "100", available: "40" };
+    // Without a funded source the shortfall still blocks.
+    expect(computeReadiness(readyInput({ sufficiency: short })).code).toBe("insufficient_balance");
+    // With one, the split path is allowed — the guard still re-checks funding.
+    expect(isPaymentReady(readyInput({ sufficiency: short, partialCovered: true }))).toBe(true);
+  });
+
   it("treats an unfinished quote (no amounts) as an incomplete amount", () => {
     expect(computeReadiness(readyInput({ quote: null })).code).toBe("incomplete_amount");
     expect(

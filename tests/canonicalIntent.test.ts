@@ -102,6 +102,18 @@ describe("canonical intent versioning", () => {
     expect(base.key.split("|")[0]).toBe("mainnet");
   });
 
+  it("invalidates when the exact token quantity changes (drives the partial split)", () => {
+    const base = reduceIntent(initialIntent(), {
+      recipient: ALICE,
+      receiveTokenAmount: "100",
+    });
+    const edited = reduceIntent(base, { receiveTokenAmount: "150" });
+    expect(edited.version).toBeGreaterThan(base.version);
+    expect(edited.key).not.toBe(base.key);
+    // Clearing it is also execution-relevant.
+    expect(reduceIntent(base, { receiveTokenAmount: undefined }).key).not.toBe(base.key);
+  });
+
   it("invalidates when the receive asset's contract address changes (same symbol)", () => {
     const base = reduceIntent(initialIntent(), {
       recipient: ALICE,
@@ -117,9 +129,17 @@ describe("canonical intent versioning", () => {
 });
 
 describe("quotable precondition", () => {
-  it("requires a valid address and an amount", () => {
+  it("requires a recipient, an amount and both assets — no implicit default", () => {
+    // The starting intent is deliberately empty: there is no default payment.
     expect(isQuotable(initialIntent())).toBe(false);
+    // A recipient alone is not enough — an amount and both assets are required.
     const withRecipient = reduceIntent(initialIntent(), { recipient: ALICE });
-    expect(isQuotable(withRecipient)).toBe(true);
+    expect(isQuotable(withRecipient)).toBe(false);
+    const complete = reduceIntent(withRecipient, {
+      receiveToken: "USDC",
+      receiveAmount: "5",
+      payToken: "USDC",
+    });
+    expect(isQuotable(complete)).toBe(true);
   });
 });

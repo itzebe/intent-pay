@@ -5,7 +5,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { formatAmount, formatUsd, isEvmAddress, shortAddress } from "@/lib/format";
 import { useDebounced, useIntentEngine, type NlpAsset } from "@/lib/hooks/useIntentEngine";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
-import type { TokenConfig } from "@/lib/config/tokens";
+import { draftFromIntent } from "@/lib/nlp/apply";
+import { tintForAddress, type TokenConfig } from "@/lib/config/tokens";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 import { Check, Sparkle, Spinner, Warning } from "@/components/ui/Icons";
 
@@ -17,16 +18,26 @@ import { Check, Sparkle, Spinner, Warning } from "@/components/ui/Icons";
  * keystroke. Every request is id-guarded so a slow parse of an earlier sentence
  * can never overwrite a later one.
  *
- * Nothing here signs or executes: it collects recipient / amount / asset and
- * hands the completed fields to the canonical intent, which runs the same
- * quote → review → signing-guard flow.
+ * There is exactly ONE payment state: the canonical intent. This component
+ * holds no payment fields of its own — every parse is *applied* to the
+ * canonical intent (via `applyNlIntent`), and the composer/quote/plan/guard
+ * all derive from that same intent. So the chat can never say "MON / amount
+ * missing" while the composer shows a stale "USDC / $5": the two read the same
+ * source. Nothing here signs or executes.
  */
 export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
   const flow = usePaymentFlow();
-  const engine = useIntentEngine(flow.intent.network, flow.balances);
+  // The continuation draft is *derived from the canonical intent*, not stored
+  // here, so the chat and composer cannot drift.
+  const baseDraft = useMemo(
+    () => draftFromIntent(flow.intent, flow.intent.network),
+    [flow.intent],
+  );
+  const engine = useIntentEngine(flow.intent.network, flow.balances, baseDraft);
   const [text, setText] = useState(flow.intent.text);
   const debouncedText = useDebounced(text, 450);
   const lastSubmittedRef = useRef<string>("");
+  const wasCompleteRef = useRef(false);
   const result = engine.result;
 
   const examples = useMemo(() => ["Send $10", "Send 10 MON", "Send $10 worth of MON"], []);
@@ -58,20 +69,28 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
     engine.submit(v);
   };
 
-  // The engine reports a fully-specified intent: pre-fill the canonical intent,
-  // which runs its own quote → review → signing-guard flow. No execution here.
-  const applyToComposer = () => {
-    if (!result?.compose) return;
-    flow.prefillFromIntent({
-      recipient: result.compose.recipient,
-      receiveToken: result.compose.receiveToken,
-      receiveAmountUsd: result.compose.receiveAmountUsd,
-      amountMode: result.compose.amountMode,
-      payToken: result.compose.sourceAsset,
-      payTokenSource: result.compose.sourceAsset ? "intent" : undefined,
+  // Every completed parse is applied to the canonical intent immediately — this
+  // is the *only* write path from the chat into payment state. An unresolved
+  // ticker (ambiguous / not found) contributes no asset, so the composer stays
+  // in its honest incomplete state instead of showing a guessed token.
+  useEffect(() => {
+    if (!result) return;
+    flow.applyNlIntent({
+      text: "",
+      draft: result.draft,
+      resolved:
+        result.resolution?.status === "resolved"
+          ? { symbol: result.resolution.symbol, address: result.resolution.address }
+          : null,
+      compose: result.compose ?? null,
     });
-    onPrefilled?.();
-  };
+    // Scroll to the composer once a fully-specified intent is first understood.
+    if (result.compose && !wasCompleteRef.current) {
+      wasCompleteRef.current = true;
+      onPrefilled?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
 
   const state = result?.state;
 
@@ -140,6 +159,10 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                 <div className="flex flex-wrap gap-1.5">
                   <Tag label={amountTag(result)} />
                   {result.draft.asset && <Tag label={`Asset · ${result.draft.asset}`} />}
+                  {result.draft.sourceAsset && <Tag label={`From · ${result.draft.sourceAsset}`} />}
+                  {!result.draft.asset && result.draft.assetQuery && (
+                    <Tag label={`Asset · ${result.draft.assetQuery} (resolving)`} />
+                  )}
                   {result.draft.recipientAddress && <Tag label={`To · ${shortAddress(result.draft.recipientAddress, 4)}`} />}
                   {result.draft.recipientName && !result.draft.recipientAddress && (
                     <Tag label={`Name · ${result.draft.recipientName}`} />
@@ -148,6 +171,19 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
 
                 {result.clarification.expect !== "none" && (
                   <p className="mt-2.5 text-sm text-white/80">{result.clarification.question}</p>
+                )}
+
+                {/* The wallet's real holding vs. what the recipient should get.
+                    A shortfall is shown honestly; the split plan covers it. */}
+                {result.holding && result.holding.shortfall && (
+                  <p className="mt-2.5 text-xs text-white/55">
+                    You hold {formatAmount(result.holding.held)} {result.holding.token}. This payment
+                    sends all of it and obtains the remaining{" "}
+                    <span className="font-medium text-white/75">
+                      {formatAmount(result.holding.shortfall)} {result.holding.token}
+                    </span>{" "}
+                    from your other assets.
+                  </p>
                 )}
 
                 {state === "NEEDS_ASSET" && result.assets.length > 0 && (
@@ -172,6 +208,51 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
 
                 {state === "NEEDS_RECIPIENT" && <AddressPrompt onSubmit={(addr) => send(addr)} />}
 
+                {/* A ticker the user named matched several contracts: never guess,
+                    ask them to pick the exact one (or paste an address). */}
+                {result.resolution?.status === "ambiguous" && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-xs text-amber-200/90">
+                      Several Monad tokens are named {result.resolution.query}. Choose the exact one:
+                    </p>
+                    <div className="space-y-1.5">
+                      {result.resolution.matches.slice(0, 8).map((m) => (
+                        <button
+                          key={m.address}
+                          onClick={() => {
+                            // Pick the exact contract — this sets the *asset*,
+                            // never the recipient. Identity is the address.
+                            flow.setReceiveToken(m.symbol, m.address);
+                            flow.addToken({
+                              symbol: m.symbol,
+                              name: m.name,
+                              address: m.address as `0x${string}`,
+                              decimals: m.decimals,
+                              native: false,
+                              fallbackUsd: 0,
+                              tint: tintForAddress(m.address),
+                              source: "onchain",
+                            });
+                          }}
+                          className="flex w-full items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-left transition hover:border-white/20 hover:bg-white/[0.05]"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-white">
+                              {m.symbol} · {m.name}
+                            </span>
+                            <span className="block truncate font-mono text-[11px] text-white/40">
+                              {m.address}
+                            </span>
+                          </span>
+                          <span className="ml-2 shrink-0 text-[11px] text-white/40">
+                            {m.decimals} dp{m.listed ? " · listed" : ""}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {result.error && (
                   <p className="mt-2.5 flex items-start gap-2 text-xs text-amber-200/90">
                     <Warning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -195,7 +276,10 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                         </span>
                       )}
                     </div>
-                    <button onClick={applyToComposer} className="btn-primary mt-2.5 w-full">
+                    <button
+                      onClick={() => onPrefilled?.()}
+                      className="btn-primary mt-2.5 w-full"
+                    >
                       Continue to payment
                     </button>
                   </div>
@@ -230,11 +314,17 @@ function assetToToken(a: NlpAsset): TokenConfig {
 }
 
 function amountTag(result: {
-  draft: { amount: string | null; amountType: string | null; asset: string | null };
+  draft: {
+    amount: string | null;
+    amountType: string | null;
+    asset: string | null;
+    assetQuery?: string | null;
+  };
 }): string {
   if (!result.draft.amount) return "Amount · missing";
-  if (result.draft.amountType === "USD_VALUE") return `$${result.draft.amount}`;
-  return `${result.draft.amount} ${result.draft.asset ?? ""}`.trim();
+  if (result.draft.amountType === "USD_VALUE") return `Amount · ${formatUsd(Number(result.draft.amount))}`;
+  const asset = result.draft.asset ?? result.draft.assetQuery ?? "";
+  return `Amount · ${result.draft.amount} ${asset}`.trim();
 }
 
 function Tag({ label }: { label: string }) {

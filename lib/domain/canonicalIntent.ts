@@ -40,6 +40,14 @@ export type CanonicalFields = {
   receiveAmount: string;
   /** Whether `receiveAmount` is "what they receive" or "what I spend". */
   amountMode: AmountMode;
+  /**
+   * The exact quantity of the receive token the recipient should get, in token
+   * units, when the user named one ("send 100 NEWCOIN"). Present only for a
+   * token-quantity intent. It drives the partial-balance split (how much is
+   * already held vs. must be obtained) and the on-chain minimum, so it is
+   * execution-relevant and part of the key.
+   */
+  receiveTokenAmount?: string;
   /** Source/pay asset symbol (what the user spends). Display only. */
   payToken: string;
   /** The pay asset's contract address — the authoritative identity. */
@@ -67,19 +75,31 @@ export type CanonicalIntent = CanonicalFields & {
  */
 export type IntentPatch = Partial<CanonicalFields>;
 
+/**
+ * The *empty* starting intent. Deliberately asset-less and amount-less: there is
+ * no default payment. A previous build shipped `receiveToken: "USDC"` +
+ * `receiveAmount: "5"`, which is exactly the "stale $5 USDC" that could appear
+ * while the user had actually asked for MON with no amount. Nothing here may
+ * ever overwrite what the user (or their parsed instruction) specified.
+ */
 export const DEFAULT_INTENT: CanonicalFields = {
   text: "",
   recipient: "",
-  receiveToken: "USDC",
-  receiveAmount: "5",
+  receiveToken: "",
+  receiveAmount: "",
   amountMode: "recipient_receives",
-  payToken: "USDC",
+  payToken: "",
   payTokenSource: "recommended",
   network: "mainnet",
 };
 
 export function initialIntent(): CanonicalIntent {
   return withMeta(DEFAULT_INTENT, 1);
+}
+
+/** True when an asset slot still needs the user (or the parser) to fill it. */
+export function hasReceiveAsset(intent: CanonicalIntent): boolean {
+  return Boolean(intent.receiveToken || intent.receiveTokenAddress);
 }
 
 /** True when `a` and `b` are the same request (ignoring version/key). */
@@ -91,6 +111,7 @@ function sameFields(a: CanonicalFields, b: CanonicalFields): boolean {
     (a.receiveTokenAddress ?? "") === (b.receiveTokenAddress ?? "") &&
     a.receiveAmount === b.receiveAmount &&
     a.amountMode === b.amountMode &&
+    (a.receiveTokenAmount ?? "") === (b.receiveTokenAmount ?? "") &&
     a.payToken === b.payToken &&
     (a.payTokenAddress ?? "") === (b.payTokenAddress ?? "") &&
     a.payTokenSource === b.payTokenSource &&
@@ -117,6 +138,9 @@ export function executionKey(f: CanonicalFields): string {
     f.amountMode,
     assetRef(f.receiveToken, f.receiveTokenAddress),
     f.receiveAmount,
+    // The exact token quantity (when the user named one) decides how much is
+    // split off as a direct transfer, so a change to it must invalidate.
+    f.receiveTokenAmount ?? "",
     assetRef(f.payToken, f.payTokenAddress),
     f.recipient.toLowerCase(),
   ].join("|");
@@ -125,6 +149,39 @@ export function executionKey(f: CanonicalFields): string {
 /** Attach version + key to a set of fields. */
 export function withMeta(f: CanonicalFields, version: number): CanonicalIntent {
   return { ...f, version, key: executionKey(f) };
+}
+
+/**
+ * A symbol-level fingerprint of what the UI is *displaying*: the receive/pay
+ * assets, the amounts, the mode and the recipient. It is deliberately
+ * address-agnostic — contract identity is already enforced by `executionKey`
+ * and the transaction plan; this fingerprint exists purely so the signing guard
+ * can prove the payment on screen is the one it is about to sign.
+ *
+ * A composer that drifted from the canonical intent (the MON / USDC / $5 class
+ * of bug) yields a different fingerprint and is refused before signing.
+ */
+export function displayKey(
+  f: Pick<
+    CanonicalFields,
+    | "network"
+    | "amountMode"
+    | "receiveToken"
+    | "receiveAmount"
+    | "receiveTokenAmount"
+    | "payToken"
+    | "recipient"
+  >,
+): string {
+  return [
+    f.network,
+    f.amountMode,
+    (f.receiveToken ?? "").toLowerCase(),
+    f.receiveAmount ?? "",
+    f.receiveTokenAmount ?? "",
+    (f.payToken ?? "").toLowerCase(),
+    (f.recipient ?? "").toLowerCase(),
+  ].join("|");
 }
 
 /**

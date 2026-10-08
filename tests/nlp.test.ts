@@ -49,6 +49,23 @@ describe("NL parser — amount forms are distinct", () => {
     expect([b.amountType, b.asset]).toEqual(["TOKEN_AMOUNT", "MON"]);
     expect([c.amountType, c.asset]).toEqual(["USD_VALUE", "MON"]);
   });
+
+  it('"0.1$ usdt" (trailing $) -> USD_VALUE 0.1 + asset USDT', () => {
+    const i = parseDetailed("0.1$ usdt", ctx).intent;
+    expect(i.amount).toBe("0.1");
+    expect(i.amountType).toBe("USD_VALUE");
+    expect(i.asset).toBe("USDT");
+    expect(i.recipientAddress).toBeNull();
+    expect(deriveState(i)).toBe("NEEDS_RECIPIENT");
+  });
+
+  it('"10$" (trailing $) -> USD_VALUE, no asset — never a token quantity', () => {
+    const i = parseDetailed("send 10$", ctx).intent;
+    expect(i.amount).toBe("10");
+    expect(i.amountType).toBe("USD_VALUE");
+    expect(i.asset).toBeNull();
+    expect(deriveState(i)).toBe("NEEDS_ASSET");
+  });
 });
 
 describe("NL parser — recipient handling", () => {
@@ -208,6 +225,65 @@ describe("planFromText — engine", () => {
     expect(plan.draft.amount).toBe("10");
     expect(plan.state).toBe("NEEDS_ASSET");
     expect(plan.llmUsed).toBe(true);
+  });
+});
+
+describe("NL parser — unknown tickers are resolution requests, not assets", () => {
+  it('"Send 100 NEWCOIN to 0x…" records an assetQuery (never a resolved asset)', () => {
+    const i = parseDetailed(`Send 100 NEWCOIN to ${ADDR}`, ctx).intent;
+    expect(i.amount).toBe("100");
+    expect(i.amountType).toBe("TOKEN_AMOUNT");
+    expect(i.asset).toBeNull();
+    expect(i.assetQuery).toBe("NEWCOIN");
+    // A named ticker fills the asset slot at the parser level, so the flow
+    // resolves it live rather than asking "which asset?" again.
+    expect(missingField(i)).toBeNull();
+    expect(deriveState(i)).toBe("READY_FOR_QUOTE");
+  });
+
+  it('"send NEWCOIN to 0x…" (bare, all-caps) is a resolution request', () => {
+    const i = parseDetailed(`send NEWCOIN to ${ADDR}`, ctx).intent;
+    expect(i.assetQuery).toBe("NEWCOIN");
+    expect(i.asset).toBeNull();
+  });
+
+  it("does NOT mistake a recipient name for a ticker", () => {
+    const i = parseDetailed("Send John $10", ctx).intent;
+    expect(i.assetQuery).toBeNull();
+    expect(i.recipientName).toBe("John");
+  });
+
+  it("does NOT mistake a spelled-out number for a ticker", () => {
+    const i = parseDetailed("Send ten dollars", ctx).intent;
+    expect(i.assetQuery).toBeNull();
+  });
+
+  it("a known symbol is resolved, never turned into a query", () => {
+    const i = parseDetailed("Send 10 USDC", ctx).intent;
+    expect(i.asset).toBe("USDC");
+    expect(i.assetQuery).toBeNull();
+  });
+});
+
+describe("NL parser — explicit source and target ('X A worth of B')", () => {
+  it('"100 USDC worth of MON" makes both sides explicit', () => {
+    const i = parseDetailed(`Send 100 USDC worth of MON to ${ADDR}`, ctx).intent;
+    expect(i.amount).toBe("100");
+    // The amount is denominated in the source (USDC); the recipient gets MON.
+    expect(i.sourceAsset).toBe("USDC");
+    expect(i.asset).toBe("MON");
+    expect(i.amountType).toBe("TOKEN_AMOUNT");
+  });
+
+  it('"50 USDT into WETH" is a source/target pair', () => {
+    const i = parseDetailed(`50 USDT into WETH to ${ADDR}`, ctx).intent;
+    expect(i.sourceAsset).toBe("USDT");
+    expect(i.asset).toBe("WETH");
+  });
+
+  it("a same-asset phrase is not a source/target pair", () => {
+    const i = parseDetailed(`100 USDC worth of USDC to ${ADDR}`, ctx).intent;
+    expect(i.sourceAsset).toBeNull();
   });
 });
 

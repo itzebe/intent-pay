@@ -13,6 +13,7 @@ import { getToken, getTokenByAddress, registerToken, tintForAddress, type TokenC
 import type { AmountMode, Balance, Quote } from "@/lib/domain/intent";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { parseUnits } from "@/lib/domain/math";
+import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
 import { isQuoteStale, QUOTE_REFRESH_AFTER_MS } from "@/lib/domain/freshness";
 import {
   initialIntent,
@@ -26,6 +27,7 @@ import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities"
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
 import { createLatestGuard } from "@/lib/domain/latest";
+import { nlDraftToIntentPatch, type NlApplyInput } from "@/lib/nlp/apply";
 import { alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
 import { resolveAbstraction, type AbstractionResult } from "@/lib/domain/abstraction";
 import { NETWORKS } from "@/lib/config/chains";
@@ -88,10 +90,10 @@ type FlowContextValue = FlowState & {
   setText: (text: string) => void;
   setNetwork: (network: MonadNetwork) => void;
   setRecipient: (recipient: string) => void;
-  setReceiveToken: (symbol: string) => void;
+  setReceiveToken: (symbol: string, address?: string) => void;
   setReceiveAmount: (amount: string) => void;
   setAmountMode: (mode: AmountMode) => void;
-  setPayToken: (symbol: string, manual?: boolean) => void;
+  setPayToken: (symbol: string, manual?: boolean, address?: string) => void;
   /** Apply an arbitrary canonical-intent patch (always version-checked). */
   patchIntent: (patch: IntentPatch) => void;
   /** Report the connected wallet account so a change invalidates the flow. */
@@ -107,18 +109,12 @@ type FlowContextValue = FlowState & {
   /** Restore the transaction to the intended recipient amount. */
   correctToIntended: () => void;
   /**
-   * Pre-fill the canonical intent from a completed natural-language intent.
-   * Produces a new intent version; the existing quote → review → approval flow
-   * takes over from there.
+   * Apply a parsed natural-language draft to the canonical intent. This is the
+   * NL layer's only write path, so the composer/review/quote/plan/guard all stay
+   * derived from the one canonical intent. Produces a new version when the
+   * payment actually changed.
    */
-  prefillFromIntent: (input: {
-    recipient: string;
-    receiveToken: string;
-    receiveAmountUsd: string;
-    amountMode?: AmountMode;
-    payToken?: string;
-    payTokenSource?: "user" | "intent";
-  }) => void;
+  applyNlIntent: (input: NlApplyInput & { text: string }) => void;
   recommendedPayToken: string | null;
   balanceFor: (symbol: string) => Balance | undefined;
   receiveTokenConfig: TokenConfig;
@@ -151,6 +147,19 @@ type FlowContextValue = FlowState & {
     requiredMon: string;
     availableMon: string;
   };
+  /**
+   * Partial-balance eligibility for the current intent. Present only for a
+   * token-quantity intent; describes how much is held, the shortfall, and which
+   * funded asset would cover it. Null when the intent is not a token quantity.
+   */
+  partial: {
+    eligible: boolean;
+    mode: "direct" | "swap" | "split";
+    held: string;
+    shortfall: string;
+    sourceSymbol: string | null;
+    covered: boolean;
+  } | null;
   /** How gas will actually be paid, resolved against the connected wallet. */
   gasMode: GasMode;
   /** The live gas-mode resolution, including whether the wallet is capable. */
@@ -252,20 +261,26 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     [patchIntent],
   );
   const setReceiveToken = useCallback(
-    (symbol: string) => {
-      const token = getToken(symbol);
+    (symbol: string, address?: string) => {
+      // The contract address is the authoritative identity. When the caller
+      // supplies one (a discovered/imported token) it wins; otherwise we look
+      // the symbol up and, when it is not a known token, record *no* address
+      // rather than borrowing an unrelated token's address.
+      const resolvedAddress = address ?? getToken(symbol)?.address;
       patchIntent({
         receiveToken: symbol,
-        // The contract address is the authoritative identity; record it with
-        // the symbol so the two can never drift apart.
-        receiveTokenAddress: token?.address,
+        receiveTokenAddress: resolvedAddress,
+        // An exact token target from a previous asset no longer applies.
+        receiveTokenAmount: undefined,
       });
     },
     [patchIntent],
   );
   const setReceiveAmount = useCallback(
     (amount: string) => {
-      patchIntent({ receiveAmount: amount });
+      // Typing a USD amount supersedes any exact token quantity the instruction
+      // had pinned (e.g. "10 MON"), so the partial-split target can't linger.
+      patchIntent({ receiveAmount: amount, receiveTokenAmount: undefined });
       setState((s) =>
         s.intent.amountMode === "recipient_receives"
           ? { ...s, intendedReceiveAmount: amount }
@@ -285,11 +300,14 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     [patchIntent],
   );
   const setPayToken = useCallback(
-    (symbol: string, manual = true) => {
-      const token = getToken(symbol);
+    (symbol: string, manual = true, address?: string) => {
+      // The caller's address (a discovered/imported token) is authoritative;
+      // otherwise look the symbol up. An unknown symbol records no address
+      // rather than borrowing an unrelated token's identity.
+      const resolvedAddress = address ?? getToken(symbol)?.address;
       patchIntent({
         payToken: symbol,
-        payTokenAddress: token?.address,
+        payTokenAddress: resolvedAddress,
         payTokenSource: manual ? "user" : "recommended",
       });
     },
@@ -340,47 +358,45 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     setNonce((n) => n + 1);
   }, []);
 
-  const prefillFromIntent = useCallback(
-    (input: {
-      recipient: string;
-      receiveToken: string;
-      receiveAmountUsd: string;
-      amountMode?: AmountMode;
-      payToken?: string;
-      payTokenSource?: "user" | "intent";
-    }) => {
-      const amountMode = input.amountMode ?? "recipient_receives";
+  /**
+   * Apply a parsed natural-language *draft* to the canonical intent.
+   *
+   * This is the only entry point the NL layer has into the payment state, so
+   * there is exactly one source of truth: the chat, the composer, the quote,
+   * the plan and the signing guard all read the same `state.intent`. The
+   * mapping is pure (`nlDraftToIntentPatch`); here we only commit it, record
+   * the explicit intended amount, and confirm a recipient the parser supplied.
+   *
+   * `text` is passed separately so provenance never bumps the version on its own.
+   */
+  const applyNlIntent = useCallback(
+    (input: NlApplyInput & { text: string }) => {
+      const patch = nlDraftToIntentPatch(input);
       setState((s) => {
-        const receiveCfg = getToken(input.receiveToken);
-        const payCfg = input.payToken ? getToken(input.payToken) : undefined;
-        const intent = reduceIntent(s.intent, {
-          recipient: input.recipient,
-          receiveToken: input.receiveToken,
-          receiveTokenAddress: receiveCfg?.address,
-          receiveAmount: input.receiveAmountUsd,
-          amountMode,
-          // When the instruction deterministically named a source asset
-          // ("Send 10 MON"), honour it. When it did not, the source is only
-          // *recommended* and the user must still confirm it before Review.
-          ...(input.payToken
-            ? {
-                payToken: input.payToken,
-                payTokenAddress: payCfg?.address,
-                payTokenSource: input.payTokenSource ?? "intent",
-              }
-            : {}),
-        });
+        const nextText = input.text.trim() || s.intent.text;
+        const intent = reduceIntent(s.intent, { ...patch, text: nextText });
+        const sameVersion = intent.version === s.intent.version;
         return {
           ...s,
           intent,
           intendedReceiveAmount:
-            amountMode === "recipient_receives" ? input.receiveAmountUsd : null,
-          quote: null,
-          quoteVersion: 0,
-          quoteError: null,
+            patch.receiveAmount === undefined
+              ? s.intendedReceiveAmount
+              : intent.amountMode === "recipient_receives"
+                ? intent.receiveAmount
+                : null,
+          // A change to the payment (new version) discards any quote from the
+          // previous request so a stale result can never be shown.
+          quote: sameVersion ? s.quote : null,
+          quoteVersion: sameVersion ? s.quoteVersion : 0,
+          quoting: sameVersion ? s.quoting : false,
+          quoteError: sameVersion ? s.quoteError : null,
+          autoRefreshAt: sameVersion ? s.autoRefreshAt : 0,
         };
       });
-      setRecipientConfirmed(true);
+      // A parser-supplied address is an explicit recipient — confirm it so the
+      // readiness gate does not require a redundant second confirmation.
+      if (patch.recipient) setRecipientConfirmed(true);
       setNonce((n) => n + 1);
     },
     [],
@@ -614,6 +630,59 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.quote, state.balances, state.intent.payToken, payTokenConfig]);
 
+  // ---- Partial-balance eligibility -----------------------------------------
+  // A token-quantity intent ("send 100 NEWCOIN") may exceed what the wallet
+  // holds. When another funded asset can cover the shortfall, the payment is
+  // satisfiable by sending what is held and converting the rest. The exact
+  // affordability is enforced by the signing guard against the fresh split; here
+  // we only decide whether the split path is available at all.
+  const partial = useMemo(() => {
+    // A partial split only makes sense for a non-native target the wallet can
+    // hold directly; the gas asset is never split.
+    if (
+      state.intent.amountMode !== "recipient_receives" ||
+      !state.intent.receiveTokenAmount ||
+      receiveTokenConfig.native
+    ) {
+      return null;
+    }
+    const targetAddr = (state.intent.receiveTokenAddress ?? receiveTokenConfig.address ?? "").toLowerCase();
+    const held =
+      state.balances.find(
+        (b) =>
+          !b.token.native &&
+          ((b.token.address ?? "").toLowerCase() === targetAddr ||
+            b.token.symbol.toLowerCase() === state.intent.receiveToken.toLowerCase()),
+      )?.amount ?? "0";
+    const split = splitPayment(state.intent.receiveTokenAmount, held, receiveTokenConfig.decimals);
+    // Native MON is reserved for gas, so it is never spent covering a shortfall.
+    const source = pickShortfallSource(
+      state.balances
+        .filter((b) => !b.token.native)
+        .map((b) => ({
+          symbol: b.token.symbol,
+          address: b.token.address,
+          usd: b.usd,
+        })),
+      targetAddr,
+    );
+    return {
+      eligible: true,
+      mode: split.mode,
+      held: split.held,
+      shortfall: split.shortfall,
+      sourceSymbol: source?.symbol ?? null,
+      covered: split.mode !== "direct" && Boolean(source),
+    };
+  }, [
+    state.intent.amountMode,
+    state.intent.receiveTokenAmount,
+    state.intent.receiveTokenAddress,
+    state.intent.receiveToken,
+    state.balances,
+    receiveTokenConfig,
+  ]);
+
   // ---- Wallet abstraction state (partial, honest) --------------------------
   // Gas handling is per-payment, not a global boolean: whether abstraction is
   // available depends on the chain, the configured paymaster, the wallet's
@@ -705,6 +774,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
         sufficiency,
         gasSufficiency,
         mismatchActive: Boolean(mismatch?.active),
+        partialCovered: Boolean(partial?.covered),
       }),
     [
       state.intent.recipient,
@@ -721,6 +791,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       sufficiency,
       gasSufficiency,
       mismatch,
+      partial,
     ],
   );
 
@@ -742,7 +813,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     addToken,
     refreshQuote,
     correctToIntended,
-    prefillFromIntent,
+    applyNlIntent,
     recommendedPayToken,
     balanceFor,
     receiveTokenConfig,
@@ -756,6 +827,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     gasSufficiency,
     gasMode: gasInfo.mode,
     gasInfo,
+    partial,
     abstraction,
     setWalletGasCapabilities,
     readiness,

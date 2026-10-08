@@ -31,6 +31,24 @@ export type NlpAsset = {
   requiresSwap: boolean;
 };
 
+/** The outcome of resolving a ticker the user named that wasn't catalogued. */
+export type NlpResolution =
+  | { status: "resolved"; symbol: string; address: string; decimals: number; name: string; listed: boolean; source?: string }
+  | {
+      status: "ambiguous";
+      query: string;
+      matches: {
+        address: string;
+        symbol: string;
+        name: string;
+        decimals: number;
+        listed: boolean;
+        source?: string;
+        logoURI?: string;
+      }[];
+    }
+  | { status: "not_found"; query: string };
+
 export type NlpResult = {
   ok: true;
   network: MonadNetwork;
@@ -41,17 +59,40 @@ export type NlpResult = {
   clarification: Clarification;
   understood: string[];
   assets: NlpAsset[];
+  resolution: NlpResolution | null;
+  /** The wallet's real holding of the requested asset + any shortfall. */
+  holding: {
+    token: string;
+    address: string;
+    held: string;
+    needed: string | null;
+    shortfall: string | null;
+    mode?: "direct" | "swap" | "split";
+  } | null;
   compose: ComposeHandoff | null;
   handoff: { summary: string; price: number | null } | null;
   error: { code: string; message: string } | null;
 };
 
-export function useIntentEngine(network: MonadNetwork, balances: Balance[]) {
-  const [draft, setDraft] = useState<ParsedPaymentIntent | null>(null);
+/**
+ * @param baseDraft the collected draft, derived from the *canonical intent* by
+ *   the caller. It is not stored here — the hook holds no payment state of its
+ *   own, so the chat can never drift from the composer. It is only echoed back
+ *   to the server so a follow-up answer ("to 0x…") continues the same draft.
+ */
+export function useIntentEngine(
+  network: MonadNetwork,
+  balances: Balance[],
+  baseDraft: ParsedPaymentIntent | null = null,
+) {
   const [result, setResult] = useState<NlpResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const reqRef = useRef(0);
+  // Read the latest base draft inside `submit` without re-creating the callback
+  // (which would abort an in-flight parse on every render).
+  const baseDraftRef = useRef(baseDraft);
+  baseDraftRef.current = baseDraft;
 
   const balancesKey = useMemo(
     () =>
@@ -82,7 +123,9 @@ export function useIntentEngine(network: MonadNetwork, balances: Balance[]) {
               amount: b.amount,
               usd: b.usd,
             })),
-            draft,
+            // The collected draft comes from the canonical intent, so a
+            // follow-up continues exactly the state the composer shows.
+            draft: baseDraftRef.current,
           }),
         });
         const json = await res.json();
@@ -93,7 +136,6 @@ export function useIntentEngine(network: MonadNetwork, balances: Balance[]) {
           return;
         }
         setResult(json as NlpResult);
-        setDraft((json as NlpResult).draft);
         setError(null);
       } catch {
         if (requestId !== reqRef.current) return;
@@ -106,18 +148,17 @@ export function useIntentEngine(network: MonadNetwork, balances: Balance[]) {
     },
     // balancesKey restarts the callback when real balances change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [network, balancesKey, draft],
+    [network, balancesKey],
   );
 
   const reset = useCallback(() => {
     reqRef.current++;
-    setDraft(null);
     setResult(null);
     setError(null);
     setLoading(false);
   }, []);
 
-  return { draft, result, loading, error, submit, reset };
+  return { result, loading, error, submit, reset };
 }
 
 /**

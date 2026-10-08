@@ -19,7 +19,18 @@ export const WNATIVE_ABI = parseAbi([
   "function allowance(address owner, address spender) view returns (uint256)",
 ]);
 
-/** Uniswap V3 SwapRouter02. */
+/**
+ * Uniswap V3 SwapRouter02.
+ *
+ * NOTE: SwapRouter02 has **no** `deadline` parameter (unlike the original V3
+ * SwapRouter). The deployed Monad SwapRouter02
+ * (`0xfE31F71C1b106EAc32F1A19239c9a9A72ddfb900`) exposes only these
+ * deadline-less selectors; adding a `deadline` argument changes the selector
+ * and the call reverts. The real on-chain protection is therefore the
+ * `amountOutMinimum` / `amountInMaximum` bound encoded here, backed by the
+ * client-side quote-freshness window and the pre-signature rebuild — not an
+ * on-chain deadline. Do not "add a deadline": it is not supported.
+ */
 export const SWAP_ROUTER_ABI = parseAbi([
   "function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountOut)",
   "function exactOutputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountOut, uint256 amountInMaximum, uint160 sqrtPriceLimitX96) params) payable returns (uint256 amountIn)",

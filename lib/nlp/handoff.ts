@@ -1,4 +1,4 @@
-import { isEvmAddress } from "@/lib/format";
+import { formatUsd, isEvmAddress } from "@/lib/format";
 import type { AmountMode } from "@/lib/domain/intent";
 import type { ParsedPaymentIntent } from "./schema";
 
@@ -45,9 +45,15 @@ function toDecimalString(value: number, maxFrac = 6): string {
     .replace(/\.$/, "");
 }
 
+/**
+ * @param priceUsd    live USD price of the *target* asset (draft.asset)
+ * @param sourcePriceUsd live USD price of the source asset, required only for
+ *   the "N A worth of B" form (where the amount is denominated in the source)
+ */
 export function draftToHandoff(
   draft: ParsedPaymentIntent,
   priceUsd: number | null,
+  sourcePriceUsd?: number | null,
 ): HandoffResult {
   if (
     !draft.amount ||
@@ -55,7 +61,35 @@ export function draftToHandoff(
     !draft.asset ||
     !isEvmAddress(draft.recipientAddress ?? "")
   ) {
+    // An unresolved `assetQuery` is handled by the caller (live discovery);
+    // here it is simply "not yet a concrete asset".
     return { ok: false, reason: "incomplete", message: "The payment intent isn't complete yet." };
+  }
+
+  // "N A worth of B": the user fixed both sides. The amount is denominated in
+  // the *source* (A); the recipient receives the target (B). We express it as an
+  // "I spend" intent so both assets are explicit before execution.
+  if (draft.sourceAsset) {
+    if (!(sourcePriceUsd && sourcePriceUsd > 0)) {
+      return {
+        ok: false,
+        reason: "price_unavailable",
+        message: `We can't find a live price for ${draft.sourceAsset}, so this payment can't be prepared.`,
+      };
+    }
+    const usd = Number(draft.amount) * sourcePriceUsd;
+    return {
+      ok: true,
+      compose: {
+        recipient: draft.recipientAddress!,
+        receiveToken: draft.asset,
+        receiveAmountUsd: toDecimalString(usd),
+        amountMode: "i_spend",
+        sourceAsset: draft.sourceAsset,
+        sourceOrigin: "intent",
+      },
+      summary: `Spend ${draft.amount} ${draft.sourceAsset} for ${draft.asset}`,
+    };
   }
 
   if (draft.amountType === "USD_VALUE") {
@@ -73,7 +107,7 @@ export function draftToHandoff(
         amountMode: "recipient_receives",
         tokenAmount,
       },
-      summary: `$${draft.amount} in ${draft.asset}`,
+      summary: `${formatUsd(Number(draft.amount))} in ${draft.asset}`,
     };
   }
 

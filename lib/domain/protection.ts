@@ -23,6 +23,8 @@
  * browser signing guard and in unit tests.
  */
 
+import { QUOTE_MAX_AGE_MS } from "@/lib/domain/freshness";
+
 // ---------------------------------------------------------------------------
 // Slippage
 // ---------------------------------------------------------------------------
@@ -90,6 +92,27 @@ export type PriceImpactAssessment = {
 };
 
 /**
+ * Explicit price-impact capability state (never a bare boolean).
+ *
+ * `PRICE_IMPACT_PROTECTION_ACTIVE` means a live impact was measured and the
+ * route is within the configured ceiling, so the guard is genuinely enforcing a
+ * limit. `PRICE_IMPACT_PROTECTION_UNAVAILABLE` means the impact could not be
+ * measured — the guard is still applied, but no number is claimed, so the UI
+ * says "Unavailable" instead of pretending a limit was enforced on a figure we
+ * do not have. An *excessive* impact is a hard block and is reported by
+ * `blocked`, not by this state.
+ */
+export type PriceImpactState =
+  | "PRICE_IMPACT_PROTECTION_ACTIVE"
+  | "PRICE_IMPACT_PROTECTION_UNAVAILABLE";
+
+export function priceImpactState(a: PriceImpactAssessment): PriceImpactState {
+  return a.value === null
+    ? "PRICE_IMPACT_PROTECTION_UNAVAILABLE"
+    : "PRICE_IMPACT_PROTECTION_ACTIVE";
+}
+
+/**
  * Assess a route's live price impact against the configured ceiling.
  *
  * An unknown impact (`null`) is *not* treated as excessive — we do not invent a
@@ -143,14 +166,20 @@ export type MevProtection = {
  *     still research and are not live on mainnet;
  *   - Alchemy's built-in MEV protection covers Ethereum, Arbitrum, BSC, Base
  *     and Solana — **not Monad**;
- *   - no official Monad private RPC / builder-relay endpoint is documented.
+ *   - third-party private submission *does* exist on Monad mainnet (e.g.
+ *     bloXroute's "Monad Fast RPC", a private, low-latency endpoint), but it is
+ *     only a private **endpoint**, not a relay we can submit to: it works by
+ *     replacing the RPC the transaction is *broadcast from*.
  *
- * Crucially, even if a private endpoint were configured, this application
- * submits through the *user's wallet* (an injected provider), not through an
- * RPC we control — a dapp cannot force an injected wallet to broadcast
- * privately. Reporting `ACTIVE` from a config value alone would be a cosmetic
- * badge, so we never do. The state only becomes `MEV_PROTECTION_ACTIVE` when a
- * submission path that genuinely bypasses public visibility is wired in.
+ * Crucially, this application submits through the *user's wallet* (an injected
+ * provider, `walletClient.writeContract`), not through an RPC we control, and it
+ * never holds the user's key. A dapp cannot force an injected wallet to
+ * broadcast privately: the user's wallet decides its own RPC. Pointing the app's
+ * read RPC at bloXroute would not route the *signed* transaction through it, so
+ * reporting `ACTIVE` from a config value alone would be a cosmetic badge. The
+ * state only becomes `MEV_PROTECTION_ACTIVE` when a submission path that
+ * genuinely bypasses public visibility is wired in (e.g. the wallet itself
+ * broadcasts through a private endpoint).
  *
  * Until then the app relies on the on-chain slippage bound, the price-impact
  * guard, quote freshness and on-chain delivery verification.
@@ -161,7 +190,7 @@ export function resolveMevProtection(): MevProtection {
     active: false,
     rpcConfigured: false,
     reason:
-      "No MEV-protected private submission path is available for Monad. Monad has no public mempool, but its encrypted mempool is not yet live, Alchemy's MEV protection does not cover Monad, and a dapp cannot force an injected wallet to broadcast privately. Protection relies on on-chain slippage bounds, a price-impact guard, quote freshness and on-chain delivery verification.",
+      "MEV-protected private submission is unavailable to this app on Monad. Monad has no public mempool, but its encrypted mempool is not yet live, Alchemy's MEV protection does not cover Monad, and although a third-party private endpoint (e.g. bloXroute Monad Fast RPC) exists it can only be used by the wallet that signs and broadcasts — this app submits through the user's injected wallet and never holds the key, so it cannot force private routing. Protection relies on on-chain slippage bounds, a price-impact guard, quote freshness and on-chain delivery verification.",
   };
 }
 
@@ -177,7 +206,21 @@ export type ExecutionProtection = {
     bps: number;
     maxBps: number;
   };
-  priceImpact: PriceImpactAssessment;
+  priceImpact: PriceImpactAssessment & { state: PriceImpactState };
+  /**
+   * The quote's freshness window, in ms. A quote older than this is stale and
+   * must be rebuilt before signing.
+   */
+  freshnessMs: number;
+  /**
+   * True when the submitted swap carries an on-chain time bound (`deadline`).
+   *
+   * This is **false on Monad**: its SwapRouter02 has no `deadline` parameter, so
+   * there is no on-chain expiry to encode. Reported explicitly rather than
+   * assumed, so the UI never claims a time bound the transaction does not have.
+   * Quote freshness is enforced off-chain instead (stale quotes are rebuilt).
+   */
+  onchainDeadlineSupported: boolean;
 };
 
 /**
@@ -188,6 +231,7 @@ export function resolveExecutionProtection(
   priceImpact: number | null | undefined,
   requestedSlippageBps?: number | null,
 ): ExecutionProtection {
+  const assessment = assessPriceImpact(priceImpact);
   return {
     mev: resolveMevProtection(),
     slippage: {
@@ -195,7 +239,9 @@ export function resolveExecutionProtection(
       bps: resolveSlippageBps(requestedSlippageBps),
       maxBps: MAX_SLIPPAGE_BPS,
     },
-    priceImpact: assessPriceImpact(priceImpact),
+    priceImpact: { ...assessment, state: priceImpactState(assessment) },
+    freshnessMs: QUOTE_MAX_AGE_MS,
+    onchainDeadlineSupported: false,
   };
 }
 

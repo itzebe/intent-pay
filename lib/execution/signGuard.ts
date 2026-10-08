@@ -321,6 +321,10 @@ export function quoteMatchesIntent(quote: Quote, intent: CanonicalIntent): boole
  * no bound would let a sandwich fill at any price, so it must never be signed.
  *
  * Non-swap plans (direct transfers) carry no swap and trivially satisfy this.
+ *
+ * NOTE: SwapRouter02 on Monad has no `deadline` parameter, so there is no
+ * on-chain time bound to assert here. Quote freshness is enforced off-chain, by
+ * `prepareSigning` refusing a stale quote and rebuilding the calldata.
  */
 export function planHasOutputBound(plan: PaymentPlan): boolean {
   for (const step of plan.steps) {

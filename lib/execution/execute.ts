@@ -18,6 +18,16 @@ export type StepResult = {
   error?: string;
 };
 
+/**
+ * Block confirmations to wait for before a step is treated as confirmed.
+ *
+ * Monad reaches full finality after two blocks (~600 ms); at one block a block
+ * is only *speculatively* final and can (very rarely) revert. Waiting for full
+ * finality means the receipt we verify delivery from is the one that cannot be
+ * reorged.
+ */
+export const FINALITY_CONFIRMATIONS = 2;
+
 export type ExecuteCallbacks = { onStep?: (result: StepResult) => void };
 
 export class ExecutionError extends Error {
@@ -331,7 +341,7 @@ export async function executePlan(
     try {
       const receipt = await client.waitForTransactionReceipt({
         hash,
-        confirmations: 1,
+        confirmations: FINALITY_CONFIRMATIONS,
         timeout: 90_000,
       });
       if (receipt.status === "reverted") {
@@ -436,7 +446,11 @@ export async function executePlanBatched(
   // Best-effort wait for a receipt so callers can verify delivery immediately.
   if (primaryHash) {
     try {
-      await client.waitForTransactionReceipt({ hash: primaryHash, confirmations: 1, timeout: 90_000 });
+      await client.waitForTransactionReceipt({
+        hash: primaryHash,
+        confirmations: FINALITY_CONFIRMATIONS,
+        timeout: 90_000,
+      });
     } catch {
       /* verification handles missing receipts */
     }

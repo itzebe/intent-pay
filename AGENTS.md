@@ -186,6 +186,62 @@ auto-refreshes before expiry, disables Review/Confirm while stale, and
 `onConfirm` re-checks it so a price the user saw is never the price they
 sign. `lib/server/quote.ts` re-exports `isQuoteStale` for server callers.
 
+## Execution protection (MEV / sandwich)
+
+The product goal — an attacker cannot make the recipient receive drastically
+less while the app still reports success — is enforced by the **transaction**,
+not the UI.
+
+- **On-chain output bound.** Every swap step carries a real `amountOutMinimum`
+  (exact-in) or `amountInMaximum` (exact-out), derived from a clamped slippage
+  tolerance (`lib/domain/protection.ts`, default 50 bps, hard ceiling 500 bps).
+  `encodeStep` (`lib/execution/execute.ts`) puts it in the router calldata;
+  `planHasOutputBound` (`lib/execution/signGuard.ts`) refuses to sign a swap
+  with no bound. The UI's "Minimum received" is never the protection.
+- **No on-chain deadline (verified).** SwapRouter02 has **no** `deadline`
+  parameter — unlike the original V3 SwapRouter. The deployed Monad router
+  `0xfE31F71C1b106EAc32F1A19239c9a9A72ddfb900` exposes only the deadline-less
+  selectors (`exactInputSingle 0x04e45aaf`), so adding a `deadline` argument
+  changes the selector and the call reverts. **Do not "add a deadline".** The
+  absence is reported honestly (`ExecutionProtection.onchainDeadlineSupported =
+  false`); quote freshness is enforced off-chain by `prepareSigning` refusing a
+  stale quote and rebuilding the calldata. See `lib/execution/abis.ts`.
+- **Price-impact guard.** `assessPriceImpact` blocks a route above
+  `NEXT_PUBLIC_MAX_PRICE_IMPACT_BPS` (default 3%) before signing. Slippage is
+  never widened to rescue a bad route; an unmeasurable impact does not block
+  (we never invent a number).
+- **Capability states, never a boolean.** `resolveExecutionProtection` returns
+  explicit states: `MEV_PROTECTION_ACTIVE` / `MEV_PROTECTION_UNAVAILABLE`,
+  `SLIPPAGE_PROTECTION_ACTIVE`, `PRICE_IMPACT_PROTECTION_ACTIVE` /
+  `PRICE_IMPACT_PROTECTION_UNAVAILABLE`. The review sheet shows "MEV
+  Protection: Active" only when a private submission path really exists.
+- **No usable private path.** `resolveMevProtection` always returns
+  `MEV_PROTECTION_UNAVAILABLE`. Monad has no global mempool (RPCs forward to the
+  next 3 leaders); its encrypted mempool (BTX) is not live; Alchemy's built-in
+  MEV protection covers Ethereum/Arbitrum/BSC/Base/Solana, **not Monad**. A
+  third-party private endpoint *does* exist on Monad mainnet (bloXroute "Monad
+  Fast RPC", `monad.rpc.blxrbdn.com`), but it is only a private RPC you broadcast
+  *from* — and this app never holds the key, it submits through the user's
+  injected wallet (`walletClient.writeContract`), which chooses its own RPC. A
+  dapp cannot force private routing onto an injected wallet, so pointing the app
+  RPC at it would be a cosmetic badge. **Do not fake an "Active" badge.**
+
+## Signing safety invariant
+
+`prepareSigning` (`lib/execution/signGuard.ts`) is the only path to a signature.
+Immediately before signing it fetches fresh balances + a fresh quote, re-reads
+the canonical intent (version + key) and the wallet account, re-checks freshness,
+price impact, balance/gas coverage, rebuilds the calldata from the fresh quote,
+asserts the bound + deadline, and re-reads the intent a final time. Any change
+aborts with a specific reason; calldata is never reused from an earlier build.
+
+## Delivery verification
+
+`verifyDelivery` (`lib/execution/verify.ts`) proves the recipient's actual
+on-chain transfer from the confirmed receipt, against the minimum the
+transaction enforced (the plan's `slippageBps`). A reverted tx is failed;
+an unprovable delivery is shown as unverified — never as success.
+
 ## Testing the flow
 
 

@@ -159,7 +159,7 @@ export function ReviewSheet({
             />
             <SafetyRow
               label="Slippage protection"
-              value="Active"
+              value={protection.slippage.state === "SLIPPAGE_PROTECTION_ACTIVE" ? "Active" : "Unavailable"}
               tone="ok"
               sub={`max ${(protection.slippage.bps / 100).toFixed(2)}%`}
             />
@@ -167,7 +167,11 @@ export function ReviewSheet({
               label="Price impact"
               value={formatImpact(protection.priceImpact.value) ?? "Unavailable"}
               tone={protection.priceImpact.blocked ? "bad" : "ok"}
-              sub={`limit ${(protection.priceImpact.max * 100).toFixed(2)}%`}
+              sub={
+                protection.priceImpact.state === "PRICE_IMPACT_PROTECTION_ACTIVE"
+                  ? `limit ${(protection.priceImpact.max * 100).toFixed(2)}%`
+                  : "not measurable"
+              }
             />
             <SafetyRow
               label="Minimum received"
@@ -178,7 +182,13 @@ export function ReviewSheet({
               label="Quote freshness"
               value={quoteStale ? "Expired" : "Fresh"}
               tone={quoteStale ? "warn" : "ok"}
-              sub={quoteTime ? `live · ${quoteTime}` : "live"}
+              sub={`window ${(protection.freshnessMs / 1000).toFixed(0)}s`}
+            />
+            <SafetyRow
+              label="On-chain deadline"
+              value={protection.onchainDeadlineSupported ? "Enforced" : "Unavailable"}
+              tone={protection.onchainDeadlineSupported ? "ok" : "warn"}
+              sub={protection.onchainDeadlineSupported ? "swap reverts after it" : "router has no deadline"}
             />
           </div>
         )}

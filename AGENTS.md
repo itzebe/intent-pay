@@ -93,16 +93,26 @@ whether they are configured. `.env.example` documents every key.
   `wallet_sendCalls` batching with optional gas sponsorship / ERC-20 gas.
   `getWalletCapabilities` asks the user's own wallet what it supports; when it
   does not, execution falls back to sequential MON-gas txs. Never claim
-  sponsorship that isn't configured.
+  sponsorship that isn't configured. The integration strip and review screen
+  label the *sub-capabilities* honestly: node, ERC-4337 Bundler and Gas Manager
+  are probed separately (`lib/server/diagnostics.ts`), a policy past its window
+  (`ALCHEMY_GAS_POLICY_START_UNIX`/`_END_UNIX`) reads as "expired" rather than
+  active, and `ALCHEMY_PAYMASTER_TOKENS` (a comma list of addresses) is the only
+  thing that lets the app name a *specific* gas-abstracted pay asset. A bare
+  policy id is not proof of sponsorship: `walletAbstraction.available` in
+  `/api/capabilities` requires node + Bundler reachability *and* a usable policy.
 - **Zerion** — `lib/server/zerion.ts`. HTTP Basic auth (key as username, empty
   password) against `https://api.zerion.io`; supplies wallet asset discovery and
   USD valuation. Balances that get spent are still confirmed on-chain
   (`lib/server/discovery.ts`); Zerion never decides execution. Use
   `fetchZerionResult()` when you must tell a provider **failure** from an empty
   wallet: it returns `status: "ok" | "disabled" | "error"`. `fetchZerionAssets()`
-  is the back-compat list-only wrapper (a failure still yields `[]`). A
-  configured-but-failing Zerion means the wallet's holdings are *unknown*, not
-  empty — `/api/balances` exposes `sources.zerionStatus` / `zerionError`.
+  is the back-compat list-only wrapper (a failure still yields `[]`).
+  `fetchZerionPortfolio()` returns the wallet's `total` USD value and per-chain
+  distribution for enrichment. A configured-but-failing Zerion means the
+  wallet's holdings are *unknown*, not empty — `/api/balances` exposes
+  `sources.zerionStatus` / `zerionError`. Zerion being unavailable must never
+  break payment execution (the on-chain balance is authoritative).
 - **Market prices** — `lib/server/pricing/*`. Alchemy Prices (when keyed) →
   GeckoTerminal → DexScreener → on-chain Uniswap quote. Every price carries a
   `source` label surfaced in the UI. Never fabricate a rate. Prices also carry

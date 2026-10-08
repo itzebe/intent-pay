@@ -186,6 +186,68 @@ export async function fetchZerionAssets(
   return (await fetchZerionResult(address, network)).assets;
 }
 
+export type ZerionPortfolio = {
+  status: ZerionStatus;
+  /** Total portfolio value across Monad positions, as reported by Zerion. */
+  totalUsd: number;
+  /** Per-chain USD breakdown (Monad). */
+  byChain: { chainId: string; usd: number }[];
+  reason?: string;
+};
+
+/**
+ * Zerion portfolio valuation for a wallet on Monad.
+ *
+ * This is enrichment only: the composer never executes against it. It exists so
+ * wallet intelligence can show a real cross-position value (the `/portfolio`
+ * endpoint) rather than summing local, possibly-stale balances. A provider
+ * failure yields `status: "error"` — never a fabricated zero.
+ */
+export async function fetchZerionPortfolio(
+  address: string,
+  _network: MonadNetwork = "mainnet",
+): Promise<ZerionPortfolio> {
+  if (!zerionEnabled()) return { status: "disabled", totalUsd: 0, byChain: [] };
+  if (!isEvmAddress(address)) return { status: "ok", totalUsd: 0, byChain: [] };
+  try {
+    const chain = chainId();
+    const url =
+      `https://api.zerion.io/v1/wallets/${address}/portfolio/` +
+      `?currency=usd&filter[chain_ids]=${encodeURIComponent(chain)}`;
+    const res = await fetchWithTimeout(url, {
+      headers: { accept: "application/json", authorization: authHeader() },
+      timeoutMs: 7000,
+    });
+    if (!res.ok) {
+      return { status: "error", totalUsd: 0, byChain: [], reason: `Zerion responded ${res.status}` };
+    }
+    const json = (await res.json()) as {
+      data?: {
+        attributes?: {
+          total?: { positions?: number };
+          positions_distribution_by_chain?: Record<string, number>;
+        };
+      };
+    };
+    const attrs = json.data?.attributes;
+    const totalUsd =
+      typeof attrs?.total?.positions === "number" && Number.isFinite(attrs.total.positions)
+        ? attrs.total.positions
+        : 0;
+    const byChain = Object.entries(attrs?.positions_distribution_by_chain ?? {})
+      .filter(([, v]) => typeof v === "number" && Number.isFinite(v))
+      .map(([chainId, usd]) => ({ chainId, usd }));
+    return { status: "ok", totalUsd, byChain };
+  } catch (err) {
+    return {
+      status: "error",
+      totalUsd: 0,
+      byChain: [],
+      reason: (err as Error)?.message ?? "Zerion unreachable",
+    };
+  }
+}
+
 /**
  * Normalize a Zerion asset into the app's TokenConfig, registering it so it
  * becomes payable/searchable without a code change.

@@ -3,6 +3,7 @@ import { fetchWithTimeout, TtlCache } from "@/lib/server/http";
 import { marketProviders } from "@/lib/server/pricing/market";
 import { getToken } from "@/lib/config/tokens";
 import { alchemyRpcUrl } from "@/lib/config/chains";
+import { resolvePolicyStatus } from "@/lib/server/gasCapabilities";
 
 /**
  * Server-side integration diagnostics.
@@ -29,6 +30,10 @@ export type IntegrationStatus = {
   disabled?: boolean;
   /** A paymaster gas policy id is configured (paymaster probes only). */
   policyConfigured?: boolean;
+  /** The policy id is a valid UUID shape (paymaster probes only). */
+  policyValid?: boolean;
+  /** The policy is within its declared window, when the deployment declares it. */
+  policyStatus?: string;
   /** Last 4 characters of the key, so an operator can match it to Vercel. */
   keySuffix?: string;
   /** Non-sensitive reason when not reachable. */
@@ -140,20 +145,50 @@ export async function alchemyBundlerStatus(): Promise<IntegrationStatus> {
 }
 
 /**
- * Gas Manager (paymaster) reachability. A policy id must be configured; the
- * probe then asks the bundler for paymaster stub data. A method-level error
- * still proves the endpoint exists, so we distinguish "unsupported" from
- * "rejected this (dummy) request".
+ * Gas Manager (paymaster) status. A policy id must be configured *and* a valid
+ * UUID; the probe then asks the bundler for paymaster stub data with the
+ * ERC-7677 4-argument shape `[userOp, entryPoint, chainId, context]`.
+ *
+ * We distinguish three honest outcomes:
+ *  - a policy was correctly rejected (invalid / expired / out of scope) — the
+ *    endpoint exists and answered, so `reachable` is true but the policy is not
+ *    usable, which is what the UI must say;
+ *  - the method is genuinely not offered by the endpoint — `reachable` false;
+ *  - any other transport error — `reachable` false with the reason surface.
  */
 export async function alchemyPaymasterStatus(): Promise<IntegrationStatus> {
   const key = process.env.ALCHEMY_API_KEY;
   const policyId = process.env.ALCHEMY_GAS_POLICY_ID;
   const at = Date.now();
+  const { status: policyStatus } = resolvePolicyStatus(policyId);
   if (!key) {
     return { configured: false, reachable: false, policyConfigured: false, at, error: "ALCHEMY_API_KEY is not set" };
   }
   if (!policyId) {
-    return { configured: false, reachable: false, policyConfigured: false, at, error: "ALCHEMY_GAS_POLICY_ID is not set" };
+    return {
+      configured: false,
+      reachable: false,
+      policyConfigured: false,
+      at,
+      error: "ALCHEMY_GAS_POLICY_ID is not set",
+    };
+  }
+  // A policy id that is not a UUID cannot be used by the Gas Manager; report it
+  // as configured-but-invalid rather than probing with a value that will always
+  // fail shape validation.
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    policyId.trim(),
+  );
+  if (!isUuid) {
+    return {
+      configured: true,
+      reachable: true,
+      policyConfigured: true,
+      policyValid: false,
+      policyStatus,
+      at,
+      error: "ALCHEMY_GAS_POLICY_ID is not a valid Gas Manager policy UUID",
+    };
   }
   return cache.get("alchemy-paymaster", async () => {
     const url = `https://monad-mainnet.g.alchemy.com/v2/${key}`;
@@ -177,8 +212,17 @@ export async function alchemyPaymasterStatus(): Promise<IntegrationStatus> {
         },
         entryPoint,
         "0x8f",
+        { policyId: policyId.trim() },
       ]);
-      return { configured: true, reachable: true, policyConfigured: true, keySuffix: suffix(key), at };
+      return {
+        configured: true,
+        reachable: true,
+        policyConfigured: true,
+        policyValid: true,
+        policyStatus,
+        keySuffix: suffix(key),
+        at,
+      };
     } catch (err) {
       const msg = reason(err);
       const unsupported = /method not found|not supported|unsupported/i.test(msg);
@@ -186,6 +230,8 @@ export async function alchemyPaymasterStatus(): Promise<IntegrationStatus> {
         configured: true,
         reachable: !unsupported,
         policyConfigured: true,
+        policyValid: true,
+        policyStatus,
         keySuffix: suffix(key),
         error: msg,
         at,

@@ -30,10 +30,25 @@ export type Capabilities = {
     alchemyConfigured?: boolean;
     alchemyReachable?: boolean;
     alchemyError?: string;
+    /** ERC-4337 Bundler reachability. */
+    bundlerConfigured?: boolean;
+    bundlerReachable?: boolean;
+    bundlerError?: string;
+    /** Gas Manager (paymaster) configuration + reachability. */
+    paymasterConfigured?: boolean;
+    paymasterReachable?: boolean;
+    paymasterPolicyValid?: boolean;
+    paymasterError?: string;
+    policyStatus?: "active" | "expired" | "not_yet_active" | "unknown";
+    policyReason?: string;
     sponsorshipConfigured: boolean;
     erc20GasConfigured: boolean;
+    /** Addresses the configured paymaster sponsors (empty = unknown). */
+    supportedTokens?: string[];
     policyId?: string;
   };
+  /** Whether a wallet-abstraction path is genuinely available. */
+  walletAbstraction?: { available: boolean; reason: string | null };
 };
 
 const FALLBACK: Capabilities = {
@@ -53,6 +68,10 @@ const FALLBACK: Capabilities = {
     alchemyReachable: false,
     sponsorshipConfigured: false,
     erc20GasConfigured: false,
+  },
+  walletAbstraction: {
+    available: false,
+    reason: "Capabilities unavailable.",
   },
 };
 

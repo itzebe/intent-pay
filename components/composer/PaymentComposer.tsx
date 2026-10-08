@@ -550,11 +550,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                         flow.gasSufficiency.requiredMon,
                       )} MON). Your wallet holds ${formatAmount(
                         flow.gasSufficiency.availableMon,
-                      )} MON. Wallet abstraction is unavailable: ${
-                        !flow.gasInfo.paymasterConfigured
-                          ? "no paymaster is configured for this deployment"
-                          : "your wallet does not advertise sponsored (EIP-5792) gas"
-                      }, so this payment must be paid in MON.`}
+                      )} MON. ${flow.abstraction.message}`}
                     </span>
                   </motion.div>
                 )}

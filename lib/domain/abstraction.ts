@@ -22,6 +22,7 @@ export type AbstractionState =
   | "ABSTRACTION_UNSUPPORTED_CHAIN"
   | "ABSTRACTION_UNSUPPORTED_WALLET"
   | "PAYMASTER_UNAVAILABLE"
+  | "POLICY_UNAVAILABLE"
   | "INSUFFICIENT_TOKEN_BALANCE"
   | "NATIVE_GAS_REQUIRED";
 
@@ -39,8 +40,19 @@ export type AbstractionCapabilities = {
   chainId: number;
   /** The chain this payment targets is supported by the paymaster config. */
   chainSupported: boolean;
-  /** An Alchemy gas policy is configured server-side. */
+  /**
+   * A gas policy id is present. When `policyUsable` is false the policy exists
+   * but cannot be used right now (expired / out of scope).
+   */
   paymasterConfigured: boolean;
+  /**
+   * The configured policy is genuinely usable right now. Defaults to
+   * `paymasterConfigured` when omitted so a caller that only knows "a policy is
+   * configured" is not silently downgraded.
+   */
+  policyUsable?: boolean;
+  /** Why the policy is not usable (shown to the user when relevant). */
+  policyReason?: string;
   /** The wallet advertises the EIP-5792 `paymasterService` capability. */
   walletSupportsPaymaster: boolean;
   /** The wallet advertises ERC-20 gas payment. */
@@ -103,6 +115,18 @@ export function resolveAbstraction(
       gasOptions: nativeGas,
       message:
         "Wallet abstraction unavailable for this payment: no paymaster is configured for this deployment. Your wallet needs MON for network fees.",
+    };
+  }
+
+  // A policy exists but is not usable right now (expired / outside its window).
+  // Sponsorship is not claimed, and the reason is named rather than generic.
+  const policyUsable = caps.policyUsable ?? true;
+  if (!policyUsable) {
+    return {
+      state: "POLICY_UNAVAILABLE",
+      abstracted: false,
+      gasOptions: nativeGas,
+      message: `Wallet abstraction unavailable for this payment: ${caps.policyReason ?? "the configured gas policy is not usable right now."} Your wallet needs MON for network fees.`,
     };
   }
 

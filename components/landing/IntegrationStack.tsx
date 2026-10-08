@@ -25,8 +25,30 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
 
   const alchemyConfigured = caps.gas.alchemyConfigured ?? caps.gas.alchemy;
   const alchemyReachable = caps.gas.alchemyReachable ?? caps.gas.alchemy;
+  const bundlerReachable = caps.gas.bundlerReachable ?? false;
+  const paymasterConfigured = caps.gas.paymasterConfigured ?? false;
+  const policyStatus = caps.gas.policyStatus ?? "unknown";
+  const sponsorship = caps.gas.sponsorshipConfigured ?? false;
   const zerionConfigured = caps.wallet.zerionConfigured ?? caps.wallet.zerion;
   const zerionReachable = caps.wallet.zerionReachable ?? caps.wallet.zerion;
+
+  // Alchemy's AA stack is only "Active" when the node *and* the Bundler answer;
+  // a configured Gas Manager policy is surfaced separately so a working node is
+  // never hidden by an unrelated policy problem.
+  const alchemyActive = alchemyReachable;
+  const alchemyDetail = !alchemyConfigured
+    ? "Add an API key to enable"
+    : !alchemyReachable
+      ? `Configured, but unreachable${caps.gas.alchemyError ? ` — ${caps.gas.alchemyError}` : ""}`
+      : [
+          "RPC",
+          bundlerReachable ? "Bundler" : "Bundler unavailable",
+          sponsorship
+            ? "Paymaster"
+            : paymasterConfigured
+              ? `Paymaster ${policyStatus === "expired" ? "expired" : "not usable"}`
+              : "no Gas Manager policy",
+        ].join(" · ");
 
   const items: Item[] = [
     {
@@ -37,16 +59,10 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
     },
     {
       name: "Alchemy",
-      role: "RPC · Gas",
-      active: alchemyReachable,
+      role: "AA · Bundler · Paymaster",
+      active: alchemyActive,
       degraded: alchemyConfigured && !alchemyReachable,
-      detail: !alchemyConfigured
-        ? "Add an API key to enable"
-        : !alchemyReachable
-          ? `Configured, but unreachable${caps.gas.alchemyError ? ` — ${caps.gas.alchemyError}` : ""}`
-          : caps.gas.sponsorshipConfigured
-            ? "RPC + gas sponsorship ready"
-            : "RPC transport",
+      detail: alchemyDetail,
     },
     {
       name: "Zerion",

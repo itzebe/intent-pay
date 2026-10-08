@@ -6,6 +6,7 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { ensureCatalog, resolveToken, searchTokens } from "@/lib/server/discovery";
 import { getCatalog } from "@/lib/server/tokenList";
 import { getTokenIntelligence } from "@/lib/domain/tokenState";
+import { probeTokenRisk } from "@/lib/server/tokenRisk";
 import { WMON_ADDRESS } from "@/lib/providers/constants";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +80,12 @@ export async function GET(req: Request) {
       ? await getTokenIntelligence(t, { network, routable })
       : null;
 
+    // Real execution-risk assessment for the token (liquidity, transfer
+    // simulation, route). Returned so the UI can block on evidence, not a guess.
+    const risk = resolved.exists
+      ? await probeTokenRisk({ network, token: t, hasRoute: routable === true }).catch(() => null)
+      : null;
+
     return NextResponse.json({
       ok: true,
       network,
@@ -91,6 +98,7 @@ export async function GET(req: Request) {
       payable: intelligence?.payable ?? false,
       catalog: { count: catalogInfo.count, source: catalogInfo.source, version: catalogVersion() },
       price: intelligence?.price ?? null,
+      risk,
       token: serializeToken(t, resolved.source),
     });
   }

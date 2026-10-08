@@ -213,6 +213,81 @@ export function describePlan(plan: PaymentPlan): string[] {
   return plan.steps.map((s) => s.label);
 }
 
+// ---------------------------------------------------------------------------
+// Partial-balance plan ("send 100 NEWCOIN" while holding only 40)
+//
+// The recipient must end up with the full amount. The wallet already holds part
+// of the target asset, so that part is sent directly; the remainder is obtained
+// via a swap from a funded source asset. Both legs target the same recipient and
+// the same output token, and each leg keeps its own on-chain bound.
+//
+// Whether the two legs can go out atomically is a wallet-capability question:
+// the EIP-5792 batch path submits the whole step list in one atomic call, and
+// the sequential path runs them in order. This builder produces the step list
+// for either; it never claims atomicity the wallet can't deliver.
+// ---------------------------------------------------------------------------
+
+export type PartialPlanLegs = {
+  /** A quote whose pay == receive (the direct transfer of the held amount). */
+  directQuote: Quote;
+  /** A quote that obtains the shortfall (source -> target). */
+  swapQuote: Quote;
+  sender: Address;
+  recipient: Address;
+  slippageBps?: number;
+};
+
+export function buildPartialPlan(legs: PartialPlanLegs): PaymentPlan {
+  const slippageBps = resolveSlippageBps(legs.slippageBps ?? DEFAULT_SLIPPAGE_BPS);
+
+  // The direct leg is a same-asset transfer; build it as its own plan so the
+  // existing (well-tested) construction is reused rather than duplicated.
+  const direct = buildPaymentPlan(
+    legs.directQuote,
+    legs.sender,
+    legs.recipient,
+    slippageBps,
+  );
+  const swap = buildPaymentPlan(legs.swapQuote, legs.sender, legs.recipient, slippageBps);
+
+  // Re-id every step with a leg prefix so the two plans' ids can never collide.
+  const directSteps = direct.steps.map((s, i) => ({ ...s, id: `direct-${i}-${s.id}` }));
+  const swapSteps = swap.steps.map((s, i) => ({ ...s, id: `swap-${i}-${s.id}` }));
+  const steps: PlanStep[] = [...directSteps, ...swapSteps];
+
+  // The swap is the step that proves the shortfall was obtained; fall back to
+  // the direct transfer when the swap produced no executable step.
+  const primary =
+    steps.find((s) => s.id.startsWith("swap-") && s.kind === "swap") ??
+    steps.find((s) => s.id.startsWith("direct-") && s.kind === "transfer") ??
+    steps[0];
+
+  return {
+    steps,
+    primaryStepId: primary.id,
+    // Executable only when both legs are; a non-executable leg (no pool data)
+    // means we must not pretend the split can run.
+    executable: direct.executable && swap.executable && steps.length > 0,
+    slippageBps,
+    note: "Partial balance: sends what you hold and swaps the remainder.",
+  };
+}
+
+/**
+ * The least the recipient is guaranteed across a split plan: the direct leg is
+ * fixed, and the swap leg's own on-chain bound is its guarantee. Returned as a
+ * decimal string in the target token's units.
+ */
+export function partialPlanMinimum(legs: PartialPlanLegs): string {
+  const target = legs.swapQuote.receiveToken;
+  const held = parseUnits(legs.directQuote.receiveAmount, target.decimals);
+  const shortfallMin = applySlippageOut(
+    parseUnits(legs.swapQuote.receiveAmount, target.decimals),
+    resolveSlippageBps(legs.slippageBps ?? DEFAULT_SLIPPAGE_BPS),
+  );
+  return formatUnits(held + shortfallMin, target.decimals);
+}
+
 export type PlanEconomics = {
   /** The least the recipient is guaranteed to receive, from the real limits. */
   minimumReceived: string;

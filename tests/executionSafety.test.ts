@@ -5,7 +5,7 @@ import {
   planHasOutputBound,
   type SigningFetchers,
 } from "@/lib/execution/signGuard";
-import { buildPaymentPlan } from "@/lib/execution/plan";
+import { buildPartialPlan, buildPaymentPlan } from "@/lib/execution/plan";
 import { encodeStep, FINALITY_CONFIRMATIONS } from "@/lib/execution/execute";
 import { SWAP_ROUTER_ABI, ERC20_ABI } from "@/lib/execution/abis";
 import { verifyDelivery } from "@/lib/execution/verify";
@@ -377,6 +377,228 @@ describe("execution-safety matrix", () => {
     );
     expect(missing.verified).toBe(false);
     expect(missing.reason).toMatch(/no successful receipt/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Partial-balance split through the signing guard
+// ---------------------------------------------------------------------------
+
+describe("partial-balance split is protected end-to-end", () => {
+  /** A direct same-asset leg: send the held USDC. */
+  function directLeg(intent: CanonicalIntent, held: string, quotedAt = Date.now()): Quote {
+    return {
+      intent: {
+        recipient: intent.recipient,
+        receiveToken: "USDC",
+        receiveAmount: held,
+        amountMode: "recipient_receives",
+      },
+      network: intent.network,
+      payToken: USDC,
+      receiveToken: USDC,
+      payAmount: held,
+      receiveAmount: held,
+      payUsd: Number(held),
+      receiveUsd: Number(held),
+      rate: 1,
+      priceImpact: 0,
+      route: { kind: "direct", hops: [], path: ["USDC", "USDC"], tokens: [USDC, USDC] },
+      totalSenderCostUsd: Number(held),
+      networkCostUsd: 0,
+      quotedAt,
+      exactOutput: false,
+    };
+  }
+
+  /** The swap leg that obtains the shortfall (USDT -> USDC). */
+  function swapLeg(
+    intent: CanonicalIntent,
+    shortfall: string,
+    priceImpact: number | null,
+    quotedAt = Date.now(),
+  ): Quote {
+    return {
+      intent: {
+        recipient: intent.recipient,
+        receiveToken: "USDC",
+        receiveAmount: shortfall,
+        amountMode: "recipient_receives",
+      },
+      network: intent.network,
+      payToken: USDT,
+      receiveToken: USDC,
+      payAmount: (Number(shortfall) * 1.002).toFixed(6),
+      receiveAmount: shortfall,
+      payUsd: Number(shortfall) * 1.002,
+      receiveUsd: Number(shortfall),
+      rate: 1,
+      priceImpact,
+      route: {
+        kind: "swap",
+        hops: [
+          { fromSymbol: "USDT", toSymbol: "USDC", fee: 100, pool: "0x0000000000000000000000000000000000000001" },
+        ],
+        path: ["USDT", "USDC"],
+        tokens: [USDT, USDC],
+      },
+      totalSenderCostUsd: Number(shortfall) * 1.002,
+      networkCostUsd: 0.01,
+      quotedAt,
+      exactOutput: false,
+    };
+  }
+
+  function splitFresh(
+    intent: CanonicalIntent,
+    direct: Quote,
+    swap: Quote,
+  ) {
+    const plan = buildPartialPlan({
+      directQuote: direct,
+      swapQuote: swap,
+      sender: SENDER,
+      recipient: RECIPIENT,
+      slippageBps: 100,
+    });
+    return {
+      plan,
+      quotes: [direct, swap],
+      receiveToken: "USDC",
+      expectedReceive: intent.receiveAmount,
+    };
+  }
+
+  it("builds both legs with real on-chain bounds and is allowed to sign", async () => {
+    const intent = swapIntent();
+    const direct = directLeg(intent, "2");
+    const swap = swapLeg(intent, "3", 0.002);
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: true, fresh: splitFresh(intent, direct, swap) }),
+        covers: () => true,
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.partial).toBe(true);
+      expect(result.plan.steps.some((s) => s.kind === "transfer")).toBe(true);
+      const swaps = result.plan.steps.filter((s) => s.kind === "swap");
+      expect(swaps.length).toBe(1);
+      for (const s of swaps) {
+        expect(s.kind === "swap" && s.amountOutMinimum).toBeGreaterThan(0n);
+      }
+      expect(planHasOutputBound(result.plan)).toBe(true);
+    }
+  });
+
+  it("blocks when the split plan has an unbounded swap leg", async () => {
+    const intent = swapIntent();
+    const direct = directLeg(intent, "2");
+    const swap = swapLeg(intent, "3", 0.002);
+    const fresh = splitFresh(intent, direct, swap);
+    const unbounded = {
+      ...fresh,
+      plan: {
+        ...fresh.plan,
+        steps: fresh.plan.steps.map((s) =>
+          s.kind === "swap" ? { ...s, amountOutMinimum: 0n, limit: 0n } : s,
+        ),
+      },
+    };
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: true, fresh: unbounded }),
+        covers: () => true,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unprotected");
+  });
+
+  it("blocks when EITHER leg's quote is stale", async () => {
+    const intent = swapIntent();
+    const direct = directLeg(intent, "2", Date.now() - 60_000); // stale
+    const swap = swapLeg(intent, "3", 0.002);
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: true, fresh: splitFresh(intent, direct, swap) }),
+        covers: () => true,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("quote_stale");
+  });
+
+  it("blocks when the swap leg's price impact is excessive", async () => {
+    const intent = swapIntent();
+    const direct = directLeg(intent, "2");
+    const swap = swapLeg(intent, "3", 0.5);
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: true, fresh: splitFresh(intent, direct, swap) }),
+        covers: () => true,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("price_impact");
+  });
+
+  it("blocks when the wallet cannot fund both legs", async () => {
+    const intent = swapIntent();
+    const direct = directLeg(intent, "2");
+    const swap = swapLeg(intent, "3", 0.002);
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: true, fresh: splitFresh(intent, direct, swap) }),
+        // The swap leg's source asset is not funded.
+        covers: () => false,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("insufficient_balance");
+  });
+
+  it("aborts a split when the intent changes during preparation", async () => {
+    const intent = swapIntent();
+    const edited = reduceIntent(intent, { receiveAmount: "500" });
+    const direct = directLeg(intent, "2");
+    const swap = swapLeg(intent, "3", 0.002);
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: true, fresh: splitFresh(intent, direct, swap) }),
+        covers: () => true,
+        readIntent: () => edited,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("intent_changed");
+  });
+
+  it("surfaces the fresh-plan failure reason verbatim (no route for the shortfall)", async () => {
+    const intent = swapIntent();
+    const direct = directLeg(intent, "2");
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      {
+        ...fetchers(intent, direct),
+        fetchPlan: async () => ({ ok: false, reason: "quote_unavailable" }),
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("quote_unavailable");
   });
 });
 

@@ -242,6 +242,28 @@ on-chain transfer from the confirmed receipt, against the minimum the
 transaction enforced (the plan's `slippageBps`). A reverted tx is failed;
 an unprovable delivery is shown as unverified — never as success.
 
+## Partial-balance split ("send what you hold + convert the rest")
+
+A token-quantity intent (`receiveTokenAmount`, set only from a genuine
+"send 100 NEWCOIN" phrase — never from a USD intent's derived token amount) may
+exceed what the wallet holds. When another funded asset can cover the shortfall
+the payment runs as **two protected legs**:
+
+- `lib/domain/partialBalance.ts` — pure `splitPayment()` (scaled-integer, never
+  float) decides held vs shortfall; `pickShortfallSource()` picks the most
+  valuable non-target holding.
+- `lib/server/partial.ts` — `buildPartialLegs()` quotes both legs live (direct
+  same-asset transfer of the held part + a real swap for the shortfall). No
+  route for the shortfall → a failure, never a fabricated split.
+- `lib/execution/plan.ts` — `buildPartialPlan()` assembles the step list;
+  `partialPlanMinimum()` is the recipient guarantee across both legs. Each swap
+  leg keeps its own real `amountOutMinimum`.
+- The signing guard rebuilds the split from fresh balances via `fetchPlan` +
+  `covers` (`prepareSigning`), so a sandwich can only make a leg revert.
+- Native MON is never used to cover a shortfall (reserved for gas), and a split
+  is only taken when `flow.partial.covered` is true — otherwise the normal or
+  insufficient path runs unchanged.
+
 ## Testing the flow
 
 

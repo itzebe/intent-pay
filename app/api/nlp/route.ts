@@ -10,11 +10,22 @@ import {
 } from "@/lib/config/tokens";
 import { getRoutingProvider } from "@/lib/providers";
 import type { Balance } from "@/lib/domain/intent";
-import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
-import { mergeDraft, planFromDraft, planFromText } from "@/lib/nlp/engine";
+import { splitPayment } from "@/lib/domain/partialBalance";
+import {
+  ensureCatalog,
+  resolveSymbol,
+  resolveToken,
+  type AmbiguousMatch,
+} from "@/lib/server/discovery";
+import { applyResolvedAsset, mergeDraft, planFromDraft, planFromText } from "@/lib/nlp/engine";
 import { draftToHandoff, type ComposeHandoff } from "@/lib/nlp/handoff";
 import { llmEnabled, extractIntentHint } from "@/lib/nlp/llm";
-import { missingField, emptyIntent, type ParsedPaymentIntent } from "@/lib/nlp/schema";
+import {
+  deriveState,
+  missingField,
+  emptyIntent,
+  type ParsedPaymentIntent,
+} from "@/lib/nlp/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -73,7 +84,40 @@ export async function POST(req: Request) {
     }
 
     const assets = buildAssets(balances);
-    const missing = missingField(plan.draft);
+    let missing = missingField(plan.draft);
+
+    // ---- Live resolution of a named-but-unknown ticker ---------------------
+    // "Send 100 NEWCOIN" names an asset the catalog may not know. Resolve it
+    // live; if several contracts share the ticker, ask the user to pick rather
+    // than guessing. A successful resolution replaces the query with a concrete
+    // asset so the rest of the pipeline runs unchanged.
+    let resolutionPayload: Record<string, unknown> | null = null;
+    if (!missing && plan.draft.assetQuery && !plan.draft.asset) {
+      const resolution = resolveSymbol(plan.draft.assetQuery, network);
+      resolutionPayload = resolutionForPayload(resolution);
+      if (resolution.status === "resolved") {
+        const next = applyResolvedAsset(plan.draft, resolution.token.symbol, symbols);
+        plan = { ...plan, draft: next, state: deriveState(next) };
+        missing = missingField(plan.draft);
+      } else {
+        // Ambiguous or unknown: no quote, no review — the user must clarify.
+        return NextResponse.json({
+          ok: true,
+          network,
+          llm: llmEnabled(),
+          state: plan.state,
+          missing,
+          draft: plan.draft,
+          clarification: plan.clarification,
+          understood: plan.understood,
+          assets,
+          resolution: resolutionPayload,
+          compose: null,
+          handoff: null,
+          error: resolutionForError(resolution),
+        });
+      }
+    }
 
     const payload: Record<string, unknown> = {
       ok: true,
@@ -85,6 +129,10 @@ export async function POST(req: Request) {
       clarification: plan.clarification,
       understood: plan.understood,
       assets,
+      resolution: resolutionPayload,
+      // The wallet's real holding of the requested asset + how much is missing,
+      // so the chat can show "balance 4.2, need 20.8 more" from real data.
+      holding: null as Record<string, unknown> | null,
       compose: null as ComposeHandoff | null,
       handoff: null as { summary: string; price: number | null } | null,
       error: null as { code: string; message: string } | null,
@@ -94,6 +142,9 @@ export async function POST(req: Request) {
     // then the user is still answering questions — no quote, no review.
     if (!missing) {
       const resolved = await resolveToken(plan.draft.asset!, network);
+      if (resolved) {
+        payload.holding = computeHolding(plan.draft, resolved.token, balances);
+      }
       if (!resolved) {
         payload.error = {
           code: "unsupported_token",
@@ -103,7 +154,17 @@ export async function POST(req: Request) {
         const provider = getRoutingProvider(network);
         const price = await provider.priceUsd(resolved.token, network);
         const priceUsd = price.usd > 0 ? price.usd : null;
-        const handoff = draftToHandoff(plan.draft, priceUsd);
+        // The "N A worth of B" form denominates the amount in the source asset,
+        // so it needs the source price too. We fetch it from live data only.
+        let sourcePriceUsd: number | null = null;
+        if (plan.draft.sourceAsset) {
+          const sourceResolved = await resolveToken(plan.draft.sourceAsset, network);
+          if (sourceResolved) {
+            const sp = await provider.priceUsd(sourceResolved.token, network);
+            sourcePriceUsd = sp.usd > 0 ? sp.usd : null;
+          }
+        }
+        const handoff = draftToHandoff(plan.draft, priceUsd, sourcePriceUsd);
         if (handoff.ok) {
           payload.compose = handoff.compose;
           payload.handoff = { summary: handoff.summary, price: priceUsd };
@@ -140,10 +201,98 @@ function parseDraft(raw: unknown): ParsedPaymentIntent | null {
     amount: str(r.amount),
     amountType: amountType ?? base.amountType,
     asset: str(r.asset),
+    assetQuery: str(r.assetQuery),
+    sourceAsset: str(r.sourceAsset),
     recipientAddress: str(r.recipientAddress),
     recipientName: str(r.recipientName),
     status: base.status,
   };
+}
+
+/**
+ * The wallet's real holding of the requested asset, plus how much more is
+ * needed. Only a token-amount instruction yields a shortfall (a USD-value
+ * instruction is expressed as a dollar target, not a token quantity). Returns
+ * null when we cannot compare (no balance entry) — never a guessed number.
+ */
+function computeHolding(
+  draft: ParsedPaymentIntent,
+  token: TokenConfig,
+  balances: Balance[],
+): Record<string, unknown> | null {
+  const bal = balances.find(
+    (b) =>
+      (b.token?.address ?? "").toLowerCase() === token.address.toLowerCase() ||
+      (b.token?.symbol ?? "").toLowerCase() === token.symbol.toLowerCase(),
+  );
+  const held = bal?.amount ?? "0";
+  if (draft.amountType !== "TOKEN_AMOUNT" || !draft.amount) {
+    return { token: token.symbol, address: token.address, held, needed: null, shortfall: null };
+  }
+  const split = splitPayment(draft.amount, held, token.decimals);
+  return {
+    token: token.symbol,
+    address: token.address,
+    held,
+    needed: draft.amount,
+    shortfall: split.mode === "direct" ? null : split.shortfall,
+    mode: split.mode,
+  };
+}
+
+/** The resolution outcome for the client, or null when none was attempted. */
+function resolutionForPayload(
+  resolution: ReturnType<typeof resolveSymbol>,
+): Record<string, unknown> | null {
+  if (resolution.status === "resolved") {
+    return {
+      status: "resolved",
+      symbol: resolution.token.symbol,
+      address: resolution.token.address,
+      decimals: resolution.token.decimals,
+      name: resolution.token.name,
+      listed: resolution.listed,
+      source: resolution.source,
+    };
+  }
+  if (resolution.status === "ambiguous") {
+    return {
+      status: "ambiguous",
+      query: resolution.query,
+      matches: resolution.matches.map((m: AmbiguousMatch) => ({
+        address: m.address,
+        symbol: m.symbol,
+        name: m.name,
+        decimals: m.decimals,
+        listed: m.listed,
+        source: m.source,
+        logoURI: m.logoURI,
+      })),
+    };
+  }
+  return { status: "not_found", query: resolution.query };
+}
+
+/**
+ * The honest, non-fatal error for a failed resolution: never a quote, never a
+ * guess. The client asks the user to pick a contract or paste an address.
+ */
+function resolutionForError(
+  resolution: ReturnType<typeof resolveSymbol>,
+): { code: string; message: string } | null {
+  if (resolution.status === "ambiguous") {
+    return {
+      code: "ambiguous_token",
+      message: `Several Monad tokens are named ${resolution.query}. Choose the exact one (or paste its contract address).`,
+    };
+  }
+  if (resolution.status === "not_found") {
+    return {
+      code: "unsupported_token",
+      message: `We couldn't find a Monad token called ${resolution.query}. Paste its contract address if it launched recently.`,
+    };
+  }
+  return null;
 }
 
 export type NlpAsset = {

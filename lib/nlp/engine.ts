@@ -81,10 +81,46 @@ export function mergeDraft(
     next.amount = parsed.amount;
     next.amountType = parsed.amountType;
   }
-  if (parsed.asset) next.asset = parsed.asset;
+  // A newly-named asset replaces a previously unresolved query, and vice versa:
+  // naming a concrete symbol clears the pending resolution request.
+  if (parsed.asset) {
+    next.asset = parsed.asset;
+    next.assetQuery = null;
+  }
+  if (parsed.assetQuery && !parsed.asset) {
+    next.assetQuery = parsed.assetQuery;
+    next.asset = null;
+  }
+  if (parsed.sourceAsset) next.sourceAsset = parsed.sourceAsset;
   if (parsed.recipientAddress) next.recipientAddress = parsed.recipientAddress;
   if (parsed.recipientName) next.recipientName = parsed.recipientName;
   return next;
+}
+
+/**
+ * Record the outcome of resolving an `assetQuery`: set the concrete asset and
+ * clear the pending query. The symbol is validated against the known set, so a
+ * resolution can only ever produce a token the catalog recognises.
+ */
+export function applyResolvedAsset(
+  draft: ParsedPaymentIntent,
+  symbol: string,
+  symbols: string[],
+): ParsedPaymentIntent {
+  const patch = sanitizePatch({ asset: symbol }, symbols);
+  if (!patch.asset) return draft;
+  const next: ParsedPaymentIntent = { ...draft, asset: patch.asset, assetQuery: null };
+  return { ...next, status: statusFor(next) };
+}
+
+/** Record a ticker the user named that still needs live resolution. */
+export function applyAssetQuery(
+  draft: ParsedPaymentIntent,
+  query: string,
+): ParsedPaymentIntent {
+  const patch = sanitizePatch({ assetQuery: query }, []);
+  if (!patch.assetQuery) return draft;
+  return { ...draft, asset: null, assetQuery: patch.assetQuery };
 }
 
 /** Apply a user's asset choice to the draft (validated against known symbols). */
@@ -123,14 +159,10 @@ export function applyAmount(
 
 /** Status to mirror onto the draft as fields are filled in. */
 function statusFor(draft: ParsedPaymentIntent): ParsedPaymentIntent["status"] {
-  const complete =
-    Boolean(draft.amount && draft.amountType) &&
-    Boolean(draft.asset) &&
-    isEvmAddress(draft.recipientAddress ?? "");
   if (!draft.amount || !draft.amountType) return "incomplete";
-  if (!draft.asset) return "incomplete";
+  if (!draft.asset && !draft.assetQuery) return "incomplete";
   if (!isEvmAddress(draft.recipientAddress ?? "")) return "incomplete";
-  return complete ? "ready" : "incomplete";
+  return "ready";
 }
 
 function hasPatch(hint: ParseHint, symbols: string[]): boolean {

@@ -291,6 +291,117 @@ export async function resolveToken(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Symbol resolution with ambiguity detection
+//
+// A token launched after deployment is not in the catalog. When the user names
+// it by ticker or name we search the live catalog and the runtime registry.
+// Crucially, if *several distinct contracts* share that ticker we must NOT
+// guess: we return them all and ask the user to pick (or paste an address).
+// Identity is always (chain, contract address) — never symbol.
+// ---------------------------------------------------------------------------
+
+export type AmbiguousMatch = {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  listed: boolean;
+  source?: string;
+  logoURI?: string;
+};
+
+export type SymbolResolution =
+  | { status: "resolved"; token: TokenConfig; listed: boolean; source: string }
+  | { status: "ambiguous"; query: string; matches: AmbiguousMatch[] }
+  | { status: "not_found"; query: string };
+
+/**
+ * Resolve a ticker/name the user typed to a single token, or report honestly
+ * that it is ambiguous or unknown. Never guesses between two same-symbol
+ * contracts.
+ *
+ * Order of attack:
+ *   1. exact symbol in the runtime registry (a previously resolved token),
+ *   2. exact symbol in the live catalog,
+ *   3. exact name match in the live catalog,
+ *   4. a single substring match — only when it is unambiguous.
+ */
+export function resolveSymbol(query: string, _network: MonadNetwork = "mainnet"): SymbolResolution {
+  const needle = (query ?? "").trim();
+  if (!needle) return { status: "not_found", query: needle };
+  const lower = needle.toLowerCase();
+
+  // Everything we know: the live catalog plus anything registered at runtime
+  // (a pasted address, a wallet-scanned asset). De-duplicated by contract.
+  const byAddress = new Map<string, AmbiguousMatch>();
+  const add = (e: AmbiguousMatch) => {
+    const k = keyOf(e.address);
+    const existing = byAddress.get(k);
+    // A listed entry wins over an unlisted one for display metadata.
+    if (existing && existing.listed && !e.listed) return;
+    byAddress.set(k, e);
+  };
+
+  for (const c of curatedCatalog()) {
+    add({
+      address: c.address,
+      symbol: c.symbol,
+      name: c.name,
+      decimals: c.decimals,
+      listed: true,
+      source: "list",
+      logoURI: c.logoURI,
+    });
+  }
+  for (const t of allTokens()) {
+    add({
+      address: t.address,
+      symbol: t.symbol,
+      name: t.name,
+      decimals: t.decimals,
+      listed: curatedHas(t.address) || Boolean(t.seed),
+      source: t.source,
+      logoURI: t.logoURI,
+    });
+  }
+  const all = [...byAddress.values()];
+
+  const finish = (matches: AmbiguousMatch[]): SymbolResolution => {
+    if (matches.length === 0) return { status: "not_found", query: needle };
+    if (matches.length > 1) return { status: "ambiguous", query: needle, matches };
+    const m = matches[0];
+    // Register so the token is resolvable app-wide afterwards.
+    const token = registerToken({
+      symbol: m.symbol,
+      name: m.name,
+      address: m.address as Address,
+      decimals: m.decimals,
+      fallbackUsd: 0,
+      tint: tintForAddress(m.address),
+      source: (m.source as TokenConfig["source"]) ?? "list",
+      logoURI: m.logoURI,
+    });
+    return { status: "resolved", token, listed: m.listed, source: m.source ?? "list" };
+  };
+
+  // 1 + 2. Exact symbol.
+  const exactSymbol = all.filter((e) => e.symbol.toLowerCase() === lower);
+  if (exactSymbol.length) return finish(exactSymbol);
+
+  // 3. Exact name.
+  const exactName = all.filter((e) => e.name.toLowerCase() === lower);
+  if (exactName.length) return finish(exactName);
+
+  // 4. Unambiguous substring on symbol or name.
+  const partial = all.filter(
+    (e) => e.symbol.toLowerCase().includes(lower) || e.name.toLowerCase().includes(lower),
+  );
+  if (partial.length) return finish(partial);
+
+  return { status: "not_found", query: needle };
+}
+
 /** A metadata-less placeholder — never invents a symbol or name. */
 function placeholder(address: string): TokenConfig {
   return {

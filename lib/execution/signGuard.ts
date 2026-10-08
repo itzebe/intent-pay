@@ -57,11 +57,43 @@ export type SigningContext = {
   slippageBps?: number;
 };
 
+/**
+ * A freshly-built execution plan plus the quotes it was built from. A partial
+ * ("send what you hold + convert the rest") payment has two legs and therefore
+ * two quotes; a normal payment has one. Returning the set lets the guard apply
+ * freshness, price-impact and balance checks uniformly.
+ */
+export type FreshPlan = {
+  plan: PaymentPlan;
+  /** Every quote the plan was constructed from (all must be fresh). */
+  quotes: Quote[];
+  /** The token the recipient receives. */
+  receiveToken: string;
+  /** The total the recipient should receive across all legs. */
+  expectedReceive: string;
+};
+
 export type SigningFetchers = {
   /** Read the wallet's current balances from the chain. */
   fetchBalances: () => Promise<FreshBalances>;
   /** Re-run the full quote/route/pricing pipeline for the intent. */
   fetchQuote: (intent: CanonicalIntent) => Promise<QuoteResult>;
+  /**
+   * Optional: build the fresh plan directly (used for a partial-balance split,
+   * where the plan has two legs and one quote is not enough). When present it
+   * replaces `fetchQuote` + `buildPaymentPlan`, but every downstream protection
+   * check still runs. Returning `{ ok: false }` blocks signing.
+   */
+  fetchPlan?: (
+    intent: CanonicalIntent,
+    balances: Balance[],
+  ) => Promise<{ ok: true; fresh: FreshPlan } | { ok: false; reason: SigningAbortReason }>;
+  /**
+   * Optional: coverage check for the built plan. A split plan is covered only
+   * when the wallet funds *both* legs, so the default single-quote check is not
+   * sufficient.
+   */
+  covers?: (balances: Balance[], plan: PaymentPlan) => boolean;
   /**
    * Re-resolve paymaster/gas eligibility against the connected wallet right
    * now. Returns the mode the wallet can actually deliver.
@@ -89,6 +121,12 @@ export type SigningPlan = {
   ok: true;
   plan: PaymentPlan;
   quote: Quote;
+  /** The token the recipient receives (a split plan may have two quotes). */
+  receiveToken: string;
+  /** The total the recipient should receive across all legs. */
+  expectedReceive: string;
+  /** A partial-balance split was used (held + converted shortfall). */
+  partial: boolean;
   gasMode: GasMode;
   version: number;
   key: string;
@@ -154,12 +192,30 @@ export async function prepareSigning(
     actualVersion,
   });
 
-  // 1 + 2. Fresh balances and a fresh quote, concurrently with the re-read of
-  // the current intent.
-  const [balances, quoteResult] = await Promise.all([
-    fetchers.fetchBalances().catch(() => [] as FreshBalances),
-    fetchers.fetchQuote(ctx.intent),
-  ]);
+  // 1 + 2. Fresh balances and a fresh plan/quote. A partial payment supplies
+  // `fetchPlan` (two legs) and needs the fresh balances to know how much is
+  // held; otherwise we quote then build. Both run before the intent re-read.
+  const balances = await fetchers.fetchBalances().catch(() => [] as FreshBalances);
+  const freshResult = fetchers.fetchPlan
+    ? await fetchers.fetchPlan(ctx.intent, balances)
+    : await fetchers.fetchQuote(ctx.intent).then((r) =>
+        r.ok
+          ? ({
+              ok: true as const,
+              fresh: {
+                plan: buildPaymentPlan(
+                  r.quote,
+                  ctx.sender,
+                  ctx.recipient,
+                  ctx.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
+                ),
+                quotes: [r.quote],
+                receiveToken: r.quote.receiveToken.symbol,
+                expectedReceive: r.quote.receiveAmount,
+              },
+            })
+          : ({ ok: false as const, reason: "quote_unavailable" as const }),
+      );
 
   // 3. Re-read the intent *after* the network round-trips. If the user edited
   // anything while we were fetching, this is a different request.
@@ -179,28 +235,44 @@ export async function prepareSigning(
     return block("account_changed", current.version);
   }
 
-  if (!quoteResult.ok) return block("quote_unavailable", current.version);
-  const quote = quoteResult.quote;
+  if (!freshResult.ok) return block(freshResult.reason, current.version);
+  const { plan, quotes, receiveToken, expectedReceive } = freshResult.fresh;
+  const quote = quotes[0];
 
-  // 4. The fresh quote must be inside its freshness window. A quote that is
+  // 4. Every fresh quote must be inside its freshness window. A quote that is
   // already stale when it comes back means the market is moving too fast to
-  // safely sign.
-  if (isQuoteStale(quote.quotedAt, now())) return block("quote_stale", current.version);
+  // safely sign. A split plan has two quotes; both must be fresh.
+  if (quotes.some((q) => isQuoteStale(q.quotedAt, now()))) {
+    return block("quote_stale", current.version);
+  }
 
-  // 5. The quote must actually describe the current intent — the route layer
-  // echoes the intent it priced, so a mismatch is a hard stop.
-  if (!quoteMatchesIntent(quote, current)) return block("intent_mismatch", current.version);
+  // 5. Every quote must actually describe the current intent — the route layer
+  // echoes the intent it priced, so a mismatch is a hard stop. A split plan's
+  // legs are sub-amounts of the intent (the direct leg's pay == receive == the
+  // target), so for a split we verify the parameters that decide *where* money
+  // goes — recipient, receive token, network — rather than each leg's amount.
+  const partial = Boolean(fetchers.fetchPlan);
+  for (const q of quotes) {
+    const ok = partial
+      ? quoteMatchesIntentPartial(q, current)
+      : quoteMatchesIntent(q, current);
+    if (!ok) return block("intent_mismatch", current.version);
+  }
 
   // 5b. A route whose live price impact exceeds the configured ceiling is
   // blocked *before signing*. Slippage is never widened to make a bad route
   // execute; an unknown impact does not block (we never invent one).
-  if (assessPriceImpact(quote.priceImpact).blocked) {
+  if (quotes.some((q) => assessPriceImpact(q.priceImpact).blocked)) {
     return block("price_impact", current.version);
   }
 
-  // 6. The fresh balances must still cover the fresh quote. A balance that
-  // drained between review and signing must block, not sign.
-  if (!coversBalance(balances, quote)) return block("insufficient_balance", current.version);
+  // 6. The fresh balances must still cover the fresh plan. A balance that
+  // drained between review and signing must block, not sign. A split plan is
+  // covered only when the wallet funds *both* legs, so it supplies its own check.
+  const covered = fetchers.covers
+    ? fetchers.covers(balances, plan)
+    : coversBalance(balances, quote);
+  if (!covered) return block("insufficient_balance", current.version);
 
   // 7. Paymaster/gas eligibility is resolved live, against the connected wallet.
   const gasMode = await fetchers.resolveGas();
@@ -216,19 +288,10 @@ export async function prepareSigning(
     }
   }
 
-  // 9. Rebuild the transaction plan from the *fresh* quote, with the clamped
-  // slippage bound. Calldata is never reused from an earlier build.
-  let plan: PaymentPlan;
-  try {
-    plan = buildPaymentPlan(quote, ctx.sender, ctx.recipient, ctx.slippageBps ?? DEFAULT_SLIPPAGE_BPS);
-  } catch {
-    return block("quote_unavailable", current.version);
-  }
+  // 9. The plan must be executable, and every executable swap must carry a real
+  // on-chain bound. A swap step that could be signed with no minimum output is
+  // refused here — the UI's "Minimum received" figure is never the protection.
   if (!plan.executable) return block("not_ready", current.version);
-
-  // 9b. Every executable swap must carry a real on-chain bound. A swap step
-  // that could be signed with no minimum output is refused here — the UI's
-  // "Minimum received" figure is never the protection.
   if (!planHasOutputBound(plan)) return block("unprotected", current.version);
 
   // 10. Final re-read: a change that landed during plan construction also aborts.
@@ -245,6 +308,9 @@ export async function prepareSigning(
     ok: true,
     plan,
     quote,
+    receiveToken,
+    expectedReceive,
+    partial: Boolean(fetchers.fetchPlan),
     gasMode,
     version: final.version,
     key: final.key,
@@ -310,6 +376,23 @@ export function quoteMatchesIntent(quote: Quote, intent: CanonicalIntent): boole
     q.receiveAmount === intent.receiveAmount &&
     q.amountMode === intent.amountMode &&
     quote.payToken.symbol === intent.payToken &&
+    quote.network === intent.network
+  );
+}
+
+/**
+ * The subset of the match that a split plan's leg must satisfy: where the money
+ * goes (recipient), what the recipient gets (receive token), and on which chain.
+ * A leg's amount is a sub-amount of the intent by construction, and the direct
+ * leg's pay token is the target itself, so neither is compared here. The
+ * authoritative amount check for a split is the plan's own on-chain bounds.
+ */
+export function quoteMatchesIntentPartial(quote: Quote, intent: CanonicalIntent): boolean {
+  const q = quote.intent;
+  return (
+    q.recipient.trim().toLowerCase() === intent.recipient.trim().toLowerCase() &&
+    q.receiveToken === intent.receiveToken &&
+    quote.receiveToken.symbol === intent.receiveToken &&
     quote.network === intent.network
   );
 }

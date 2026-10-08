@@ -52,6 +52,19 @@ export type ParsedPaymentIntent = {
   amountType: AmountType | null;
   /** Receive-asset *symbol* (e.g. "MON"), resolved against the catalog. */
   asset: string | null;
+  /**
+   * An asset the user named by ticker/name that is *not* in the catalog yet.
+   * It is a resolution *request*, not an asset: the discovery layer attempts to
+   * resolve it live and, when several tokens share the symbol/name, asks the
+   * user to pick rather than guessing. Never treated as a resolved asset.
+   */
+  assetQuery: string | null;
+  /**
+   * An explicit *source* asset, for the "X A worth of B" form: the user fixes
+   * both what they spend (A) and what the recipient gets (B). Present only when
+   * the user named both sides; otherwise the source is the normal recommendation.
+   */
+  sourceAsset: string | null;
   /** A wallet address the user typed. Only ever an explicit 0x address. */
   recipientAddress: string | null;
   /** A human name the user typed (e.g. "John"). Never turned into an address. */
@@ -65,6 +78,8 @@ export function emptyIntent(network: MonadNetwork = "mainnet"): ParsedPaymentInt
     amount: null,
     amountType: null,
     asset: null,
+    assetQuery: null,
+    sourceAsset: null,
     recipientAddress: null,
     recipientName: null,
     network,
@@ -77,7 +92,11 @@ export type MissingField = "amount" | "asset" | "recipient" | null;
 
 export function missingField(intent: ParsedPaymentIntent): MissingField {
   if (!intent.amount || !intent.amountType) return "amount";
-  if (!intent.asset) return "asset";
+  // An `assetQuery` (a ticker the user named that isn't catalogued yet) fills
+  // the asset slot at the *parser* level: the user has told us what they want,
+  // so we resolve it live rather than asking "which asset?" again. Resolution
+  // failure or ambiguity is surfaced by the discovery layer, not as a question.
+  if (!intent.asset && !intent.assetQuery) return "asset";
   // A name without an address is *not* a resolved recipient. We never guess an
   // address from a name, so the address is the only thing that clears this.
   if (!isEvmAddress(intent.recipientAddress ?? "")) return "recipient";
@@ -130,10 +149,22 @@ export type IntentPatch = Partial<{
   amount: string;
   amountType: AmountType;
   asset: string;
+  assetQuery: string;
+  sourceAsset: string;
   recipientName: string;
 }>;
 
-const ALLOWED_KEYS = new Set(["amount", "amountType", "asset", "recipientName"]);
+const ALLOWED_KEYS = new Set([
+  "amount",
+  "amountType",
+  "asset",
+  "assetQuery",
+  "sourceAsset",
+  "recipientName",
+]);
+
+/** A plausible ticker/name token: 1–20 chars, starts with a letter. */
+const TICKER_RE = /^[A-Za-z][A-Za-z0-9._-]{0,19}$/;
 
 function isPositiveDecimalString(v: unknown): v is string {
   if (typeof v !== "string") return false;
@@ -156,6 +187,16 @@ export function sanitizePatch(raw: unknown, knownSymbols: Iterable<string>): Int
     if (k === "amountType" && (v === "USD_VALUE" || v === "TOKEN_AMOUNT")) out.amountType = v;
     if (k === "asset" && typeof v === "string" && symbols.has(v.trim().toLowerCase())) {
       out.asset = v.trim();
+    }
+    // `assetQuery`/`sourceAsset` are resolution *requests*: the LLM may name a
+    // ticker we don't know (that is the point), so they are validated as
+    // well-formed tickers, not against the known-symbol set. They can never
+    // carry an address, price, or route — those keys are not on this type.
+    if (k === "assetQuery" && typeof v === "string" && TICKER_RE.test(v.trim())) {
+      out.assetQuery = v.trim();
+    }
+    if (k === "sourceAsset" && typeof v === "string" && TICKER_RE.test(v.trim())) {
+      out.sourceAsset = v.trim();
     }
     if (
       k === "recipientName" &&

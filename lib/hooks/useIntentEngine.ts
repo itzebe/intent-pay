@@ -31,6 +31,24 @@ export type NlpAsset = {
   requiresSwap: boolean;
 };
 
+/** The outcome of resolving a ticker the user named that wasn't catalogued. */
+export type NlpResolution =
+  | { status: "resolved"; symbol: string; address: string; decimals: number; name: string; listed: boolean; source?: string }
+  | {
+      status: "ambiguous";
+      query: string;
+      matches: {
+        address: string;
+        symbol: string;
+        name: string;
+        decimals: number;
+        listed: boolean;
+        source?: string;
+        logoURI?: string;
+      }[];
+    }
+  | { status: "not_found"; query: string };
+
 export type NlpResult = {
   ok: true;
   network: MonadNetwork;
@@ -41,6 +59,16 @@ export type NlpResult = {
   clarification: Clarification;
   understood: string[];
   assets: NlpAsset[];
+  resolution: NlpResolution | null;
+  /** The wallet's real holding of the requested asset + any shortfall. */
+  holding: {
+    token: string;
+    address: string;
+    held: string;
+    needed: string | null;
+    shortfall: string | null;
+    mode?: "direct" | "swap" | "split";
+  } | null;
   compose: ComposeHandoff | null;
   handoff: { summary: string; price: number | null } | null;
   error: { code: string; message: string } | null;

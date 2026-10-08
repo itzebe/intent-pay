@@ -13,7 +13,7 @@ vi.mock("@/lib/server/rpc", () => ({
   getPublicClient: () => ({ getBytecode, call, multicall: vi.fn(async () => []) }),
 }));
 
-const { resolveByAddress, resolveToken } = await import("@/lib/server/discovery");
+const { resolveByAddress, resolveToken, resolveSymbol } = await import("@/lib/server/discovery");
 const { getTokenByAddress, registerToken, tintForAddress } = await import("@/lib/config/tokens");
 
 /** ABI-encode a string return value (offset + length + data). */
@@ -125,5 +125,74 @@ describe("resolveToken by symbol", () => {
   it("returns null for an unknown symbol that is not an address", async () => {
     const res = await resolveToken("NOT-A-TOKEN-XYZ", "mainnet");
     expect(res).toBeNull();
+  });
+});
+
+describe("resolveSymbol — ambiguity is never guessed", () => {
+  it("resolves a unique symbol in the catalog", () => {
+    const r = resolveSymbol("USDC");
+    expect(r.status).toBe("resolved");
+    if (r.status === "resolved") {
+      expect(r.token.symbol).toBe("USDC");
+      expect(r.token.address).toBe("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");
+    }
+  });
+
+  it("resolves a runtime-registered token that is not in the catalog", () => {
+    const addr = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" as Address;
+    registerToken({
+      symbol: "NEWCOIN",
+      name: "New Coin",
+      address: addr,
+      decimals: 18,
+      fallbackUsd: 0,
+      tint: tintForAddress(addr),
+      source: "onchain",
+    });
+    const r = resolveSymbol("NEWCOIN");
+    expect(r.status).toBe("resolved");
+    if (r.status === "resolved") {
+      expect(r.token.address).toBe(addr);
+      expect(r.token.decimals).toBe(18);
+    }
+  });
+
+  it("returns AMBIGUOUS (never a guess) when two contracts share a ticker", () => {
+    const a = "0x1111111111111111111111111111111111111111" as Address;
+    const b = "0x2222222222222222222222222222222222222222" as Address;
+    registerToken({
+      symbol: "DUP",
+      name: "Dup One",
+      address: a,
+      decimals: 18,
+      fallbackUsd: 0,
+      tint: tintForAddress(a),
+      source: "onchain",
+    });
+    registerToken({
+      symbol: "DUP",
+      name: "Dup Two",
+      address: b,
+      decimals: 6,
+      fallbackUsd: 0,
+      tint: tintForAddress(b),
+      source: "onchain",
+    });
+    const r = resolveSymbol("DUP");
+    expect(r.status).toBe("ambiguous");
+    if (r.status === "ambiguous") {
+      expect(r.matches.length).toBe(2);
+      const addrs = r.matches.map((m) => m.address.toLowerCase()).sort();
+      expect(addrs).toEqual([a.toLowerCase(), b.toLowerCase()]);
+    }
+  });
+
+  it("reports NOT_FOUND for a ticker that exists nowhere", () => {
+    const r = resolveSymbol("TOTALLY-MADE-UP-TOKEN-9");
+    expect(r.status).toBe("not_found");
+  });
+
+  it("never resolves an empty query", () => {
+    expect(resolveSymbol("").status).toBe("not_found");
   });
 });

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { decodeFunctionData } from "viem";
-import { buildPaymentPlan, describePlan, planEconomics } from "@/lib/execution/plan";
+import {
+  buildPartialPlan,
+  buildPaymentPlan,
+  describePlan,
+  partialPlanMinimum,
+  planEconomics,
+} from "@/lib/execution/plan";
 import { planHasOutputBound } from "@/lib/execution/signGuard";
 import { encodeStep } from "@/lib/execution/execute";
 import { SWAP_ROUTER_ABI } from "@/lib/execution/abis";
@@ -69,6 +75,125 @@ describe("buildPaymentPlan", () => {
       "Approve up to 5.01 USDT for the route",
       "Convert USDT → USDC",
     ]);
+  });
+});
+
+describe("partial-balance split plan", () => {
+  it("combines a direct transfer of the held amount with a swap of the shortfall", () => {
+    const target = getToken("USDC")!;
+    const source = getToken("USDT")!;
+    // Direct leg: send the 40 held.
+    const directQuote = quote({
+      route: { kind: "direct", hops: [], path: ["USDC", "USDC"] },
+      payToken: target,
+      receiveToken: target,
+      payAmount: "40",
+      receiveAmount: "40",
+    });
+    // Swap leg: obtain the 60 shortfall.
+    const swapQuote = quote({
+      route: {
+        kind: "swap",
+        hops: [{ fromSymbol: "USDT", toSymbol: "USDC", fee: 100, pool: "0x0000000000000000000000000000000000000001" }],
+        path: ["USDT", "USDC"],
+        tokens: [source, target],
+      },
+      payToken: source,
+      receiveToken: target,
+      payAmount: "60.1",
+      receiveAmount: "60",
+      exactOutput: false,
+    });
+
+    const plan = buildPartialPlan({
+      directQuote,
+      swapQuote,
+      sender: SENDER,
+      recipient: RECIPIENT,
+    });
+    expect(plan.executable).toBe(true);
+    expect(plan.note).toMatch(/partial balance/i);
+    const labels = describePlan(plan);
+    expect(labels.some((l) => /send usdc to recipient/i.test(l))).toBe(true);
+    expect(labels.some((l) => /convert usdt → usdc/i.test(l))).toBe(true);
+    // Both legs' step ids are namespaced so they can never collide.
+    const ids = plan.steps.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("is not executable when the swap leg has no real route", () => {
+    const target = getToken("USDC")!;
+    const directQuote = quote({
+      route: { kind: "direct", hops: [], path: ["USDC", "USDC"] },
+      payToken: target,
+      receiveToken: target,
+      payAmount: "40",
+      receiveAmount: "40",
+    });
+    // A hop-less swap is not executable (no pool data).
+    const swapQuote = quote({});
+    const plan = buildPartialPlan({ directQuote, swapQuote, sender: SENDER, recipient: RECIPIENT });
+    expect(plan.executable).toBe(false);
+  });
+
+  it("computes the guaranteed minimum across both legs from their real bounds", () => {
+    const target = getToken("USDC")!;
+    const source = getToken("USDT")!;
+    const directQuote = quote({
+      route: { kind: "direct", hops: [], path: ["USDC", "USDC"] },
+      payToken: target,
+      receiveToken: target,
+      payAmount: "40",
+      receiveAmount: "40",
+    });
+    const swapQuote = quote({
+      route: {
+        kind: "swap",
+        hops: [{ fromSymbol: "USDT", toSymbol: "USDC", fee: 100, pool: "0x0000000000000000000000000000000000000001" }],
+        path: ["USDT", "USDC"],
+        tokens: [source, target],
+      },
+      payToken: source,
+      receiveToken: target,
+      payAmount: "60.1",
+      receiveAmount: "60",
+      exactOutput: false,
+    });
+    // 40 fixed + 60 less 50 bps (0.5%) = 40 + 59.7 = 99.7.
+    const min = partialPlanMinimum({ directQuote, swapQuote, sender: SENDER, recipient: RECIPIENT, slippageBps: 50 });
+    expect(min).toBe("99.7");
+  });
+
+  it("every swap step in a split plan still carries a real on-chain bound", () => {
+    const target = getToken("USDC")!;
+    const source = getToken("USDT")!;
+    const directQuote = quote({
+      route: { kind: "direct", hops: [], path: ["USDC", "USDC"] },
+      payToken: target,
+      receiveToken: target,
+      payAmount: "40",
+      receiveAmount: "40",
+    });
+    const swapQuote = quote({
+      route: {
+        kind: "swap",
+        hops: [{ fromSymbol: "USDT", toSymbol: "USDC", fee: 100, pool: "0x0000000000000000000000000000000000000001" }],
+        path: ["USDT", "USDC"],
+        tokens: [source, target],
+      },
+      payToken: source,
+      receiveToken: target,
+      payAmount: "60.1",
+      receiveAmount: "60",
+      exactOutput: false,
+    });
+    const plan = buildPartialPlan({ directQuote, swapQuote, sender: SENDER, recipient: RECIPIENT });
+    expect(planHasOutputBound(plan)).toBe(true);
+    // And the encoded calldata really contains a non-zero amountOutMinimum.
+    const swapStep = plan.steps.find((s) => s.kind === "swap")!;
+    const call = encodeStep(swapStep);
+    const decoded = decodeFunctionData({ abi: SWAP_ROUTER_ABI, data: call.data! });
+    expect((decoded.args[0] as { amountOutMinimum: bigint }).amountOutMinimum).toBeGreaterThan(0n);
   });
 });
 

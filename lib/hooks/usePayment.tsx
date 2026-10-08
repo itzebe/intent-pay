@@ -13,6 +13,7 @@ import { getToken, getTokenByAddress, registerToken, tintForAddress, type TokenC
 import type { AmountMode, Balance, Quote } from "@/lib/domain/intent";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { parseUnits } from "@/lib/domain/math";
+import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
 import { isQuoteStale, QUOTE_REFRESH_AFTER_MS } from "@/lib/domain/freshness";
 import {
   initialIntent,
@@ -118,6 +119,8 @@ type FlowContextValue = FlowState & {
     amountMode?: AmountMode;
     payToken?: string;
     payTokenSource?: "user" | "intent";
+    /** The exact token quantity the user named, when they named one. */
+    receiveTokenAmount?: string;
   }) => void;
   recommendedPayToken: string | null;
   balanceFor: (symbol: string) => Balance | undefined;
@@ -151,6 +154,19 @@ type FlowContextValue = FlowState & {
     requiredMon: string;
     availableMon: string;
   };
+  /**
+   * Partial-balance eligibility for the current intent. Present only for a
+   * token-quantity intent; describes how much is held, the shortfall, and which
+   * funded asset would cover it. Null when the intent is not a token quantity.
+   */
+  partial: {
+    eligible: boolean;
+    mode: "direct" | "swap" | "split";
+    held: string;
+    shortfall: string;
+    sourceSymbol: string | null;
+    covered: boolean;
+  } | null;
   /** How gas will actually be paid, resolved against the connected wallet. */
   gasMode: GasMode;
   /** The live gas-mode resolution, including whether the wallet is capable. */
@@ -348,6 +364,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       amountMode?: AmountMode;
       payToken?: string;
       payTokenSource?: "user" | "intent";
+      receiveTokenAmount?: string;
     }) => {
       const amountMode = input.amountMode ?? "recipient_receives";
       setState((s) => {
@@ -359,6 +376,9 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
           receiveTokenAddress: receiveCfg?.address,
           receiveAmount: input.receiveAmountUsd,
           amountMode,
+          // A token-quantity intent keeps its exact target so the partial
+          // split knows precisely how much the recipient must receive.
+          receiveTokenAmount: input.receiveTokenAmount,
           // When the instruction deterministically named a source asset
           // ("Send 10 MON"), honour it. When it did not, the source is only
           // *recommended* and the user must still confirm it before Review.
@@ -614,6 +634,59 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state.quote, state.balances, state.intent.payToken, payTokenConfig]);
 
+  // ---- Partial-balance eligibility -----------------------------------------
+  // A token-quantity intent ("send 100 NEWCOIN") may exceed what the wallet
+  // holds. When another funded asset can cover the shortfall, the payment is
+  // satisfiable by sending what is held and converting the rest. The exact
+  // affordability is enforced by the signing guard against the fresh split; here
+  // we only decide whether the split path is available at all.
+  const partial = useMemo(() => {
+    // A partial split only makes sense for a non-native target the wallet can
+    // hold directly; the gas asset is never split.
+    if (
+      state.intent.amountMode !== "recipient_receives" ||
+      !state.intent.receiveTokenAmount ||
+      receiveTokenConfig.native
+    ) {
+      return null;
+    }
+    const targetAddr = (state.intent.receiveTokenAddress ?? receiveTokenConfig.address ?? "").toLowerCase();
+    const held =
+      state.balances.find(
+        (b) =>
+          !b.token.native &&
+          ((b.token.address ?? "").toLowerCase() === targetAddr ||
+            b.token.symbol.toLowerCase() === state.intent.receiveToken.toLowerCase()),
+      )?.amount ?? "0";
+    const split = splitPayment(state.intent.receiveTokenAmount, held, receiveTokenConfig.decimals);
+    // Native MON is reserved for gas, so it is never spent covering a shortfall.
+    const source = pickShortfallSource(
+      state.balances
+        .filter((b) => !b.token.native)
+        .map((b) => ({
+          symbol: b.token.symbol,
+          address: b.token.address,
+          usd: b.usd,
+        })),
+      targetAddr,
+    );
+    return {
+      eligible: true,
+      mode: split.mode,
+      held: split.held,
+      shortfall: split.shortfall,
+      sourceSymbol: source?.symbol ?? null,
+      covered: split.mode !== "direct" && Boolean(source),
+    };
+  }, [
+    state.intent.amountMode,
+    state.intent.receiveTokenAmount,
+    state.intent.receiveTokenAddress,
+    state.intent.receiveToken,
+    state.balances,
+    receiveTokenConfig,
+  ]);
+
   // ---- Wallet abstraction state (partial, honest) --------------------------
   // Gas handling is per-payment, not a global boolean: whether abstraction is
   // available depends on the chain, the configured paymaster, the wallet's
@@ -705,6 +778,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
         sufficiency,
         gasSufficiency,
         mismatchActive: Boolean(mismatch?.active),
+        partialCovered: Boolean(partial?.covered),
       }),
     [
       state.intent.recipient,
@@ -721,6 +795,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       sufficiency,
       gasSufficiency,
       mismatch,
+      partial,
     ],
   );
 
@@ -756,6 +831,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     gasSufficiency,
     gasMode: gasInfo.mode,
     gasInfo,
+    partial,
     abstraction,
     setWalletGasCapabilities,
     readiness,

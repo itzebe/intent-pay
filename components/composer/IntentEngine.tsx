@@ -69,6 +69,13 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
       amountMode: result.compose.amountMode,
       payToken: result.compose.sourceAsset,
       payTokenSource: result.compose.sourceAsset ? "intent" : undefined,
+      // Only a genuine token-quantity instruction ("send 100 NEWCOIN") pins an
+      // exact token target. A USD-value intent's derived token amount is not a
+      // quantity the user named, so it must not drive a partial split.
+      receiveTokenAmount:
+        result.draft.amountType === "TOKEN_AMOUNT" && !result.draft.sourceAsset
+          ? result.compose.tokenAmount
+          : undefined,
     });
     onPrefilled?.();
   };
@@ -140,6 +147,10 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                 <div className="flex flex-wrap gap-1.5">
                   <Tag label={amountTag(result)} />
                   {result.draft.asset && <Tag label={`Asset · ${result.draft.asset}`} />}
+                  {result.draft.sourceAsset && <Tag label={`From · ${result.draft.sourceAsset}`} />}
+                  {!result.draft.asset && result.draft.assetQuery && (
+                    <Tag label={`Asset · ${result.draft.assetQuery} (resolving)`} />
+                  )}
                   {result.draft.recipientAddress && <Tag label={`To · ${shortAddress(result.draft.recipientAddress, 4)}`} />}
                   {result.draft.recipientName && !result.draft.recipientAddress && (
                     <Tag label={`Name · ${result.draft.recipientName}`} />
@@ -148,6 +159,19 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
 
                 {result.clarification.expect !== "none" && (
                   <p className="mt-2.5 text-sm text-white/80">{result.clarification.question}</p>
+                )}
+
+                {/* The wallet's real holding vs. what the recipient should get.
+                    A shortfall is shown honestly; the split plan covers it. */}
+                {result.holding && result.holding.shortfall && (
+                  <p className="mt-2.5 text-xs text-white/55">
+                    You hold {formatAmount(result.holding.held)} {result.holding.token}. This payment
+                    sends all of it and obtains the remaining{" "}
+                    <span className="font-medium text-white/75">
+                      {formatAmount(result.holding.shortfall)} {result.holding.token}
+                    </span>{" "}
+                    from your other assets.
+                  </p>
                 )}
 
                 {state === "NEEDS_ASSET" && result.assets.length > 0 && (
@@ -171,6 +195,37 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                 )}
 
                 {state === "NEEDS_RECIPIENT" && <AddressPrompt onSubmit={(addr) => send(addr)} />}
+
+                {/* A ticker the user named matched several contracts: never guess,
+                    ask them to pick the exact one (or paste an address). */}
+                {result.resolution?.status === "ambiguous" && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-xs text-amber-200/90">
+                      Several Monad tokens are named {result.resolution.query}. Choose the exact one:
+                    </p>
+                    <div className="space-y-1.5">
+                      {result.resolution.matches.slice(0, 8).map((m) => (
+                        <button
+                          key={m.address}
+                          onClick={() => send(m.address)}
+                          className="flex w-full items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-left transition hover:border-white/20 hover:bg-white/[0.05]"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold text-white">
+                              {m.symbol} · {m.name}
+                            </span>
+                            <span className="block truncate font-mono text-[11px] text-white/40">
+                              {m.address}
+                            </span>
+                          </span>
+                          <span className="ml-2 shrink-0 text-[11px] text-white/40">
+                            {m.decimals} dp{m.listed ? " · listed" : ""}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {result.error && (
                   <p className="mt-2.5 flex items-start gap-2 text-xs text-amber-200/90">
@@ -230,11 +285,17 @@ function assetToToken(a: NlpAsset): TokenConfig {
 }
 
 function amountTag(result: {
-  draft: { amount: string | null; amountType: string | null; asset: string | null };
+  draft: {
+    amount: string | null;
+    amountType: string | null;
+    asset: string | null;
+    assetQuery?: string | null;
+  };
 }): string {
   if (!result.draft.amount) return "Amount · missing";
   if (result.draft.amountType === "USD_VALUE") return `$${result.draft.amount}`;
-  return `${result.draft.amount} ${result.draft.asset ?? ""}`.trim();
+  const asset = result.draft.asset ?? result.draft.assetQuery ?? "";
+  return `${result.draft.amount} ${asset}`.trim();
 }
 
 function Tag({ label }: { label: string }) {

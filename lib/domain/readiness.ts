@@ -59,6 +59,13 @@ export type ReadinessInput = {
   sufficiency: { status: "ok" | "insufficient" | "unknown"; required?: string; available?: string };
   gasSufficiency: { status: "ok" | "insufficient" | "unknown"; requiredMon?: string };
   mismatchActive: boolean;
+  /**
+   * True when a shortfall in the target asset can be covered by converting
+   * another funded asset (a partial-balance split). Only then does a shortfall
+   * stop blocking the gate — the split still has to satisfy every execution
+   * protection before signing.
+   */
+  partialCovered?: boolean;
 };
 
 const AMOUNT_MISSING = (v: string | undefined) => !v || v === "—" || v.trim() === "";
@@ -77,6 +84,7 @@ export function computeReadiness(input: ReadinessInput): Readiness {
     sufficiency,
     gasSufficiency,
     mismatchActive,
+    partialCovered,
   } = input;
 
   // 1. Recipient must be a valid address that the user has actually supplied.
@@ -177,8 +185,10 @@ export function computeReadiness(input: ReadinessInput): Readiness {
     };
   }
 
-  // 8. The sender must hold enough of the payment asset.
-  if (sufficiency.status === "insufficient") {
+  // 8. The sender must hold enough of the payment asset — unless a shortfall
+  //    can be covered by converting another funded asset (partial split). The
+  //    split itself is still gated by the signing guard's balance check.
+  if (sufficiency.status === "insufficient" && !partialCovered) {
     return {
       ready: false,
       code: "insufficient_balance",

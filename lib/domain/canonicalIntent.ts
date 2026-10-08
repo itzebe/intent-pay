@@ -40,6 +40,14 @@ export type CanonicalFields = {
   receiveAmount: string;
   /** Whether `receiveAmount` is "what they receive" or "what I spend". */
   amountMode: AmountMode;
+  /**
+   * The exact quantity of the receive token the recipient should get, in token
+   * units, when the user named one ("send 100 NEWCOIN"). Present only for a
+   * token-quantity intent. It drives the partial-balance split (how much is
+   * already held vs. must be obtained) and the on-chain minimum, so it is
+   * execution-relevant and part of the key.
+   */
+  receiveTokenAmount?: string;
   /** Source/pay asset symbol (what the user spends). Display only. */
   payToken: string;
   /** The pay asset's contract address — the authoritative identity. */
@@ -91,6 +99,7 @@ function sameFields(a: CanonicalFields, b: CanonicalFields): boolean {
     (a.receiveTokenAddress ?? "") === (b.receiveTokenAddress ?? "") &&
     a.receiveAmount === b.receiveAmount &&
     a.amountMode === b.amountMode &&
+    (a.receiveTokenAmount ?? "") === (b.receiveTokenAmount ?? "") &&
     a.payToken === b.payToken &&
     (a.payTokenAddress ?? "") === (b.payTokenAddress ?? "") &&
     a.payTokenSource === b.payTokenSource &&
@@ -117,6 +126,9 @@ export function executionKey(f: CanonicalFields): string {
     f.amountMode,
     assetRef(f.receiveToken, f.receiveTokenAddress),
     f.receiveAmount,
+    // The exact token quantity (when the user named one) decides how much is
+    // split off as a direct transfer, so a change to it must invalidate.
+    f.receiveTokenAmount ?? "",
     assetRef(f.payToken, f.payTokenAddress),
     f.recipient.toLowerCase(),
   ].join("|");

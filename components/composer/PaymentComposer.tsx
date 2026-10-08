@@ -6,16 +6,17 @@ import { formatAmount, isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
-import { describePlan, buildPaymentPlan } from "@/lib/execution/plan";
+import { describePlan, buildPaymentPlan, buildPartialPlan } from "@/lib/execution/plan";
 import { executePlan, executePlanBatched, ExecutionError, type StepResult } from "@/lib/execution/execute";
 import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
-import { prepareSigning } from "@/lib/execution/signGuard";
+import { prepareSigning, type FreshPlan } from "@/lib/execution/signGuard";
+import { parseUnits } from "@/lib/domain/math";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { NETWORKS } from "@/lib/config/chains";
-import type { Balance, QuoteResult } from "@/lib/domain/intent";
+import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
 import { Modal } from "@/components/ui/Modal";
 import { TokenList } from "@/components/ui/TokenList";
 import { RecipientField } from "./RecipientField";
@@ -149,6 +150,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     [flow.quote],
   );
 
+  // A token-quantity intent that the wallet only partly holds is satisfied by a
+  // split (send the held amount + convert the shortfall). The guard rebuilds
+  // and re-protects both legs from fresh data. Only when the flow has resolved
+  // that a funded source can cover the shortfall do we take the split path;
+  // otherwise a normal (or insufficient) payment is handled as before.
+  const partialEligible = partialEligibleFor(flow.intent) && flow.partial?.covered === true;
+
   // A descriptive plan for display only; the *signed* plan is rebuilt fresh
   // inside the signing guard from the current intent.
   const displayPlan = useMemo(() => {
@@ -249,6 +257,22 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         {
           fetchBalances: () => fetchBalances(wallet.address!, flow.intent.network),
           fetchQuote: (intent) => fetchQuote(intent),
+          // A partial-balance payment has two legs; the guard asks the partial
+          // planner to rebuild both from the fresh balances and applies every
+          // protection (freshness, price impact, per-leg on-chain bounds).
+          ...(partialEligible
+            ? {
+                fetchPlan: async (intent, balances) =>
+                  fetchPartialPlan(
+                    intent,
+                    balances,
+                    wallet.address!,
+                    flow.receiveTokenConfig.symbol,
+                    protection?.slippage.bps,
+                  ),
+                covers: (balances, plan) => coversPartialPlan(balances, plan),
+              }
+            : {}),
           resolveGas: async () => flow.gasInfo.mode,
           readGas: async () => ({
             gasLimit: flow.quote?.gasLimit,
@@ -604,6 +628,16 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               quotedAt={flow.quote.quotedAt}
               quoteStale={flow.quoteStale}
               protection={protection}
+              partial={
+                flow.partial && flow.partial.mode !== "direct"
+                  ? {
+                      mode: flow.partial.mode,
+                      held: flow.partial.held,
+                      shortfall: flow.partial.shortfall,
+                      sourceSymbol: flow.partial.sourceSymbol,
+                    }
+                  : null
+              }
             />
           </motion.div>
         )}
@@ -757,6 +791,155 @@ async function fetchQuote(intent: {
   q.gasPriceWei = q.gasPriceWei ? (BigInt(q.gasPriceWei) as unknown as bigint) : undefined;
   return { ok: true, quote: q };
 }
+
+// ---------------------------------------------------------------------------
+// Partial-balance payment ("send what you hold + obtain the rest")
+// ---------------------------------------------------------------------------
+
+/** True when the current intent can be satisfied by a partial split. */
+export function partialEligibleFor(intent: {
+  receiveTokenAmount?: string;
+  amountMode: string;
+}): boolean {
+  return intent.amountMode === "recipient_receives" && Boolean(intent.receiveTokenAmount);
+}
+
+/** Parse the server's serialized quote back into the client `Quote` shape. */
+function hydrateQuote(q: any): Quote {
+  return {
+    ...q,
+    gasLimit: q.gasLimit ? BigInt(q.gasLimit) : undefined,
+    gasPriceWei: q.gasPriceWei ? BigInt(q.gasPriceWei) : undefined,
+  };
+}
+
+/**
+ * Rebuild a partial-balance plan from *fresh* balances, exactly as the single
+ * quote path does. Every amount comes from a live quote; the two legs carry
+ * real on-chain bounds, so a sandwich can only make the transaction revert.
+ */
+async function fetchPartialPlan(
+  intent: {
+    recipient: string;
+    receiveToken: string;
+    receiveTokenAddress?: string;
+    receiveAmount: string;
+    receiveTokenAmount?: string;
+    network: MonadNetwork;
+  },
+  balances: Balance[],
+  sender: `0x${string}`,
+  receiveSymbol: string,
+  slippageBps?: number,
+): Promise<{ ok: true; fresh: FreshPlan } | { ok: false; reason: any }> {
+  const target = intent.receiveTokenAmount;
+  if (!target) return { ok: false, reason: "not_ready" };
+
+  // Which funded asset covers the shortfall: the most valuable non-target hold,
+  // chosen from the fresh balances (never guessed). Native MON is excluded — it
+  // is needed for gas, so it is not spent on a shortfall.
+  const targetAddr = (intent.receiveTokenAddress ?? "").toLowerCase();
+  const funded = balances
+    .filter((b) => !b.token.native)
+    .filter((b) => (b.token.address ?? "").toLowerCase() !== targetAddr)
+    .filter((b) => Number.isFinite(b.usd) && b.usd > 0)
+    .sort((a, b) => b.usd - a.usd);
+  const source = funded[0];
+  if (!source) return { ok: false, reason: "insufficient_balance" };
+
+  const held =
+    balances.find(
+      (b) =>
+        !b.token.native &&
+        ((b.token.address ?? "").toLowerCase() === targetAddr ||
+          (b.token.symbol ?? "").toLowerCase() === receiveSymbol.toLowerCase()),
+    )?.amount ?? "0";
+
+  const res = await fetch("/api/partial", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetToken: intent.receiveTokenAddress ?? receiveSymbol,
+      targetAmount: target,
+      held,
+      sourceToken: source.token.address,
+      sender,
+    }),
+  });
+  const json = await res.json();
+  if (!json.ok) {
+    return {
+      ok: false,
+      reason: json.code === "route_unavailable" ? "quote_unavailable" : json.code ?? "quote_unavailable",
+    };
+  }
+  if (json.direct) return { ok: false, reason: "not_ready" };
+
+  const recipient = intent.recipient as `0x${string}`;
+  const directQuote = hydrateQuote(json.legs.directQuote);
+  const swapQuote = hydrateQuote(json.legs.swapQuote);
+  // Both legs must name the real recipient so the guard's quote-match passes
+  // and the calldata pays the right address.
+  directQuote.intent.recipient = recipient;
+  swapQuote.intent.recipient = recipient;
+
+  const plan = buildPartialPlan({
+    directQuote,
+    swapQuote,
+    sender,
+    recipient,
+    slippageBps: slippageBps ?? 50,
+  });
+  return {
+    ok: true,
+    fresh: {
+      plan,
+      quotes: [directQuote, swapQuote],
+      receiveToken: receiveSymbol,
+      expectedReceive: target,
+    },
+  };
+}
+
+/**
+ * Coverage for a split: the wallet must fund the direct (target) leg AND the
+ * swap leg's source asset. A single-asset check is not enough.
+ */
+function coversPartialPlan(balances: Balance[], plan: PaymentPlanLike): boolean {
+  // Only steps that actually move tokens are counted: an approval is an
+  // allowance, not a transfer, so counting it too would double the requirement.
+  const needed = new Map<string, bigint>();
+  const add = (key: string, amount: bigint) => needed.set(key, (needed.get(key) ?? 0n) + amount);
+  for (const step of plan.steps) {
+    if (step.kind === "transfer") {
+      const token = step.token as { address?: string; symbol: string } | null;
+      if (step.token === null) continue; // native transfer, covered by the gas reserve
+      add((token!.address ?? token!.symbol).toLowerCase(), step.amount as bigint);
+    } else if (step.kind === "swap") {
+      const tokens: string[] = step.tokens ?? [];
+      if (!tokens.length) continue;
+      const amount = (step.amountIn ?? step.amountInMaximum) as bigint | undefined;
+      if (amount == null) continue;
+      add(tokens[0].toLowerCase(), amount);
+    }
+  }
+  for (const [key, required] of needed) {
+    const bal = balances.find(
+      (b) =>
+        (b.token.address ?? "").toLowerCase() === key ||
+        (b.token.symbol ?? "").toLowerCase() === key,
+    );
+    if (!bal) return false;
+    try {
+      if (parseUnits(bal.amount, bal.token.decimals) < required) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+type PaymentPlanLike = { steps: { kind: string; [k: string]: any }[] };
 
 /** Reads live balances for a connected wallet via the balances API. */
 function useLiveBalances(address: string | undefined, network: MonadNetwork, tick: number) {

@@ -102,6 +102,18 @@ describe("canonical intent versioning", () => {
     expect(base.key.split("|")[0]).toBe("mainnet");
   });
 
+  it("invalidates when the exact token quantity changes (drives the partial split)", () => {
+    const base = reduceIntent(initialIntent(), {
+      recipient: ALICE,
+      receiveTokenAmount: "100",
+    });
+    const edited = reduceIntent(base, { receiveTokenAmount: "150" });
+    expect(edited.version).toBeGreaterThan(base.version);
+    expect(edited.key).not.toBe(base.key);
+    // Clearing it is also execution-relevant.
+    expect(reduceIntent(base, { receiveTokenAmount: undefined }).key).not.toBe(base.key);
+  });
+
   it("invalidates when the receive asset's contract address changes (same symbol)", () => {
     const base = reduceIntent(initialIntent(), {
       recipient: ALICE,

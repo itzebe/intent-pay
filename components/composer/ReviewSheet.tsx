@@ -37,6 +37,7 @@ export function ReviewSheet({
   quotedAt,
   quoteStale = false,
   protection,
+  partial,
 }: {
   quote: Quote;
   payToken: TokenConfig;
@@ -58,6 +59,16 @@ export function ReviewSheet({
   quoteStale?: boolean;
   /** Honest execution-safety surface (MEV / slippage / price impact). */
   protection?: ExecutionProtection | null;
+  /**
+   * A partial-balance split: the payment sends what the wallet holds and
+   * obtains the shortfall from another funded asset. Null for a normal payment.
+   */
+  partial?: {
+    mode: "direct" | "swap" | "split";
+    held: string;
+    shortfall: string;
+    sourceSymbol: string | null;
+  } | null;
 }) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -184,6 +195,19 @@ export function ReviewSheet({
               tone={quoteStale ? "warn" : "ok"}
               sub={`window ${(protection.freshnessMs / 1000).toFixed(0)}s`}
             />
+            {partial && partial.mode !== "direct" && (
+              <SafetyRow
+                label="Delivery plan"
+                value="Partial + convert"
+                sub={
+                  partial.sourceSymbol
+                    ? `${formatAmount(partial.held)} ${receiveToken.symbol} held + ${formatAmount(
+                        partial.shortfall,
+                      )} ${receiveToken.symbol} via ${partial.sourceSymbol}`
+                    : "shortfall source unknown"
+                }
+              />
+            )}
             <SafetyRow
               label="On-chain deadline"
               value={protection.onchainDeadlineSupported ? "Enforced" : "Unavailable"}

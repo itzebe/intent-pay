@@ -47,6 +47,20 @@ export type Capabilities = {
     supportedTokens?: string[];
     policyId?: string;
   };
+  /**
+   * ERC-20 gas payment provider (lets a user with 0 MON pay gas in a held
+   * token). Distinct from Alchemy sponsorship; `supportedTokens` is discovered
+   * live and is empty when discovery failed.
+   */
+  gasPayment?: {
+    provider: string | null;
+    chainId: number;
+    configured: boolean;
+    reachable: boolean;
+    available: boolean;
+    error: string | null;
+    supportedTokens: { address: string; symbol: string; name: string; decimals: number }[];
+  };
   /** Whether a wallet-abstraction path is genuinely available. */
   walletAbstraction?: { available: boolean; reason: string | null };
 };

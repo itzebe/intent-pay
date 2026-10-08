@@ -397,3 +397,91 @@ describe("latest-only request guard (I)", () => {
   });
 });
 
+
+/**
+ * ERC-20 gas payment (EIP-7702 + paymaster) signing safety.
+ *
+ * Paying the fee in a token is a real change to what is signed, so it must be
+ * covered by the same guard: changing the gas asset invalidates the intent, and
+ * losing the gas token between review and signing must block.
+ */
+describe("ERC-20 gas payment signing safety", () => {
+  it("changing the gas token is execution-relevant and bumps the intent version", () => {
+    const intent = validIntent();
+    const withGas = reduceIntent(intent, {
+      gasPaymentToken: "USDC",
+      gasPaymentTokenAddress: USDC.address,
+      gasPaymentMode: "ERC20_PAYMASTER",
+    });
+    expect(withGas.version).toBe(intent.version + 1);
+    expect(withGas.key).not.toBe(intent.key);
+  });
+
+  it("blocks when the wallet's gas token no longer covers the fee", async () => {
+    const intent = validIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({
+        readIntent: () => intent,
+        resolveGas: async () => "erc20",
+        readGasPayment: async () => ({
+          mode: "erc20",
+          gasToken: { address: USDC.address, decimals: USDC.decimals, symbol: "USDC" },
+          gasTokenBalance: 100n,
+          gasEstimate: 5_000n,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("insufficient_gas_token");
+  });
+
+  it("allows when the gas token still covers the fee", async () => {
+    const intent = validIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({
+        readIntent: () => intent,
+        resolveGas: async () => "erc20",
+        readGasPayment: async () => ({
+          mode: "erc20",
+          gasToken: { address: USDC.address, decimals: USDC.decimals, symbol: "USDC" },
+          gasTokenBalance: 10_000n,
+          gasEstimate: 5_000n,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("blocks when the live probe no longer reports an ERC-20 gas path", async () => {
+    const intent = validIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({
+        readIntent: () => intent,
+        resolveGas: async () => "erc20",
+        readGasPayment: async () => ({ mode: "native" }),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("insufficient_gas_token");
+  });
+
+  it("does not block when the fee cannot be estimated (never fabricates a fee)", async () => {
+    const intent = validIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({
+        readIntent: () => intent,
+        resolveGas: async () => "erc20",
+        readGasPayment: async () => ({
+          mode: "erc20",
+          gasToken: { address: USDC.address, decimals: USDC.decimals, symbol: "USDC" },
+          gasTokenBalance: 1n,
+        }),
+      }),
+    );
+    expect(result.ok).toBe(true);
+  });
+});

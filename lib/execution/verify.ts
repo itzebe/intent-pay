@@ -112,3 +112,51 @@ export async function verifyDelivery(
 }
 
 export type { Address, MonadNetwork };
+
+/**
+ * Delivery verification from a set of raw logs (a UserOperation's receipt logs).
+ *
+ * The ERC-20 gas path executes as one UserOperation whose receipt carries the
+ * inner call logs. The verification is identical in meaning to the EOA path:
+ * sum the receive token's Transfer events to the recipient and compare against
+ * the on-chain-bound minimum. The UserOperation's own `success` flag is checked
+ * by the caller first — a reverted UserOperation has no delivery.
+ */
+export function verifyDeliveryFromLogs(
+  logs: { address: string; topics: string[]; data: string }[],
+  receiveToken: TokenConfig,
+  recipient: string,
+  expectedAmount: string,
+  toleranceBps = 50n,
+): DeliveryCheck {
+  const expected = parseUnits(expectedAmount, receiveToken.decimals);
+  if (!logs.length) {
+    return { verified: false, delivered: "0", expected: expectedAmount, reason: "no logs" };
+  }
+  let delivered = 0n;
+  if (!receiveToken.native) {
+    delivered = sumTransfersTo(
+      null as unknown as PublicClient,
+      { logs },
+      receiveToken.address,
+      recipient,
+    );
+  } else {
+    // Native MON delivered by a UserOperation appears as an inner transfer with
+    // no ERC-20 log; we cannot prove it from logs alone.
+    return {
+      verified: false,
+      delivered: "0",
+      expected: expectedAmount,
+      reason: "native delivery cannot be proven from UserOperation logs",
+    };
+  }
+  const min = (expected * (10_000n - toleranceBps)) / 10_000n;
+  const deliveredStr = formatUnits(delivered, receiveToken.decimals);
+  return {
+    verified: delivered >= min,
+    delivered: deliveredStr,
+    expected: expectedAmount,
+    reason: delivered >= min ? undefined : "recipient received less than intended",
+  };
+}

@@ -32,6 +32,11 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
   const zerionConfigured = caps.wallet.zerionConfigured ?? caps.wallet.zerion;
   const zerionReachable = caps.wallet.zerionReachable ?? caps.wallet.zerion;
 
+  const gp = caps.gasPayment;
+  const gpConfigured = gp?.configured ?? false;
+  const gpReachable = gp?.reachable ?? false;
+  const gpTokens = gp?.supportedTokens ?? [];
+
   // Alchemy's AA stack is only "Active" when the node *and* the Bundler answer;
   // a configured Gas Manager policy is surfaced separately so a working node is
   // never hidden by an unrelated policy problem.
@@ -80,6 +85,19 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
       role: "Market prices",
       active: true,
       detail: "Live USD pricing for Monad tokens",
+    },
+    {
+      name: gp?.provider ? `Gas paymaster · ${gp.provider}` : "Gas paymaster",
+      role: "ERC-20 gas",
+      active: gpConfigured && gpReachable,
+      degraded: gpConfigured && !gpReachable,
+      detail: !gpConfigured
+        ? "Add a Pimlico key to enable gas-in-token"
+        : !gpReachable
+          ? `Configured, but unreachable${gp?.error ? ` — ${gp.error}` : ""}`
+          : gpTokens.length
+            ? `Gas payable in ${gpTokens.map((t) => t.symbol).join(", ")}`
+            : "No tokens accepted on this chain",
     },
   ];
 

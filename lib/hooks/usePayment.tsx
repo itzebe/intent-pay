@@ -58,6 +58,24 @@ export type GasInfo = {
   walletSupportsErc20Gas: boolean;
   paymasterServiceUrl?: string;
   paymasterContext?: Record<string, unknown>;
+  /** The ERC-20 that will pay gas, when the AA paymaster path is selected. */
+  erc20GasToken?: { symbol: string; address: string } | null;
+  /** Honest reason gas is not abstracted, when it isn't. */
+  reason?: string | null;
+};
+
+/**
+ * The live, per-wallet ERC-20 gas capability reported by the composer. This is
+ * what lets the flow decide — honestly — between "gas paid in an ERC-20" and
+ * "you need MON".
+ */
+export type AaGasSelection = {
+  available: boolean;
+  mode: "ERC20_PAYMASTER" | "NATIVE" | "UNAVAILABLE";
+  tokenSymbol?: string | null;
+  tokenAddress?: string | null;
+  code?: string;
+  reason?: string | null;
 };
 
 type FlowState = {
@@ -177,6 +195,13 @@ type FlowContextValue = FlowState & {
   abstraction: AbstractionResult;
   /** Report the wallet's EIP-5792 capabilities (from the composer's probe). */
   setWalletGasCapabilities: (caps: WalletGasCapabilities | null) => void;
+  /** Report the live per-wallet ERC-20 gas capability (from the composer). */
+  aaGas: AaGasSelection;
+  setAaGas: (selection: AaGasSelection | null) => void;
+  /** Choose the ERC-20 that pays gas (null = let the engine auto-select). */
+  setGasPaymentToken: (token: { symbol: string; address?: string } | null, mode?: "NATIVE" | "ERC20_PAYMASTER") => void;
+  /** Resolve the canonical gas asset for the intent, when one is chosen. */
+  gasTokenConfig: TokenConfig | null;
   /**
    * Deterministic readiness gate. The Review/Confirm action is only reachable
    * when `readiness.ready` is true; the CTA label comes from here too.
@@ -211,7 +236,12 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [recipientConfirmed, setRecipientConfirmed] = useState(false);
-  const [walletGasCaps, setWalletGasCapabilities] = useState<WalletGasCapabilities | null>(null);
+  const [walletGasCaps, setWalletGasCapabilitiesState] = useState<WalletGasCapabilities | null>(null);
+  const [aaGas, setAaGasState] = useState<AaGasSelection>({
+    available: false,
+    mode: "NATIVE",
+    reason: null,
+  });
 
   const [nonce, setNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -227,6 +257,12 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     () => resolveIntentAsset(state.intent.payTokenAddress, state.intent.payToken),
     [state.intent.payTokenAddress, state.intent.payToken, state.tokensVersion],
   );
+  // The chosen gas asset (distinct from the payment source). Null when the user
+  // has not chosen one — the composer then reports the engine's auto-selection.
+  const gasTokenConfig = useMemo(() => {
+    if (!state.intent.gasPaymentToken && !state.intent.gasPaymentTokenAddress) return null;
+    return resolveIntentAsset(state.intent.gasPaymentTokenAddress, state.intent.gasPaymentToken ?? "");
+  }, [state.intent.gasPaymentToken, state.intent.gasPaymentTokenAddress, state.tokensVersion]);
 
   // ---- Canonical intent mutation ------------------------------------------
   // Every edit goes through the reducer, which bumps the version only when an
@@ -340,6 +376,36 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     setNonce((n) => n + 1);
   }, []);
 
+  const setWalletGasCapabilities = useCallback((caps: WalletGasCapabilities | null) => {
+    setWalletGasCapabilitiesState(caps);
+  }, []);
+
+  /**
+   * Report the live ERC-20 gas capability from the composer. It is stored raw;
+   * `gasInfo` decides whether it is trustworthy for the *current* intent (an
+   * explicit token choice or a matching auto-selection).
+   */
+  const setAaGas = useCallback((selection: AaGasSelection | null) => {
+    setAaGasState(selection ?? { available: false, mode: "NATIVE", reason: null });
+  }, []);
+
+  /**
+   * Choose the ERC-20 that pays the network fee, or clear the choice (auto).
+   * The gas token is a canonical-intent field, so a change bumps the version and
+   * invalidates any earlier quote/plan — exactly like changing the source asset.
+   */
+  const setGasPaymentToken = useCallback(
+    (token: { symbol: string; address?: string } | null, mode: "NATIVE" | "ERC20_PAYMASTER" = "ERC20_PAYMASTER") => {
+      const resolvedAddress = token ? (token.address ?? getToken(token.symbol)?.address) : undefined;
+      patchIntent({
+        gasPaymentToken: token?.symbol,
+        gasPaymentTokenAddress: resolvedAddress,
+        gasPaymentMode: token ? mode : undefined,
+      });
+    },
+    [patchIntent],
+  );
+
   const setBalances = useCallback((balances: Balance[]) => {
     setState((s) => ({ ...s, balances }));
   }, []);
@@ -436,7 +502,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   // genuinely configured AND the wallet advertises it — never assumed.
   const gasAbstractedForSelection = Boolean(
     (capabilities?.gas.sponsorshipConfigured && walletGasCaps?.paymasterService) ||
-      walletGasCaps?.erc20GasPayment,
+      (aaGas.available && aaGas.mode === "ERC20_PAYMASTER"),
   );
   const sourceSelection = useMemo(
     () =>
@@ -461,7 +527,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
                 origin: state.intent.payTokenSource === "user" ? "user" : "intent",
               }
             : null,
-        gasMode: gasAbstractedForSelection ? "sponsored" : "native",
+        gasMode: aaGas.available && aaGas.mode === "ERC20_PAYMASTER" ? "erc20" : gasAbstractedForSelection ? "sponsored" : "native",
         gasAbstracted: gasAbstractedForSelection,
         pending: Boolean(state.balances.length > 0 && !optimizer && optimizerLoading),
       }),
@@ -473,6 +539,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       optimizer,
       optimizerLoading,
       gasAbstractedForSelection,
+      aaGas,
     ],
   );
 
@@ -771,25 +838,45 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     const paymasterConfigured = Boolean(capabilities?.gas.sponsorshipConfigured);
     const walletSupportsPaymaster = Boolean(walletGasCaps?.paymasterService);
     const walletSupportsErc20Gas = Boolean(walletGasCaps?.erc20GasPayment);
-    // The mode is the *per-payment* abstraction outcome, so a token the
-    // paymaster doesn't sponsor never reports "sponsored".
-    const mode: GasMode = abstraction.gasOptions.sponsored
-      ? "sponsored"
-      : abstraction.gasOptions.erc20GasPayment
-        ? "erc20"
-        : "native";
-    const pubKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
-    const policyId = capabilities?.gas.policyId;
-    const abstracted = mode !== "native";
+
+    // The ERC-20 paymaster path is selected ONLY from a live per-wallet
+    // capability that the composer resolved from the provider + real balances —
+    // never from a configured boolean. A configured provider with no funded
+    // supported token is honestly "native".
+    if (aaGas.available && aaGas.mode === "ERC20_PAYMASTER" && aaGas.tokenAddress) {
+      return {
+        mode: "erc20",
+        paymasterConfigured: true,
+        walletSupportsPaymaster,
+        walletSupportsErc20Gas: true,
+        erc20GasToken: aaGas.tokenSymbol ? { symbol: aaGas.tokenSymbol, address: aaGas.tokenAddress } : null,
+        reason: aaGas.reason ?? null,
+      };
+    }
+
+    // Alchemy Gas Manager sponsorship (a different, developer-sponsored model).
+    if (abstraction.gasOptions.sponsored) {
+      const pubKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
+      const policyId = capabilities?.gas.policyId;
+      return {
+        mode: "sponsored",
+        paymasterConfigured,
+        walletSupportsPaymaster,
+        walletSupportsErc20Gas,
+        paymasterServiceUrl: pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
+        paymasterContext: policyId ? { policyId } : undefined,
+        reason: null,
+      };
+    }
+
     return {
-      mode,
+      mode: "native",
       paymasterConfigured,
       walletSupportsPaymaster,
       walletSupportsErc20Gas,
-      paymasterServiceUrl: abstracted && pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
-      paymasterContext: abstracted && policyId ? { policyId } : undefined,
+      reason: aaGas.reason ?? abstraction.message ?? null,
     };
-  }, [capabilities, walletGasCaps, abstraction]);
+  }, [capabilities, walletGasCaps, abstraction, aaGas]);
 
   const gasSufficiency = useMemo(() => {
     const native = state.balances.find((b) => b.token.native);
@@ -906,6 +993,10 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     partial,
     abstraction,
     setWalletGasCapabilities,
+    aaGas,
+    setAaGas,
+    setGasPaymentToken,
+    gasTokenConfig,
     readiness,
   };
 

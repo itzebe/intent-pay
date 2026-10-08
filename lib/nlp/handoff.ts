@@ -1,4 +1,4 @@
-import { isEvmAddress } from "@/lib/format";
+import { formatUsd, isEvmAddress } from "@/lib/format";
 import type { AmountMode } from "@/lib/domain/intent";
 import type { ParsedPaymentIntent } from "./schema";
 
@@ -107,7 +107,7 @@ export function draftToHandoff(
         amountMode: "recipient_receives",
         tokenAmount,
       },
-      summary: `$${draft.amount} in ${draft.asset}`,
+      summary: `${formatUsd(Number(draft.amount))} in ${draft.asset}`,
     };
   }
 

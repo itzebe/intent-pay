@@ -141,6 +141,11 @@ export function parseDetailed(text: string, ctx: ParserContext): ParseResult {
 function extractUsd(s: string): { amount: string } | null {
   const m = s.match(/\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)/);
   if (m) return { amount: m[1].replace(/,/g, "") };
+  // Trailing currency symbol ("0.1$", "10 $") — a common informal way to write
+  // a dollar amount. Kept distinct from "10 MON": the `$` is what makes it a
+  // USD value, so this never reinterprets a token quantity as dollars.
+  const mTrail = s.match(/\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*\$/);
+  if (mTrail) return { amount: mTrail[1].replace(/,/g, "") };
   const m2 = s.match(/\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*(?:usd|dollars?|bucks?)\b/i);
   if (m2) return { amount: m2[1].replace(/,/g, "") };
   return null;

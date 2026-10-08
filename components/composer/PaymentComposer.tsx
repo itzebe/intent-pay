@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { formatAmount, isEvmAddress } from "@/lib/format";
+import { formatAmount, formatUsd, isEvmAddress } from "@/lib/format";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
@@ -461,8 +461,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                         label={iSpend ? "I spend" : "Recipient receives"}
                         usdHint={
                           iSpend
-                            ? `You spend exactly $${flow.intent.receiveAmount || "0"} in ${amountToken.symbol}`
-                            : `They get exactly $${flow.intent.receiveAmount || "0"} in ${amountToken.symbol}`
+                            ? `You spend exactly ${formatUsd(Number(flow.intent.receiveAmount || "0"))} in ${amountToken.symbol}`
+                            : `They get exactly ${formatUsd(Number(flow.intent.receiveAmount || "0"))} in ${amountToken.symbol}`
                         }
                       />
                     );

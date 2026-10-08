@@ -49,6 +49,23 @@ describe("NL parser — amount forms are distinct", () => {
     expect([b.amountType, b.asset]).toEqual(["TOKEN_AMOUNT", "MON"]);
     expect([c.amountType, c.asset]).toEqual(["USD_VALUE", "MON"]);
   });
+
+  it('"0.1$ usdt" (trailing $) -> USD_VALUE 0.1 + asset USDT', () => {
+    const i = parseDetailed("0.1$ usdt", ctx).intent;
+    expect(i.amount).toBe("0.1");
+    expect(i.amountType).toBe("USD_VALUE");
+    expect(i.asset).toBe("USDT");
+    expect(i.recipientAddress).toBeNull();
+    expect(deriveState(i)).toBe("NEEDS_RECIPIENT");
+  });
+
+  it('"10$" (trailing $) -> USD_VALUE, no asset — never a token quantity', () => {
+    const i = parseDetailed("send 10$", ctx).intent;
+    expect(i.amount).toBe("10");
+    expect(i.amountType).toBe("USD_VALUE");
+    expect(i.asset).toBeNull();
+    expect(deriveState(i)).toBe("NEEDS_ASSET");
+  });
 });
 
 describe("NL parser — recipient handling", () => {

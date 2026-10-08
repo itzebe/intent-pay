@@ -322,9 +322,9 @@ function amountTag(result: {
   };
 }): string {
   if (!result.draft.amount) return "Amount · missing";
-  if (result.draft.amountType === "USD_VALUE") return `$${result.draft.amount}`;
+  if (result.draft.amountType === "USD_VALUE") return `Amount · ${formatUsd(Number(result.draft.amount))}`;
   const asset = result.draft.asset ?? result.draft.assetQuery ?? "";
-  return `${result.draft.amount} ${asset}`.trim();
+  return `Amount · ${result.draft.amount} ${asset}`.trim();
 }
 
 function Tag({ label }: { label: string }) {

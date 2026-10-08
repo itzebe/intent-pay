@@ -747,13 +747,18 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   // advertised capability AND the selected asset.
   const abstraction = useMemo<AbstractionResult>(() => {
     const chainId = NETWORKS[state.intent.network].chainId;
-    const supportedTokens: string[] = (capabilities?.gas as any)?.supportedTokens ?? [];
+    const supportedTokens: string[] = capabilities?.gas.supportedTokens ?? [];
+    const paymasterConfigured = Boolean(capabilities?.gas.paymasterConfigured);
     return resolveAbstraction(payTokenConfig, {
       chainId,
       // Monad mainnet is the only configured chain today; it is supported when
       // the deployment targets it.
       chainSupported: state.intent.network === "mainnet",
-      paymasterConfigured: Boolean(capabilities?.gas.sponsorshipConfigured),
+      paymasterConfigured,
+      // A policy is only usable within its window. `sponsorshipConfigured`
+      // already folds in the window, so an expired policy is not abstracted.
+      policyUsable: capabilities?.gas.sponsorshipConfigured ?? paymasterConfigured,
+      policyReason: capabilities?.gas.policyReason,
       walletSupportsPaymaster: Boolean(walletGasCaps?.paymasterService),
       walletSupportsErc20Gas: Boolean(walletGasCaps?.erc20GasPayment),
       walletSupportsBatch: Boolean(walletGasCaps?.atomicBatch),

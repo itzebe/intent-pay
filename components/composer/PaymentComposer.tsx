@@ -10,10 +10,13 @@ import { describePlan, buildPaymentPlan, buildPartialPlan } from "@/lib/executio
 import { executePlan, executePlanBatched, ExecutionError, type StepResult } from "@/lib/execution/execute";
 import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
 import { prepareSigning, type FreshPlan } from "@/lib/execution/signGuard";
+import { executePlanViaAa, type AaExecutionResult } from "@/lib/aa/execution";
+import { walletSupportsEip7702 } from "@/lib/aa/account";
+import { useAaCapability } from "@/lib/hooks/useAaCapability";
 import { displayKey } from "@/lib/domain/canonicalIntent";
 import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
-import { verifyDelivery } from "@/lib/execution/verify";
+import { verifyDelivery, verifyDeliveryFromLogs } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -95,6 +98,54 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     flow.setWalletAccount(wallet.address);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wallet.address]);
+
+  // Whether the wallet can sign an EIP-7702 UserOperation. This is a browser
+  // fact; the server capability is combined with it. Inconclusive ⇒ optimistic
+  // (execution degrades cleanly on a rejection rather than blocking the user).
+  const [walletAaCompatible, setWalletAaCompatible] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!wallet.provider) {
+      setWalletAaCompatible(null);
+      return;
+    }
+    walletSupportsEip7702(wallet.provider as never, NETWORKS[flow.intent.network].chainId).then((ok) => {
+      if (!cancelled) setWalletAaCompatible(ok);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.provider, flow.intent.network]);
+
+  // The live, per-wallet ERC-20 gas capability. Provider supported-set (server,
+  // authoritative) ∩ real on-chain balances ∩ a live fee quote. This is what
+  // decides honestly between "gas in an ERC-20" and "MON required". It re-fetches
+  // on the revalidation tick so a balance/support change is reflected.
+  const { capability: aaCapability } = useAaCapability(flow.intent.network, wallet.address, {
+    explicitGasToken: flow.intent.gasPaymentTokenAddress ?? null,
+    sourceSymbol: flow.intent.payToken ?? null,
+    walletCompatible: walletAaCompatible ?? true,
+    tick: flow.revalidationTick,
+  });
+
+  // Publish the resolved AA state to the flow so `gasInfo`/readiness agree with
+  // what the review screen shows. Only a genuine ERC-20 selection is advertised.
+  useEffect(() => {
+    const wa = aaCapability?.walletAbstraction;
+    if (!wa) {
+      flow.setAaGas(null);
+      return;
+    }
+    flow.setAaGas({
+      available: wa.available && wa.mode === "ERC20_PAYMASTER",
+      mode: wa.mode,
+      tokenSymbol: wa.selectedGasToken?.symbol ?? null,
+      tokenAddress: wa.selectedGasToken?.address ?? null,
+      code: wa.code,
+      reason: wa.available ? wa.reason : wa.reason ?? aaCapability?.selection.reason ?? null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aaCapability]);
 
   // Live balances for a connected wallet. `revalidationTick` refreshes them
   // periodically so a DEX-like flow always shows current holdings.
@@ -282,6 +333,29 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             gasLimit: flow.quote?.gasLimit,
             gasPriceWei: flow.quote?.gasPriceWei,
           }),
+          // Re-resolve the ERC-20 gas payment right before signing: the wallet
+          // must still hold the gas token and still be AA-compatible. Losing it
+          // between review and signing blocks the signature.
+          readGasPayment: async () => {
+            const wa = aaCapability?.walletAbstraction;
+            const token = wa?.selectedGasToken;
+            if (!token) return { mode: flow.gasInfo.mode as "native" | "erc20" | "sponsored" };
+            const balance = aaCapability?.supportedGasTokens.find(
+              (t) => t.address.toLowerCase() === token.address.toLowerCase(),
+            );
+            const decimals = token.decimals;
+            const estimate =
+              token.estimatedFee && Number.isFinite(Number(token.estimatedFee))
+                ? parseUnits(token.estimatedFee, decimals)
+                : undefined;
+            const gasTokenBalance = balance ? parseUnits(balance.balance, decimals) : undefined;
+            return {
+              mode: wa?.mode === "ERC20_PAYMASTER" ? ("erc20" as const) : ("native" as const),
+              gasToken: { address: token.address, decimals, symbol: token.symbol },
+              gasTokenBalance,
+              gasEstimate: estimate,
+            };
+          },
           readIntent: () => intentRef.current,
           readAccount: () => accountRef.current,
         },
@@ -297,6 +371,65 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
       const plan = prepared.plan;
 
+      let primaryHash: `0x${string}` | undefined;
+      let stepHashes: `0x${string}`[] = [];
+      let aaResult: AaExecutionResult | null = null;
+
+      // --- ERC-20 gas path (EIP-7702 + paymaster) --------------------------
+      // When gas is paid in a token, the payment MUST execute as one atomic
+      // UserOperation so the paymaster can settle the fee. This is a genuinely
+      // different submission path from the sequential EOA path below, not a
+      // relabelling: an EOA transaction cannot carry a paymaster.
+      if (prepared.gasMode === "erc20" && flow.gasInfo.erc20GasToken && wallet.provider) {
+        // Bound the paymaster allowance against the user's real gas-token
+        // balance — the approval is never unlimited.
+        const gasTokenView = aaCapability?.supportedGasTokens.find(
+          (t) => t.address.toLowerCase() === flow.gasInfo.erc20GasToken!.address.toLowerCase(),
+        );
+        const gasTokenBalance = gasTokenView
+          ? parseUnits(gasTokenView.balance, gasTokenView.decimals)
+          : undefined;
+        aaResult = await executePlanViaAa(
+          plan,
+          wallet.provider as never,
+          wallet.address,
+          flow.intent.network,
+          flow.gasInfo.erc20GasToken.address as `0x${string}`,
+          getClientPublicClient(flow.intent.network),
+          onStep,
+          gasTokenBalance,
+        );
+        primaryHash = aaResult.transactionHash ?? aaResult.userOpHash;
+        stepHashes = aaResult.transactionHash ? [aaResult.transactionHash] : [];
+        setTxHash(primaryHash);
+
+        // A reverted UserOperation is a failed payment — never reported success.
+        if (!aaResult.success) {
+          setDelivery({
+            verified: false,
+            delivered: "0",
+            expected: prepared.quote.receiveAmount,
+            reason: aaResult.reason ?? "the transaction reverted",
+          });
+          setError(aaResult.reason ?? "The payment reverted on-chain and was not delivered.");
+          setStage("review");
+          return;
+        }
+
+        // Prove the recipient actually received the token from the real receipt
+        // logs — the UserOperation's success flag alone is not delivery.
+        const check = verifyDeliveryFromLogs(
+          aaResult.logs,
+          flow.receiveTokenConfig,
+          flow.intent.recipient,
+          prepared.quote.receiveAmount,
+          BigInt(prepared.plan.slippageBps),
+        );
+        setDelivery(check);
+        setStage("success");
+        return;
+      }
+
       // Prefer an atomic EIP-5792 batch when the wallet supports it and the plan
       // needs more than one step, or when gas is abstracted (a single-step
       // payment must still go through `wallet_sendCalls` for a paymaster to
@@ -307,8 +440,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         Boolean(walletCaps?.atomicBatch) &&
         (plan.steps.length > 1 || prepared.gasMode !== "native");
 
-      let primaryHash: `0x${string}` | undefined;
-      let stepHashes: `0x${string}`[] = [];
       if (useBatch) {
         try {
           const result = await executePlanBatched(
@@ -379,6 +510,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     wallet.provider,
     wallet.ensureMonad,
     walletCaps,
+    aaCapability,
   ]);
 
   return (
@@ -633,6 +765,18 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               quotedAt={flow.quote.quotedAt}
               quoteStale={flow.quoteStale}
               protection={protection}
+              gasInfo={flow.gasInfo}
+              supportedGasTokens={aaCapability?.supportedGasTokens}
+              onSelectGasToken={(address) => {
+                if (!address) {
+                  flow.setGasPaymentToken(null);
+                  return;
+                }
+                const t = aaCapability?.supportedGasTokens.find(
+                  (x) => x.address.toLowerCase() === address.toLowerCase(),
+                );
+                if (t) flow.setGasPaymentToken({ symbol: t.symbol, address: t.address });
+              }}
               partial={
                 flow.partial && flow.partial.mode !== "direct"
                   ? {

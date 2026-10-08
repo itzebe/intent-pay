@@ -123,6 +123,22 @@ export type SigningFetchers = {
   readAccount: () => Address | undefined;
   /** Injectable clock for deterministic staleness tests. */
   now?: () => number;
+  /**
+   * Optional: the live ERC-20 gas payment state, re-resolved against the wallet
+   * right now. When gas is paid in a token, the guard verifies the wallet can
+   * actually cover the fee in that token before allowing a signature — losing
+   * the token balance between review and signing must block, exactly as losing
+   * MON does on the native path.
+   */
+  readGasPayment?: () => Promise<{
+    mode: GasMode;
+    /** The gas token that will be charged. */
+    gasToken?: { address: string; decimals: number; symbol: string };
+    /** The wallet's balance of the gas token, base units. */
+    gasTokenBalance?: bigint;
+    /** The estimated fee in the gas token, base units. */
+    gasEstimate?: bigint;
+  }>;
 };
 
 export type SigningPlan = {
@@ -157,6 +173,7 @@ export type SigningAbortReason =
   | "intent_mismatch"
   | "insufficient_balance"
   | "insufficient_gas"
+  | "insufficient_gas_token"
   | "account_changed"
   | "price_impact"
   | "unprotected"
@@ -170,6 +187,8 @@ const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
   intent_mismatch: "The prepared transaction no longer matches your request. Please review it again.",
   insufficient_balance: "Your balance changed and no longer covers this payment. Review it again.",
   insufficient_gas: "Gas can no longer be sponsored and your wallet doesn't hold enough MON for the fee. Review the payment again.",
+  insufficient_gas_token:
+    "Your balance of the gas token no longer covers the network fee. Review the payment again.",
   account_changed: "Your wallet account changed. Balances and gas were rebuilt for the new account — review and confirm again.",
   price_impact:
     "This route's price impact is too high to execute safely. Slippage is never widened to force it — choose a different amount or payment asset.",
@@ -303,14 +322,28 @@ export async function prepareSigning(
   // 7. Paymaster/gas eligibility is resolved live, against the connected wallet.
   const gasMode = await fetchers.resolveGas();
 
-  // 8. If gas is no longer abstracted, the wallet must still hold enough MON to
-  // pay the fee. Losing sponsorship between review and signing must block.
+  // 8. The wallet must still be able to pay the fee. On the native path that is
+  // MON; on the ERC-20 path it is the gas token, and its balance must still
+  // cover the fee. Losing the ability to pay between review and signing blocks —
+  // we never widen anything to force the transaction through.
   if (gasMode === "native") {
     const gas = fetchers.readGas
       ? await fetchers.readGas().catch(() => ({ gasLimit: undefined, gasPriceWei: undefined }))
       : {};
     if (!coversGas(balances, gas.gasLimit, gas.gasPriceWei)) {
       return block("insufficient_gas", current.version);
+    }
+  } else if (gasMode === "erc20" && fetchers.readGasPayment) {
+    const gp = await fetchers.readGasPayment().catch(() => null);
+    if (gp && gp.mode === "erc20" && gp.gasEstimate !== undefined) {
+      if (!coversGasToken(gp.gasTokenBalance, gp.gasEstimate)) {
+        return block("insufficient_gas_token", current.version);
+      }
+    }
+    // If the live probe no longer reports an ERC-20 path, we do not silently
+    // fall back to MON gas here — the caller re-resolves the mode and rebuilds.
+    if (gp && gp.mode !== "erc20") {
+      return block("insufficient_gas_token", current.version);
     }
   }
 
@@ -387,6 +420,17 @@ export function coversGas(
   } catch {
     return true;
   }
+}
+
+/**
+ * True when the wallet holds enough of the ERC-20 gas token to cover the fee.
+ * Unknown inputs (no balance, no estimate) do not block — we never fabricate a
+ * fee. A known-but-insufficient balance blocks.
+ */
+export function coversGasToken(balance: bigint | undefined, estimate: bigint | undefined): boolean {
+  if (balance === undefined || estimate === undefined) return true;
+  if (estimate <= 0n) return true;
+  return balance >= estimate;
 }
 
 /**

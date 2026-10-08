@@ -4,6 +4,8 @@ import { alchemyStatus, alchemyBundlerStatus, alchemyPaymasterStatus, zerionStat
 import { zerionEnabled } from "@/lib/server/zerion";
 import { resolveMevProtection } from "@/lib/domain/protection";
 import { NETWORKS, type MonadNetwork } from "@/lib/config/chains";
+import { getPaymasterProvider, paymasterChainId, paymasterConfigured } from "@/lib/server/paymaster";
+import { normalizeSupportedTokens, gasTokenConfig } from "@/lib/server/paymaster/capabilities";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +35,35 @@ export async function GET() {
     zerionStatus(),
   ]);
 
+  // ERC-20 gas provider (Pimlico). Kept separate from Alchemy: Alchemy provides
+  // RPC/Bundler/price infrastructure, Pimlico provides the ERC-20 paymaster. The
+  // capability UI must name the provider that actually settles gas-in-token, so
+  // the two are never conflated.
+  const chainId = paymasterChainId();
+  const erc20Provider = getPaymasterProvider();
+  let erc20Configured = paymasterConfigured();
+  let erc20Reachable = false;
+  let erc20Error: string | null = null;
+  let erc20SupportedTokens: { address: string; symbol: string; name: string; decimals: number }[] = [];
+  if (erc20Provider && erc20Configured) {
+    const [health, discovery] = await Promise.all([
+      erc20Provider.reachable(chainId),
+      erc20Provider.supportedTokens(chainId),
+    ]);
+    erc20Reachable = health.reachable;
+    erc20Error = health.error ?? null;
+    const normalized = normalizeSupportedTokens(discovery, chainId);
+    if (normalized.ok) {
+      erc20SupportedTokens = normalized.tokens.map((t) => {
+        const c = gasTokenConfig(t);
+        return { address: c.address, symbol: c.symbol, name: c.name, decimals: c.decimals };
+      });
+    } else if (!erc20Error) {
+      erc20Error = normalized.reason ?? null;
+    }
+  }
+  const erc20GasAvailable = erc20Configured && erc20Reachable;
+
   // A wallet-abstraction path exists only when the node+Bundler answer and a
   // usable Gas Manager policy is configured. A configured-but-unusable policy
   // reports a specific reason rather than a bare "unavailable".
@@ -40,6 +71,7 @@ export async function GET() {
   const paymasterUsable =
     paymaster.reachable && (paymaster.policyValid ?? true) && gas.sponsorshipConfigured;
   const abstractionAvailable = alchemy.reachable && bundlerOk && paymasterUsable;
+
 
   return NextResponse.json({
     ok: true,
@@ -100,6 +132,22 @@ export async function GET() {
       /** Addresses the configured paymaster sponsors (empty = unknown). */
       supportedTokens: gas.supportedTokens,
       policyId: gas.policyId,
+    },
+    /**
+     * ERC-20 gas payment provider (the one that lets a user with 0 MON pay the
+     * network fee in a token they hold). Distinct from Alchemy's sponsorship.
+     * `supportedTokens` is discovered live from the provider — never hardcoded —
+     * and is empty when discovery failed, so no token is ever overclaimed.
+     */
+    gasPayment: {
+      provider: erc20Provider?.id ?? null,
+      chainId,
+      configured: erc20Configured,
+      reachable: erc20Reachable,
+      available: erc20GasAvailable,
+      error: erc20Error,
+      /** Tokens the provider currently accepts for gas on this chain. */
+      supportedTokens: erc20SupportedTokens,
     },
     walletAbstraction: {
       available: abstractionAvailable,

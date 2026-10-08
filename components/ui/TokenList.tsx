@@ -47,7 +47,8 @@ export function TokenList({
   tokens: TokenConfig[];
   balances?: Balance[];
   selected?: string;
-  onSelect: (symbol: string) => void;
+  /** The exact contract address is passed so identity is never symbol-only. */
+  onSelect: (symbol: string, address: string) => void;
   availability?: Record<string, boolean | null>;
   showBalances?: boolean;
   network?: MonadNetwork;
@@ -220,7 +221,7 @@ export function TokenList({
           return (
             <button
               key={t.address}
-              onClick={() => onSelect(t.symbol)}
+              onClick={() => onSelect(t.symbol, t.address)}
               disabled={unavailable}
               className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
                 isSelected ? "bg-mono/15 ring-1 ring-mono/40" : "hover:bg-white/[0.05]"

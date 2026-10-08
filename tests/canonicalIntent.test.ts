@@ -129,9 +129,17 @@ describe("canonical intent versioning", () => {
 });
 
 describe("quotable precondition", () => {
-  it("requires a valid address and an amount", () => {
+  it("requires a recipient, an amount and both assets — no implicit default", () => {
+    // The starting intent is deliberately empty: there is no default payment.
     expect(isQuotable(initialIntent())).toBe(false);
+    // A recipient alone is not enough — an amount and both assets are required.
     const withRecipient = reduceIntent(initialIntent(), { recipient: ALICE });
-    expect(isQuotable(withRecipient)).toBe(true);
+    expect(isQuotable(withRecipient)).toBe(false);
+    const complete = reduceIntent(withRecipient, {
+      receiveToken: "USDC",
+      receiveAmount: "5",
+      payToken: "USDC",
+    });
+    expect(isQuotable(complete)).toBe(true);
   });
 });

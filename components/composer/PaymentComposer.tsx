@@ -10,6 +10,7 @@ import { describePlan, buildPaymentPlan, buildPartialPlan } from "@/lib/executio
 import { executePlan, executePlanBatched, ExecutionError, type StepResult } from "@/lib/execution/execute";
 import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
 import { prepareSigning, type FreshPlan } from "@/lib/execution/signGuard";
+import { displayKey } from "@/lib/domain/canonicalIntent";
 import { parseUnits } from "@/lib/domain/math";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
@@ -253,6 +254,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           recipient: flow.intent.recipient as `0x${string}`,
           // The clamped tolerance encoded into the on-chain swap bound.
           slippageBps: protection?.slippage.bps,
+          // Proof the payment the user is looking at is the canonical intent.
+          displayedKey: displayKey(flow.intent),
         },
         {
           fetchBalances: () => fetchBalances(wallet.address!, flow.intent.network),
@@ -500,7 +503,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   onAddToken={flow.addToken}
                   optimizer={flow.optimizer}
                   optimizerLoading={flow.optimizerLoading}
-                  onSelect={(s) => flow.setPayToken(s, true)}
+                  onSelect={(s, address) => flow.setPayToken(s, true, address)}
                 />
               </Step>
 
@@ -707,8 +710,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           availability={availability}
           network={flow.intent.network}
           onAddToken={flow.addToken}
-          onSelect={(s) => {
-            flow.setReceiveToken(s);
+          onSelect={(s, address) => {
+            flow.setReceiveToken(s, address);
             setTokenModal(null);
           }}
         />
@@ -722,8 +725,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           network={flow.intent.network}
           onAddToken={flow.addToken}
           prefer="pay"
-          onSelect={(s) => {
-            flow.setPayToken(s, true);
+          onSelect={(s, address) => {
+            flow.setPayToken(s, true, address);
             setTokenModal(null);
           }}
         />

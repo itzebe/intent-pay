@@ -5,7 +5,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { formatAmount, formatUsd, isEvmAddress, shortAddress } from "@/lib/format";
 import { useDebounced, useIntentEngine, type NlpAsset } from "@/lib/hooks/useIntentEngine";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
-import type { TokenConfig } from "@/lib/config/tokens";
+import { draftFromIntent } from "@/lib/nlp/apply";
+import { tintForAddress, type TokenConfig } from "@/lib/config/tokens";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 import { Check, Sparkle, Spinner, Warning } from "@/components/ui/Icons";
 
@@ -17,16 +18,26 @@ import { Check, Sparkle, Spinner, Warning } from "@/components/ui/Icons";
  * keystroke. Every request is id-guarded so a slow parse of an earlier sentence
  * can never overwrite a later one.
  *
- * Nothing here signs or executes: it collects recipient / amount / asset and
- * hands the completed fields to the canonical intent, which runs the same
- * quote → review → signing-guard flow.
+ * There is exactly ONE payment state: the canonical intent. This component
+ * holds no payment fields of its own — every parse is *applied* to the
+ * canonical intent (via `applyNlIntent`), and the composer/quote/plan/guard
+ * all derive from that same intent. So the chat can never say "MON / amount
+ * missing" while the composer shows a stale "USDC / $5": the two read the same
+ * source. Nothing here signs or executes.
  */
 export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
   const flow = usePaymentFlow();
-  const engine = useIntentEngine(flow.intent.network, flow.balances);
+  // The continuation draft is *derived from the canonical intent*, not stored
+  // here, so the chat and composer cannot drift.
+  const baseDraft = useMemo(
+    () => draftFromIntent(flow.intent, flow.intent.network),
+    [flow.intent],
+  );
+  const engine = useIntentEngine(flow.intent.network, flow.balances, baseDraft);
   const [text, setText] = useState(flow.intent.text);
   const debouncedText = useDebounced(text, 450);
   const lastSubmittedRef = useRef<string>("");
+  const wasCompleteRef = useRef(false);
   const result = engine.result;
 
   const examples = useMemo(() => ["Send $10", "Send 10 MON", "Send $10 worth of MON"], []);
@@ -58,27 +69,28 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
     engine.submit(v);
   };
 
-  // The engine reports a fully-specified intent: pre-fill the canonical intent,
-  // which runs its own quote → review → signing-guard flow. No execution here.
-  const applyToComposer = () => {
-    if (!result?.compose) return;
-    flow.prefillFromIntent({
-      recipient: result.compose.recipient,
-      receiveToken: result.compose.receiveToken,
-      receiveAmountUsd: result.compose.receiveAmountUsd,
-      amountMode: result.compose.amountMode,
-      payToken: result.compose.sourceAsset,
-      payTokenSource: result.compose.sourceAsset ? "intent" : undefined,
-      // Only a genuine token-quantity instruction ("send 100 NEWCOIN") pins an
-      // exact token target. A USD-value intent's derived token amount is not a
-      // quantity the user named, so it must not drive a partial split.
-      receiveTokenAmount:
-        result.draft.amountType === "TOKEN_AMOUNT" && !result.draft.sourceAsset
-          ? result.compose.tokenAmount
-          : undefined,
+  // Every completed parse is applied to the canonical intent immediately — this
+  // is the *only* write path from the chat into payment state. An unresolved
+  // ticker (ambiguous / not found) contributes no asset, so the composer stays
+  // in its honest incomplete state instead of showing a guessed token.
+  useEffect(() => {
+    if (!result) return;
+    flow.applyNlIntent({
+      text: "",
+      draft: result.draft,
+      resolved:
+        result.resolution?.status === "resolved"
+          ? { symbol: result.resolution.symbol, address: result.resolution.address }
+          : null,
+      compose: result.compose ?? null,
     });
-    onPrefilled?.();
-  };
+    // Scroll to the composer once a fully-specified intent is first understood.
+    if (result.compose && !wasCompleteRef.current) {
+      wasCompleteRef.current = true;
+      onPrefilled?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
 
   const state = result?.state;
 
@@ -207,7 +219,21 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                       {result.resolution.matches.slice(0, 8).map((m) => (
                         <button
                           key={m.address}
-                          onClick={() => send(m.address)}
+                          onClick={() => {
+                            // Pick the exact contract — this sets the *asset*,
+                            // never the recipient. Identity is the address.
+                            flow.setReceiveToken(m.symbol, m.address);
+                            flow.addToken({
+                              symbol: m.symbol,
+                              name: m.name,
+                              address: m.address as `0x${string}`,
+                              decimals: m.decimals,
+                              native: false,
+                              fallbackUsd: 0,
+                              tint: tintForAddress(m.address),
+                              source: "onchain",
+                            });
+                          }}
                           className="flex w-full items-center justify-between rounded-2xl border border-white/[0.08] bg-white/[0.02] px-3 py-2 text-left transition hover:border-white/20 hover:bg-white/[0.05]"
                         >
                           <span className="min-w-0">
@@ -250,7 +276,10 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                         </span>
                       )}
                     </div>
-                    <button onClick={applyToComposer} className="btn-primary mt-2.5 w-full">
+                    <button
+                      onClick={() => onPrefilled?.()}
+                      className="btn-primary mt-2.5 w-full"
+                    >
                       Continue to payment
                     </button>
                   </div>

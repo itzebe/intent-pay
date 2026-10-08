@@ -63,6 +63,18 @@ intent. It is an **additional interface layer**, not a second payment system:
 - **The requested output asset is authoritative** — the engine never silently
   substitutes the asset the sender happens to hold; obtaining it is the existing
   router/optimizer's job.
+- **One canonical intent, no second store.** `lib/domain/canonicalIntent.ts`
+  is the *only* payment state. The chat (`IntentEngine.tsx`), the composer, the
+  quote, the plan and the signing guard all read it. A completed parse is
+  applied through `applyNlIntent` → `nlDraftToIntentPatch` (`lib/nlp/apply.ts`);
+  the continuation draft is derived back out with `draftFromIntent`, so the two
+  views cannot drift (the "top says MON / missing, composer says USDC / $5" bug).
+  `DEFAULT_INTENT` is deliberately empty — never re-introduce a default asset or
+  amount; a hardcoded default is exactly how a stale payment appears.
+- **The guard refuses a payment the UI is not showing.** `prepareSigning` takes
+  `displayedKey` (from `displayKey(intent)`) and returns `composer_mismatch`
+  unless it equals the canonical intent's fingerprint. This is the backstop if a
+  UI desync ever reappears.
 - The engine must never break the manual flow: any failure returns a non-fatal
   error and the form composer keeps working.
 

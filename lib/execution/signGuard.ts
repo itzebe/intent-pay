@@ -2,7 +2,7 @@ import type { Address } from "viem";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
 import { parseUnits } from "@/lib/domain/math";
-import type { CanonicalIntent } from "@/lib/domain/canonicalIntent";
+import { displayKey, type CanonicalIntent } from "@/lib/domain/canonicalIntent";
 import { isQuoteStale } from "@/lib/domain/freshness";
 import { assessPriceImpact, DEFAULT_SLIPPAGE_BPS } from "@/lib/domain/protection";
 import { buildPaymentPlan, type PaymentPlan } from "./plan";
@@ -55,6 +55,14 @@ export type SigningContext = {
    * `lib/domain/protection`; never widened in response to price impact.
    */
   slippageBps?: number;
+  /**
+   * Fingerprint of the payment the *UI is displaying* (the receive/pay assets,
+   * amounts, mode and recipient). When supplied, the guard refuses to sign
+   * unless it equals `displayKey(ctx.intent)` — so a composer that ever drifts
+   * from the canonical intent (the MON/USDC/$5 class of bug) can never be
+   * signed, even if the UI regression reappears.
+   */
+  displayedKey?: string;
 };
 
 /**
@@ -152,6 +160,7 @@ export type SigningAbortReason =
   | "account_changed"
   | "price_impact"
   | "unprotected"
+  | "composer_mismatch"
   | "not_ready";
 
 const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
@@ -166,6 +175,8 @@ const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
     "This route's price impact is too high to execute safely. Slippage is never widened to force it — choose a different amount or payment asset.",
   unprotected:
     "This transaction could not be built with an on-chain output bound, so it was not signed. Please try again.",
+  composer_mismatch:
+    "The payment on screen doesn't match the current request, so it was not signed. Please review the payment again.",
   not_ready: "This payment isn't ready to sign yet.",
 };
 
@@ -180,6 +191,21 @@ export async function prepareSigning(
   const expectedVersion = ctx.intent.version;
   const expectedKey = ctx.intent.key;
   const now = fetchers.now ?? (() => Date.now());
+
+  // 0. The payment the UI is showing must be the canonical intent we are about
+  // to sign. This is the architectural backstop against a composer that drifts
+  // from the one source of truth: if the displayed fingerprint differs from the
+  // canonical intent's own fingerprint, we refuse to sign rather than sign the
+  // wrong thing.
+  if (ctx.displayedKey !== undefined && ctx.displayedKey !== displayKey(ctx.intent)) {
+    return {
+      ok: false,
+      reason: "composer_mismatch",
+      message: BLOCKED_MESSAGES.composer_mismatch,
+      expectedVersion,
+      actualVersion: expectedVersion,
+    };
+  }
 
   const block = (
     reason: SigningAbortReason,

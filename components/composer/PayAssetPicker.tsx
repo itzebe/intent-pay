@@ -38,7 +38,8 @@ export function PayAssetPicker({
   recommended: string | null;
   /** False while the source is only an optimizer suggestion, not a choice. */
   payTokenIsSet?: boolean;
-  onSelect: (symbol: string) => void;
+  /** The exact contract address is passed so identity is never symbol-only. */
+  onSelect: (symbol: string, address?: string) => void;
   availability?: Record<string, boolean | null>;
   catalog: TokenConfig[];
   network: MonadNetwork;
@@ -93,7 +94,7 @@ export function PayAssetPicker({
               return (
                 <button
                   key={b.token.symbol}
-                  onClick={() => onSelect(b.token.symbol)}
+                  onClick={() => onSelect(b.token.symbol, b.token.address)}
                   disabled={Boolean(unusable)}
                   className={`group relative flex items-center gap-2 rounded-2xl border py-2 pl-2 pr-3 text-left transition ${
                     isSelected
@@ -152,8 +153,8 @@ export function PayAssetPicker({
           network={network}
           onAddToken={onAddToken}
           prefer="pay"
-          onSelect={(s) => {
-            onSelect(s);
+          onSelect={(s, address) => {
+            onSelect(s, address);
             setOpen(false);
           }}
         />

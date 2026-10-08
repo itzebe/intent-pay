@@ -75,19 +75,31 @@ export type CanonicalIntent = CanonicalFields & {
  */
 export type IntentPatch = Partial<CanonicalFields>;
 
+/**
+ * The *empty* starting intent. Deliberately asset-less and amount-less: there is
+ * no default payment. A previous build shipped `receiveToken: "USDC"` +
+ * `receiveAmount: "5"`, which is exactly the "stale $5 USDC" that could appear
+ * while the user had actually asked for MON with no amount. Nothing here may
+ * ever overwrite what the user (or their parsed instruction) specified.
+ */
 export const DEFAULT_INTENT: CanonicalFields = {
   text: "",
   recipient: "",
-  receiveToken: "USDC",
-  receiveAmount: "5",
+  receiveToken: "",
+  receiveAmount: "",
   amountMode: "recipient_receives",
-  payToken: "USDC",
+  payToken: "",
   payTokenSource: "recommended",
   network: "mainnet",
 };
 
 export function initialIntent(): CanonicalIntent {
   return withMeta(DEFAULT_INTENT, 1);
+}
+
+/** True when an asset slot still needs the user (or the parser) to fill it. */
+export function hasReceiveAsset(intent: CanonicalIntent): boolean {
+  return Boolean(intent.receiveToken || intent.receiveTokenAddress);
 }
 
 /** True when `a` and `b` are the same request (ignoring version/key). */
@@ -137,6 +149,39 @@ export function executionKey(f: CanonicalFields): string {
 /** Attach version + key to a set of fields. */
 export function withMeta(f: CanonicalFields, version: number): CanonicalIntent {
   return { ...f, version, key: executionKey(f) };
+}
+
+/**
+ * A symbol-level fingerprint of what the UI is *displaying*: the receive/pay
+ * assets, the amounts, the mode and the recipient. It is deliberately
+ * address-agnostic — contract identity is already enforced by `executionKey`
+ * and the transaction plan; this fingerprint exists purely so the signing guard
+ * can prove the payment on screen is the one it is about to sign.
+ *
+ * A composer that drifted from the canonical intent (the MON / USDC / $5 class
+ * of bug) yields a different fingerprint and is refused before signing.
+ */
+export function displayKey(
+  f: Pick<
+    CanonicalFields,
+    | "network"
+    | "amountMode"
+    | "receiveToken"
+    | "receiveAmount"
+    | "receiveTokenAmount"
+    | "payToken"
+    | "recipient"
+  >,
+): string {
+  return [
+    f.network,
+    f.amountMode,
+    (f.receiveToken ?? "").toLowerCase(),
+    f.receiveAmount ?? "",
+    f.receiveTokenAmount ?? "",
+    (f.payToken ?? "").toLowerCase(),
+    (f.recipient ?? "").toLowerCase(),
+  ].join("|");
 }
 
 /**

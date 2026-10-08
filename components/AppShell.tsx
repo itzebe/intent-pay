@@ -7,6 +7,7 @@ import { Hero, HowItWorks } from "@/components/landing/Hero";
 import { IntegrationStack } from "@/components/landing/IntegrationStack";
 import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Bolt, Shield } from "@/components/ui/Icons";
 
 function Shell() {
@@ -52,7 +53,9 @@ function Shell() {
         <Hero onTry={() => composerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} />
 
         <div ref={composerRef} className="mx-auto mt-10 max-w-5xl scroll-mt-20 px-5">
-          <PaymentComposer networkLabel="Monad" />
+          <ErrorBoundary scope="composer">
+            <PaymentComposer networkLabel="Monad" />
+          </ErrorBoundary>
           <IntegrationStack network={flow.intent.network} />
         </div>
 

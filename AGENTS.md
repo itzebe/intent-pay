@@ -238,6 +238,49 @@ not the UI.
   dapp cannot force private routing onto an injected wallet, so pointing the app
   RPC at it would be a cosmetic badge. **Do not fake an "Active" badge.**
 
+## Source-asset selection (sender side)
+
+The intent is stated in terms of what the **recipient** receives. The sender's
+asset is decided separately and never inferred from the recipient's asset.
+
+- **A token-quantity names the recipient, not the source.** "10 MON" sets
+  `receiveToken: MON` + `receiveTokenAmount: 10`. `payToken` stays **unset** so
+  the live balances decide the best asset to spend. The source is fixed only by
+  the explicit "N A worth of B" form (`sourceAsset`) — a genuine user choice.
+- `lib/domain/sourceSelection.ts` (`selectSource`) is the deterministic engine:
+  balances + ranked optimizer options → one source with a human reason. Order:
+  an explicit choice while usable (authoritative, never silently replaced) →
+  the best executable + sufficient option (live cost order) → honest failure
+  codes (`no_balances`, `none_executable`, `explicit_unusable`).
+- Gas is a hard constraint: with native gas and no MON reserve the engine
+  refuses every option (`gasCovered`); a configured paymaster that really
+  sponsors gas lifts it.
+- `pending` is a distinct state — while the optimizer is still loading
+  (balances present, no options yet) the engine says "Finding…", it never emits
+  a false "none of your holdings is enough".
+- `lib/hooks/usePayment.tsx` adopts the engine's auto-pick, keeps an already
+  usable source until it becomes unavailable, and feeds `sourceBlocked` into
+  `computeReadiness` (a hard block for auto-selection; a fixable block for an
+  unusable explicit choice). `components/composer/PayAssetPicker.tsx` always
+  shows the engine-selected source with its rationale.
+
+## Crash-proofing external token data
+
+A token may arrive from a wallet indexer, a pasted address or a remote list with
+**missing** `symbol`/`tint`/`decimals`. That used to throw inside `TokenBadge`
+(`shade(undefined)` → `undefined.replace`) with no error boundary, unmounting
+the tree → a blank page (the USDC→MON report).
+
+- Every external token is normalized on ingest: `normalizeTokenConfig` /
+  `registerToken` (`lib/config/tokens.ts`), plus `useTokenCatalog` and the
+  composer's balance ingestion. `tint` is derived deterministically from the
+  address when absent; `decimals` falls back to 18; `symbol` to "Unknown".
+- `components/ui/TokenBadge.tsx` validates its tint and never throws as a last
+  line of defence.
+- `components/ErrorBoundary.tsx` wraps the app (`app/page.tsx`, scope="app") and
+  the composer (`components/AppShell.tsx`, scope="composer"), so a single bad
+  subtree can never blank the whole product.
+
 ## Signing safety invariant
 
 `prepareSigning` (`lib/execution/signGuard.ts`) is the only path to a signature.

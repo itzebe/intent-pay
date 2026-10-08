@@ -40,14 +40,25 @@ describe("NL draft → canonical intent mapping (single source of truth)", () =>
     expect(patch.amountMode).toBe("recipient_receives");
   });
 
-  it("maps a token-quantity instruction to an exact token target", () => {
+  it("maps a token-quantity instruction to an exact token target, leaving the source open", () => {
     const patch = nlDraftToIntentPatch({
       draft: draft({ amount: "10", amountType: "TOKEN_AMOUNT", asset: "MON" }),
     });
     expect(patch.receiveToken).toBe("MON");
     expect(patch.receiveTokenAmount).toBe("10");
-    // The user named the source too ("10 MON" = spend MON).
-    expect(patch.payToken).toBe("MON");
+    // "10 MON" names the RECIPIENT asset. It does not fix the source: the
+    // wallet's live balances decide the best asset to spend, so payToken stays
+    // unset here (the source-selection engine fills it).
+    expect(patch.payToken).toBeUndefined();
+    expect(patch.payTokenSource).toBeUndefined();
+  });
+
+  it("fixes the source only for the explicit 'N A worth of B' form", () => {
+    const patch = nlDraftToIntentPatch({
+      draft: draft({ amount: "10", amountType: "TOKEN_AMOUNT", asset: "MON", sourceAsset: "USDC" }),
+    });
+    expect(patch.receiveToken).toBe("MON");
+    expect(patch.payToken).toBe("USDC");
     expect(patch.payTokenSource).toBe("intent");
   });
 

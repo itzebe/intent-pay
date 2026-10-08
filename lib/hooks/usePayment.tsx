@@ -27,6 +27,7 @@ import { useCapabilities, type Capabilities } from "@/lib/hooks/useCapabilities"
 import { useOptimizer, type OptimizeResult } from "@/lib/hooks/useOptimizer";
 import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
 import { createLatestGuard } from "@/lib/domain/latest";
+import { selectSource, type SourceSelection } from "@/lib/domain/sourceSelection";
 import { nlDraftToIntentPatch, type NlApplyInput } from "@/lib/nlp/apply";
 import { alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
 import { resolveAbstraction, type AbstractionResult } from "@/lib/domain/abstraction";
@@ -116,6 +117,11 @@ type FlowContextValue = FlowState & {
    */
   applyNlIntent: (input: NlApplyInput & { text: string }) => void;
   recommendedPayToken: string | null;
+  /**
+   * The deterministic source-asset selection for the current intent: the asset
+   * to spend, why it was chosen, and the required amount/route/gas state.
+   */
+  sourceSelection: SourceSelection;
   balanceFor: (symbol: string) => Balance | undefined;
   receiveTokenConfig: TokenConfig;
   payTokenConfig: TokenConfig;
@@ -424,26 +430,78 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     return funded[0]?.token.symbol ?? null;
   }, [optimizer, state.balances]);
 
-  // Keep the recommendation in sync until the user chooses manually, or the
-  // instruction already established the source. We never silently override an
-  // explicit choice or an intent-established asset.
+  // ---- Deterministic source selection -------------------------------------
+  // The named asset is the RECIPIENT asset; the engine decides what to spend.
+  // A sponsored paymaster / ERC-20-gas path only "covers" gas when it is
+  // genuinely configured AND the wallet advertises it — never assumed.
+  const gasAbstractedForSelection = Boolean(
+    (capabilities?.gas.sponsorshipConfigured && walletGasCaps?.paymasterService) ||
+      walletGasCaps?.erc20GasPayment,
+  );
+  const sourceSelection = useMemo(
+    () =>
+      selectSource({
+        recipientAsset: state.intent.receiveToken,
+        balances: state.balances,
+        options: (optimizer?.options ?? []).map((o) => ({
+          symbol: o.symbol,
+          ok: o.ok,
+          sufficient: o.sufficient,
+          payAmount: o.payAmount,
+          payUsd: o.payUsd,
+          routePath: o.routePath,
+          totalSenderCostUsd: o.totalSenderCostUsd,
+          reason: o.reason,
+        })),
+        explicit:
+          (state.intent.payTokenSource === "user" || state.intent.payTokenSource === "intent") &&
+          state.intent.payToken
+            ? {
+                symbol: state.intent.payToken,
+                origin: state.intent.payTokenSource === "user" ? "user" : "intent",
+              }
+            : null,
+        gasMode: gasAbstractedForSelection ? "sponsored" : "native",
+        gasAbstracted: gasAbstractedForSelection,
+        pending: Boolean(state.balances.length > 0 && !optimizer && optimizerLoading),
+      }),
+    [
+      state.intent.receiveToken,
+      state.intent.payToken,
+      state.intent.payTokenSource,
+      state.balances,
+      optimizer,
+      optimizerLoading,
+      gasAbstractedForSelection,
+    ],
+  );
+
+  // Keep an AUTO-selected source in sync: adopt the engine's choice, but keep
+  // an already-usable source selected until it becomes unavailable/insufficient,
+  // at which point we re-evaluate and report the change. An explicit choice is
+  // never touched here. Applying a new source is execution-relevant, so it goes
+  // through `patchIntent` (bumps the version, discards the stale quote).
   useEffect(() => {
     if (state.intent.payTokenSource !== "recommended") return;
-    if (!recommendedPayToken) return;
-    if (recommendedPayToken === state.intent.payToken) return;
-    // A recommendation is not an execution commitment, so it must not bump the
-    // intent version (which would needlessly invalidate the quote). Apply it
-    // directly — with its contract address, so the identity stays canonical.
-    const cfg = getToken(recommendedPayToken);
-    setState((s) => ({
-      ...s,
-      intent: {
-        ...s.intent,
-        payToken: recommendedPayToken,
-        payTokenAddress: cfg?.address,
-      },
-    }));
-  }, [recommendedPayToken, state.intent.payTokenSource, state.intent.payToken]);
+    if (!sourceSelection.sourceAsset) return;
+    if (state.intent.payToken === sourceSelection.sourceAsset) return;
+    // Keep the current auto-source while it is still executable + sufficient.
+    const current = (optimizer?.options ?? []).find(
+      (o) => o.symbol.toLowerCase() === state.intent.payToken.toLowerCase(),
+    );
+    if (state.intent.payToken && current?.ok && current.sufficient) return;
+    const cfg = getToken(sourceSelection.sourceAsset);
+    patchIntent({
+      payToken: sourceSelection.sourceAsset,
+      payTokenAddress: sourceSelection.sourceAddress ?? cfg?.address,
+    });
+  }, [
+    sourceSelection,
+    state.intent.payToken,
+    state.intent.payTokenSource,
+    optimizer,
+    patchIntent,
+  ]);
 
   // ---- Auto quote (debounced, version-guarded) ----------------------------
   // A slow request that resolves after the intent has moved on must never write
@@ -756,14 +814,25 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   }, [state.quote, state.balances, gasInfo]);
 
   // ---- Deterministic readiness gate ---------------------------------------
-  const payTokenIsSet =
-    state.intent.payTokenSource === "user" || state.intent.payTokenSource === "intent";
+  // A source is "set" once it exists (explicitly chosen, fixed by the intent,
+  // or auto-selected by the engine). The gate additionally surfaces a concrete
+  // source-selection blocker, so "no executable source" is a specific error
+  // rather than a generic "choose an asset".
+  const payTokenIsSet = Boolean(state.intent.payToken);
   const readiness = useMemo(
     () =>
       computeReadiness({
         recipient: state.intent.recipient,
         recipientConfirmed,
         payTokenIsSet,
+        sourceBlocked:
+          state.balances.length === 0 || sourceSelection.pending
+            ? null
+            : sourceSelection.sourceAsset === null
+              ? sourceSelection.blocker ?? sourceSelection.reason
+              : sourceSelection.code === "explicit_unusable"
+                ? sourceSelection.reason
+                : null,
         payToken: state.intent.payToken,
         receiveToken: state.intent.receiveToken,
         quoting: state.quoting,
@@ -780,6 +849,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       state.intent.recipient,
       state.intent.payToken,
       state.intent.receiveToken,
+      sourceSelection,
       state.intent.version,
       state.quote,
       state.quoteVersion,
@@ -815,6 +885,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     correctToIntended,
     applyNlIntent,
     recommendedPayToken,
+    sourceSelection,
     balanceFor,
     receiveTokenConfig,
     payTokenConfig,

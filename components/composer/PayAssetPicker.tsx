@@ -32,11 +32,12 @@ export function PayAssetPicker({
   onAddToken,
   optimizer,
   optimizerLoading,
+  reason,
 }: {
   balances: Balance[];
   selected: string;
   recommended: string | null;
-  /** False while the source is only an optimizer suggestion, not a choice. */
+  /** True when the source is an explicit user choice; false when auto-selected. */
   payTokenIsSet?: boolean;
   /** The exact contract address is passed so identity is never symbol-only. */
   onSelect: (symbol: string, address?: string) => void;
@@ -46,6 +47,8 @@ export function PayAssetPicker({
   onAddToken?: (token: TokenConfig) => void;
   optimizer?: OptimizeResult | null;
   optimizerLoading?: boolean;
+  /** Why the current source was chosen (from the source-selection engine). */
+  reason?: string;
 }) {
   const [open, setOpen] = useState(false);
   const funded = balances.filter((b) => b.usd > 0);
@@ -54,9 +57,10 @@ export function PayAssetPicker({
   const optionFor = (symbol: string) =>
     optimizer?.options.find((o) => o.symbol === symbol);
   const bestSymbol = optimizer?.best?.symbol ?? recommended;
-  // A recommendation is not a selection: don't render the suggested asset as
-  // already chosen until the user actually picks one.
-  const activeSelection = payTokenIsSet ? selected : null;
+  // The engine always resolves a source, so it is always shown as selected; the
+  // badge distinguishes an explicit choice ("your choice") from the engine's
+  // automatic pick ("auto").
+  const activeSelection = selected || null;
 
   return (
     <div>
@@ -67,11 +71,7 @@ export function PayAssetPicker({
         </span>
       </div>
 
-      {!payTokenIsSet && (
-        <p className="mb-2 text-xs text-white/45">
-          Choose the asset you want to pay with.
-        </p>
-      )}
+      {reason && <p className="mb-2 text-xs text-white/45">{reason}</p>}
 
       <div className="rounded-2xl border border-white/[0.08] bg-ink-900/50 p-3">
         {funded.length === 0 ? (
@@ -114,6 +114,11 @@ export function PayAssetPicker({
                       {sub}
                     </span>
                   </span>
+                  {isSelected && (
+                    <span className="absolute -right-1 -top-2 inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white shadow">
+                      {payTokenIsSet ? "Your choice" : "Auto"}
+                    </span>
+                  )}
                   {isRecommended && (
                     <span className="absolute -right-1 -top-2 inline-flex items-center gap-1 rounded-full bg-mono px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white shadow">
                       <Sparkle className="h-2.5 w-2.5" /> Best

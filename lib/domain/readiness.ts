@@ -17,6 +17,7 @@ import { isEvmAddress } from "@/lib/format";
 export type ReadinessCode =
   | "invalid_recipient"
   | "choose_payment_asset"
+  | "no_source"
   | "amount_mismatch"
   | "quoting"
   | "quote_stale"
@@ -44,8 +45,13 @@ export type ReadinessInput = {
   recipient: string;
   /** The user has explicitly supplied (or confirmed) the recipient address. */
   recipientConfirmed: boolean;
-  /** The source/payment asset has been explicitly established. */
+  /** The source/payment asset has been established (explicitly or by the engine). */
   payTokenIsSet: boolean;
+  /**
+   * A source-selection blocker: no executable/sufficient source asset. When
+   * present, this is the specific reason the payment can't proceed.
+   */
+  sourceBlocked?: string | null;
   payToken: string;
   receiveToken: string;
   quoting: boolean;
@@ -106,8 +112,19 @@ export function computeReadiness(input: ReadinessInput): Readiness {
     };
   }
 
-  // 2. The source/payment asset must be explicitly established. We never
-  //    silently pick one — an unspecified source blocks progression.
+  // 2. A source asset must be selected (explicitly or by the engine). We never
+  //    silently proceed with no source: an auto-selected source is fine, but a
+  //    source-selection blocker is a specific, actionable failure.
+  if (input.sourceBlocked) {
+    return {
+      ready: false,
+      code: "no_source",
+      cta: "No executable payment asset",
+      message: input.sourceBlocked,
+      severity: "error",
+      retryable: true,
+    };
+  }
   if (!payTokenIsSet) {
     return {
       ready: false,

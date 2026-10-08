@@ -13,6 +13,7 @@ import {
   usdTokenLabel,
 } from "@/lib/format";
 import { planEconomics } from "@/lib/execution/plan";
+import type { ExecutionProtection } from "@/lib/domain/protection";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 import { ArrowDown, ChevronDown, Shield, Warning } from "@/components/ui/Icons";
 
@@ -35,6 +36,7 @@ export function ReviewSheet({
   batchable = false,
   quotedAt,
   quoteStale = false,
+  protection,
 }: {
   quote: Quote;
   payToken: TokenConfig;
@@ -54,6 +56,8 @@ export function ReviewSheet({
   quotedAt?: number;
   /** True when the quote has aged out; the review is then not executable. */
   quoteStale?: boolean;
+  /** Honest execution-safety surface (MEV / slippage / price impact). */
+  protection?: ExecutionProtection | null;
 }) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -137,6 +141,48 @@ export function ReviewSheet({
           </div>
         </div>
 
+        {protection && (
+          <div className="mt-3 space-y-2 rounded-2xl border border-white/[0.07] bg-ink-800/40 p-4">
+            <div className="flex items-center justify-between">
+              <span className="label">Execution safety</span>
+              <Shield className="h-4 w-4 text-emerald-300/70" />
+            </div>
+            <SafetyRow
+              label="MEV protection"
+              value={protection.mev.active ? "Active" : "Unavailable"}
+              tone={protection.mev.active ? "ok" : "warn"}
+              sub={
+                protection.mev.active
+                  ? "private submission"
+                  : "no private path on Monad"
+              }
+            />
+            <SafetyRow
+              label="Slippage protection"
+              value="Active"
+              tone="ok"
+              sub={`max ${(protection.slippage.bps / 100).toFixed(2)}%`}
+            />
+            <SafetyRow
+              label="Price impact"
+              value={formatImpact(protection.priceImpact.value) ?? "Unavailable"}
+              tone={protection.priceImpact.blocked ? "bad" : "ok"}
+              sub={`limit ${(protection.priceImpact.max * 100).toFixed(2)}%`}
+            />
+            <SafetyRow
+              label="Minimum received"
+              value={`${formatAmount(econ.minimumReceived)} ${receiveToken.symbol}`}
+              sub={econ.exact ? "exact output" : "enforced on-chain"}
+            />
+            <SafetyRow
+              label="Quote freshness"
+              value={quoteStale ? "Expired" : "Fresh"}
+              tone={quoteStale ? "warn" : "ok"}
+              sub={quoteTime ? `live · ${quoteTime}` : "live"}
+            />
+          </div>
+        )}
+
         <button
           onClick={() => setShowDetails((d) => !d)}
           className="mt-4 flex w-full items-center justify-between rounded-xl px-2 py-2 text-sm text-white/55 transition hover:bg-white/[0.04] hover:text-white/85"
@@ -161,11 +207,25 @@ export function ReviewSheet({
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-white/40">Slippage protection</span>
+                  <span className="text-white/40">Swap mode</span>
                   <span className="font-mono text-white/70">
                     {quote.exactOutput ? "Exact output" : "Exact input"}
                   </span>
                 </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-white/40">On-chain bound</span>
+                  <span className="font-mono text-white/70">
+                    {quote.exactOutput ? "amountInMaximum" : "amountOutMinimum"}
+                  </span>
+                </div>
+                {protection && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/40">MEV protection</span>
+                    <span className="font-mono text-white/70">
+                      {protection.mev.active ? "Private submission" : "Unavailable"}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Gas</span>
                   <span className="font-mono text-white/70">
@@ -269,6 +329,35 @@ function SummaryRow({
           {value}
         </span>
         {sub && <span className="num text-[11px] text-white/35">{sub}</span>}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * One execution-safety line. `tone` colours the value honestly: a protection
+ * that is not active is amber, a blocked route is red — never a green claim
+ * that isn't true.
+ */
+function SafetyRow({
+  label,
+  value,
+  sub,
+  tone = "ok",
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "ok" | "warn" | "bad";
+}) {
+  const toneClass =
+    tone === "bad" ? "text-red-300" : tone === "warn" ? "text-amber-200" : "text-emerald-200";
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-xs text-white/45">{label}</span>
+      <span className="flex items-baseline gap-2 text-right">
+        <span className={`num text-sm font-medium ${toneClass}`}>{value}</span>
+        {sub && <span className="text-[11px] text-white/35">{sub}</span>}
       </span>
     </div>
   );

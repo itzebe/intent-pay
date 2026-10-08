@@ -11,6 +11,7 @@ import { executePlan, executePlanBatched, ExecutionError, type StepResult } from
 import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
 import { prepareSigning } from "@/lib/execution/signGuard";
 import { verifyDelivery } from "@/lib/execution/verify";
+import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { NETWORKS } from "@/lib/config/chains";
@@ -137,10 +138,21 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const recipientConfirmed = flow.recipientConfirmed && recipientValid;
   const canContinue = flow.readiness.ready;
 
+  // The execution-safety surface for the current quote: MEV capability,
+  // slippage tolerance, and the price-impact assessment. Derived from real
+  // configuration + the live quote, never from a hardcoded badge.
+  const protection: ExecutionProtection | null = useMemo(
+    () =>
+      flow.quote
+        ? resolveExecutionProtection(flow.quote.priceImpact)
+        : null,
+    [flow.quote],
+  );
+
   // A descriptive plan for display only; the *signed* plan is rebuilt fresh
   // inside the signing guard from the current intent.
   const displayPlan = useMemo(() => {
-    if (!flow.quote) return { steps: [], primaryStepId: "", executable: false };
+    if (!flow.quote) return { steps: [], primaryStepId: "", executable: false, slippageBps: 0 };
     try {
       return buildPaymentPlan(
         flow.quote,
@@ -148,7 +160,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         flow.intent.recipient as `0x${string}`,
       );
     } catch {
-      return { steps: [], primaryStepId: "", executable: false };
+      return { steps: [], primaryStepId: "", executable: false, slippageBps: 0 };
     }
   }, [flow.quote, flow.intent.recipient, wallet.address]);
 
@@ -231,6 +243,8 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           intent: flow.intent,
           sender: wallet.address,
           recipient: flow.intent.recipient as `0x${string}`,
+          // The clamped tolerance encoded into the on-chain swap bound.
+          slippageBps: protection?.slippage.bps,
         },
         {
           fetchBalances: () => fetchBalances(wallet.address!, flow.intent.network),
@@ -307,6 +321,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             flow.receiveTokenConfig,
             flow.intent.recipient,
             prepared.quote.receiveAmount,
+            // Use the tolerance the transaction actually enforced on-chain, so
+            // a legitimate fill is never reported as unverified.
+            BigInt(prepared.plan.slippageBps),
           );
           setDelivery(check);
         } catch {
@@ -328,6 +345,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     flow.receiveTokenConfig,
     flow.gasInfo,
     flow.refreshQuote,
+    protection,
     wallet.address,
     wallet.walletClient,
     wallet.provider,
@@ -585,6 +603,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               batchable={Boolean(walletCaps?.atomicBatch)}
               quotedAt={flow.quote.quotedAt}
               quoteStale={flow.quoteStale}
+              protection={protection}
             />
           </motion.div>
         )}

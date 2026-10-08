@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { WalletClient } from "viem";
 import { executePlan, executePlanBatched, ExecutionError } from "@/lib/execution/execute";
 import { buildPaymentPlan } from "@/lib/execution/plan";
+import { getClientPublicClient } from "@/lib/wallet/clients";
 import { getToken } from "@/lib/config/tokens";
 import type { Quote } from "@/lib/domain/intent";
 
@@ -81,6 +82,35 @@ describe("executePlan — transaction rejection handling", () => {
     await expect(executePlan(plan, rejectingWallet(), "mainnet")).rejects.toMatchObject({
       code: "unknown",
     });
+  });
+
+  // N. A reverted on-chain transaction is never reported as successful.
+  it("reports a reverted receipt as failed with a `reverted` error (N)", async () => {
+    const hash = "0xreverted" as `0x${string}`;
+    const wallet = {
+      account: { address: SENDER },
+      writeContract: async () => hash,
+      sendTransaction: async () => hash,
+    } as unknown as WalletClient;
+
+    // Stub the receipt read to return a reverted receipt for our hash.
+    const client = getClientPublicClient("mainnet");
+    const spy = vi
+      .spyOn(client, "waitForTransactionReceipt")
+      .mockResolvedValue({ status: "reverted" } as any);
+
+    try {
+      const seen: string[] = [];
+      await expect(
+        executePlan(directTransferPlan(), wallet, "mainnet", {
+          onStep: (r) => seen.push(r.status),
+        }),
+      ).rejects.toMatchObject({ code: "reverted" });
+      expect(seen).not.toContain("confirmed");
+      expect(seen).toContain("failed");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { gasCapabilities } from "@/lib/server/gasCapabilities";
 import { alchemyStatus, zerionStatus } from "@/lib/server/diagnostics";
 import { zerionEnabled } from "@/lib/server/zerion";
+import { resolveMevProtection } from "@/lib/domain/protection";
 import { NETWORKS, type MonadNetwork } from "@/lib/config/chains";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const network: MonadNetwork = "mainnet";
   const gas = gasCapabilities(network);
+  const mev = resolveMevProtection();
   const [alchemy, zerion] = await Promise.all([alchemyStatus(network), zerionStatus()]);
 
   return NextResponse.json({
@@ -29,6 +31,16 @@ export async function GET() {
     network,
     chainId: NETWORKS[network].chainId,
     routing: { provider: "uniswap-v3", chain: "monad", live: true },
+    // Honest MEV / private-order-flow capability. `active` is true only when a
+    // private submission endpoint is actually configured; otherwise the app
+    // relies on on-chain slippage bounds, the price-impact guard and delivery
+    // verification. Never a cosmetic badge.
+    mevProtection: {
+      state: mev.state,
+      active: mev.active,
+      privateRpcConfigured: mev.rpcConfigured,
+      reason: mev.reason,
+    },
     pricing: {
       primary: gas.alchemy ? "alchemy" : null,
       fallbacks: ["geckoterminal", "dexscreener", "onchain-dex"],

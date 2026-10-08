@@ -4,6 +4,7 @@ import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
 import { parseUnits } from "@/lib/domain/math";
 import type { CanonicalIntent } from "@/lib/domain/canonicalIntent";
 import { isQuoteStale } from "@/lib/domain/freshness";
+import { assessPriceImpact, DEFAULT_SLIPPAGE_BPS } from "@/lib/domain/protection";
 import { buildPaymentPlan, type PaymentPlan } from "./plan";
 import { resolveGasMode, type GasMode } from "./alchemy";
 
@@ -49,6 +50,11 @@ export type SigningContext = {
   intent: CanonicalIntent;
   sender: Address;
   recipient: Address;
+  /**
+   * Slippage tolerance (bps) to encode into the on-chain swap bound. Clamped by
+   * `lib/domain/protection`; never widened in response to price impact.
+   */
+  slippageBps?: number;
 };
 
 export type SigningFetchers = {
@@ -106,6 +112,8 @@ export type SigningAbortReason =
   | "insufficient_balance"
   | "insufficient_gas"
   | "account_changed"
+  | "price_impact"
+  | "unprotected"
   | "not_ready";
 
 const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
@@ -116,6 +124,10 @@ const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
   insufficient_balance: "Your balance changed and no longer covers this payment. Review it again.",
   insufficient_gas: "Gas can no longer be sponsored and your wallet doesn't hold enough MON for the fee. Review the payment again.",
   account_changed: "Your wallet account changed. Balances and gas were rebuilt for the new account — review and confirm again.",
+  price_impact:
+    "This route's price impact is too high to execute safely. Slippage is never widened to force it — choose a different amount or payment asset.",
+  unprotected:
+    "This transaction could not be built with an on-chain output bound, so it was not signed. Please try again.",
   not_ready: "This payment isn't ready to sign yet.",
 };
 
@@ -179,6 +191,13 @@ export async function prepareSigning(
   // echoes the intent it priced, so a mismatch is a hard stop.
   if (!quoteMatchesIntent(quote, current)) return block("intent_mismatch", current.version);
 
+  // 5b. A route whose live price impact exceeds the configured ceiling is
+  // blocked *before signing*. Slippage is never widened to make a bad route
+  // execute; an unknown impact does not block (we never invent one).
+  if (assessPriceImpact(quote.priceImpact).blocked) {
+    return block("price_impact", current.version);
+  }
+
   // 6. The fresh balances must still cover the fresh quote. A balance that
   // drained between review and signing must block, not sign.
   if (!coversBalance(balances, quote)) return block("insufficient_balance", current.version);
@@ -197,15 +216,20 @@ export async function prepareSigning(
     }
   }
 
-  // 9. Rebuild the transaction plan from the *fresh* quote. Calldata is never
-  // reused from an earlier build.
+  // 9. Rebuild the transaction plan from the *fresh* quote, with the clamped
+  // slippage bound. Calldata is never reused from an earlier build.
   let plan: PaymentPlan;
   try {
-    plan = buildPaymentPlan(quote, ctx.sender, ctx.recipient);
+    plan = buildPaymentPlan(quote, ctx.sender, ctx.recipient, ctx.slippageBps ?? DEFAULT_SLIPPAGE_BPS);
   } catch {
     return block("quote_unavailable", current.version);
   }
   if (!plan.executable) return block("not_ready", current.version);
+
+  // 9b. Every executable swap must carry a real on-chain bound. A swap step
+  // that could be signed with no minimum output is refused here — the UI's
+  // "Minimum received" figure is never the protection.
+  if (!planHasOutputBound(plan)) return block("unprotected", current.version);
 
   // 10. Final re-read: a change that landed during plan construction also aborts.
   const final = fetchers.readIntent();
@@ -288,6 +312,26 @@ export function quoteMatchesIntent(quote: Quote, intent: CanonicalIntent): boole
     quote.payToken.symbol === intent.payToken &&
     quote.network === intent.network
   );
+}
+
+/**
+ * True when every swap step in an executable plan carries a real on-chain
+ * output bound: `amountOutMinimum > 0` for an exact-input swap, or
+ * `amountInMaximum > 0` for an exact-output swap. A plan with a swap that has
+ * no bound would let a sandwich fill at any price, so it must never be signed.
+ *
+ * Non-swap plans (direct transfers) carry no swap and trivially satisfy this.
+ */
+export function planHasOutputBound(plan: PaymentPlan): boolean {
+  for (const step of plan.steps) {
+    if (step.kind !== "swap") continue;
+    if (step.direction === "exact_in") {
+      if (!(step.amountOutMinimum && step.amountOutMinimum > 0n)) return false;
+    } else {
+      if (!(step.amountInMaximum && step.amountInMaximum > 0n)) return false;
+    }
+  }
+  return true;
 }
 
 /**

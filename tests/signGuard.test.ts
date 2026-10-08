@@ -4,8 +4,10 @@ import {
   quoteMatchesIntent,
   coversBalance,
   coversGas,
+  planHasOutputBound,
   type SigningFetchers,
 } from "@/lib/execution/signGuard";
+import { buildPaymentPlan } from "@/lib/execution/plan";
 import { createLatestGuard } from "@/lib/domain/latest";
 import { getToken } from "@/lib/config/tokens";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
@@ -58,6 +60,53 @@ function directQuote(intent: CanonicalIntent, quotedAt = Date.now()): Quote {
     networkCostUsd: 0.01,
     quotedAt,
     exactOutput: false,
+  };
+}
+
+/** An exact-input swap quote whose tokens match the intent, with a measurable
+ * price impact. */
+function swapQuote(intent: CanonicalIntent, priceImpact: number | null): Quote {
+  const usdt = getToken("USDT")!;
+  const receive = getToken(intent.receiveToken) ?? getToken("USDC")!;
+  return {
+    intent: {
+      recipient: intent.recipient,
+      receiveToken: intent.receiveToken,
+      receiveAmount: intent.receiveAmount,
+      amountMode: intent.amountMode,
+    },
+    network: intent.network,
+    payToken: usdt,
+    receiveToken: receive,
+    payAmount: "5.01",
+    receiveAmount: "5",
+    payUsd: 5.01,
+    receiveUsd: 5,
+    rate: 1,
+    priceImpact,
+    route: {
+      kind: "swap",
+      hops: [{ fromSymbol: "USDT", toSymbol: receive.symbol, fee: 100, pool: "0x0000000000000000000000000000000000000001" }],
+      path: ["USDT", receive.symbol],
+      tokens: [usdt, receive],
+    },
+    totalSenderCostUsd: 5.02,
+    networkCostUsd: 0.01,
+    quotedAt: Date.now(),
+    exactOutput: false,
+  };
+}
+
+/** An intent that pays USDT and receives USDC, matching `swapQuote`. */
+function swapIntent(): CanonicalIntent {
+  return {
+    ...reduceIntent(initialIntent(), {
+      recipient: RECIPIENT,
+      receiveToken: "USDC",
+      receiveAmount: "5",
+      payToken: "USDT",
+      payTokenSource: "user",
+    }),
   };
 }
 
@@ -219,6 +268,63 @@ describe("signing safety pipeline — the invariant", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("intent_mismatch");
+  });
+
+  // C. Excessive price impact is blocked before signing.
+  it("blocks a route whose price impact exceeds the ceiling (C)", async () => {
+    const intent = swapIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({
+        readIntent: () => intent,
+        quote: { ok: true, quote: swapQuote(intent, 0.5) }, // 50% >> 3%
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("price_impact");
+  });
+
+  // A. A route within slippage/impact builds a protected plan and is allowed.
+  it("allows a swap within the impact ceiling and encodes an on-chain bound (A)", async () => {
+    const intent = swapIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT, slippageBps: 100 },
+      fetchers({
+        readIntent: () => intent,
+        quote: { ok: true, quote: swapQuote(intent, 0.004) }, // 0.4%
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const swap = result.plan.steps.find((s) => s.kind === "swap")!;
+      expect(swap.kind === "swap" && swap.amountOutMinimum).toBeGreaterThan(0n);
+      expect(result.plan.slippageBps).toBe(100);
+    }
+  });
+
+  it("does not block a swap whose impact could not be measured", async () => {
+    const intent = swapIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({ readIntent: () => intent, quote: { ok: true, quote: swapQuote(intent, null) } }),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  // B. A swap plan with no on-chain bound is refused (never signed unprotected).
+  it("refuses a plan whose swap carries no on-chain output bound (B)", () => {
+    const q = swapQuote(swapIntent(), 0.001);
+    const boundless = buildPaymentPlan(q, SENDER, RECIPIENT);
+    expect(planHasOutputBound(boundless)).toBe(true); // real plan has a bound
+
+    // Force a bound-less exact-in swap: the guard must reject it.
+    const unprotected = {
+      ...boundless,
+      steps: boundless.steps.map((s) =>
+        s.kind === "swap" ? { ...s, amountOutMinimum: 0n } : s,
+      ),
+    };
+    expect(planHasOutputBound(unprotected)).toBe(false);
   });
 });
 

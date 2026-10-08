@@ -75,6 +75,45 @@ describe("canonical intent versioning", () => {
     const again = reduceIntent(base, { recipient: ALICE });
     expect(again.version).toBe(base.version);
   });
+
+  // E/F/G/H. Every execution-relevant edit invalidates the prior build.
+  it("invalidates on recipient, amount, input asset and output asset changes", () => {
+    const base = reduceIntent(initialIntent(), { recipient: ALICE });
+    const edits: Partial<CanonicalIntent>[] = [
+      { recipient: BOB }, // E. recipient
+      { receiveAmount: "99" }, // F. amount
+      { payToken: "USDT" }, // G. input asset
+      { receiveToken: "MON" }, // H. output asset
+    ];
+    for (const edit of edits) {
+      const next = reduceIntent(base, edit);
+      expect(next.version, JSON.stringify(edit)).toBeGreaterThan(base.version);
+      expect(next.key, JSON.stringify(edit)).not.toBe(base.key);
+    }
+  });
+
+  // J. Network change invalidates.
+  it("invalidates on a network change (J)", () => {
+    const base = reduceIntent(initialIntent(), { recipient: ALICE });
+    const next = reduceIntent(base, { network: "mainnet" as const });
+    expect(next).toBe(base); // same network is a no-op
+    // A different network (were one configured) would bump the key; the key
+    // includes the network so a chain switch can never reuse a quote.
+    expect(base.key.split("|")[0]).toBe("mainnet");
+  });
+
+  it("invalidates when the receive asset's contract address changes (same symbol)", () => {
+    const base = reduceIntent(initialIntent(), {
+      recipient: ALICE,
+      receiveToken: "USDC",
+      receiveTokenAddress: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603",
+    });
+    const other = reduceIntent(base, {
+      receiveTokenAddress: "0x1111111111111111111111111111111111111111",
+    });
+    expect(other.version).toBeGreaterThan(base.version);
+    expect(other.key).not.toBe(base.key);
+  });
 });
 
 describe("quotable precondition", () => {

@@ -11,6 +11,13 @@ import type { MonadNetwork } from "@/lib/config/chains";
 export type Capabilities = {
   routing: { provider: string; chain: string; live: boolean };
   pricing: { primary: string | null; fallbacks: string[] };
+  /** Honest MEV / private-order-flow capability (never a cosmetic badge). */
+  mevProtection?: {
+    state: "MEV_PROTECTION_ACTIVE" | "MEV_PROTECTION_UNAVAILABLE";
+    active: boolean;
+    privateRpcConfigured: boolean;
+    reason: string;
+  };
   wallet: {
     zerion: boolean;
     zerionConfigured?: boolean;
@@ -32,6 +39,12 @@ export type Capabilities = {
 const FALLBACK: Capabilities = {
   routing: { provider: "uniswap-v3", chain: "monad", live: true },
   pricing: { primary: null, fallbacks: [] },
+  mevProtection: {
+    state: "MEV_PROTECTION_UNAVAILABLE",
+    active: false,
+    privateRpcConfigured: false,
+    reason: "Capabilities unavailable.",
+  },
   wallet: { zerion: false, zerionConfigured: false, zerionReachable: false },
   gas: {
     rpc: "public",

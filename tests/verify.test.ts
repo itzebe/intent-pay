@@ -132,6 +132,55 @@ describe("verifyDelivery — native MON", () => {
   });
 });
 
+describe("verifyDelivery — protected minimum (M/O)", () => {
+  it("verifies a fill that is below the quote but within the enforced slippage", async () => {
+    // Quoted 5 USDC with a 1% tolerance → 4.95 floor. A 4.96 fill is fine.
+    const receipt = {
+      status: "success",
+      logs: [
+        {
+          address: USDC.address,
+          topics: [TRANSFER_TOPIC, pad(OTHER), pad(RECIPIENT)],
+          data: word(4_960_000n),
+        },
+      ],
+    };
+    const check = await verifyDelivery(
+      fakeClient({ "0xabc": receipt }),
+      ["0xabc" as `0x${string}`],
+      USDC,
+      RECIPIENT,
+      "5",
+      100n, // 1%
+    );
+    expect(check.verified).toBe(true);
+  });
+
+  it("does NOT verify a fill below the enforced minimum (O)", async () => {
+    // 4.90 < 4.95 floor: the recipient was short-changed past the tolerance.
+    const receipt = {
+      status: "success",
+      logs: [
+        {
+          address: USDC.address,
+          topics: [TRANSFER_TOPIC, pad(OTHER), pad(RECIPIENT)],
+          data: word(4_900_000n),
+        },
+      ],
+    };
+    const check = await verifyDelivery(
+      fakeClient({ "0xabc": receipt }),
+      ["0xabc" as `0x${string}`],
+      USDC,
+      RECIPIENT,
+      "5",
+      100n,
+    );
+    expect(check.verified).toBe(false);
+    expect(check.reason).toMatch(/less than intended/i);
+  });
+});
+
 describe("verifyDelivery — cannot prove", () => {
   it("reports no-transaction when there are no hashes", async () => {
     const check = await verifyDelivery(fakeClient({}), [], USDC, RECIPIENT, "5");

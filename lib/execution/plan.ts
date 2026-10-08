@@ -3,11 +3,22 @@ import type { TokenConfig } from "@/lib/config/tokens";
 import { getToken } from "@/lib/config/tokens";
 import type { Quote } from "@/lib/domain/intent";
 import { formatUnits, parseUnits } from "@/lib/domain/math";
+import {
+  applySlippageIn,
+  applySlippageOut,
+  DEFAULT_SLIPPAGE_BPS,
+  resolveSlippageBps,
+} from "@/lib/domain/protection";
 import { WMON_ADDRESS, UNISWAP } from "@/lib/providers/constants";
 
-/** Slippage tolerance applied to route limits (50 bps). */
+/**
+ * Slippage tolerance applied to route limits (default 50 bps).
+ *
+ * Kept for back-compat with callers that import it; the value actually
+ * enforced by a plan is resolved per-payment (see `buildPaymentPlan`) and
+ * clamped by `lib/domain/protection`.
+ */
 export const SLIPPAGE_BPS = 50n;
-const BPS = 10_000n;
 
 export type SwapDirection = "exact_in" | "exact_out";
 
@@ -25,7 +36,19 @@ export type PlanStep =
       recipient: Address;
       amountIn?: bigint;
       amountOut?: bigint;
+      /** The on-chain bound: `amountOutMinimum` for exact-in, `amountInMaximum`
+       * for exact-out. Encoded into the swap calldata. */
       limit: bigint;
+      /**
+       * The exact on-chain minimum output for an exact-input swap (base units).
+       * Present only for exact-in swaps; the signing guard asserts the encoded
+       * calldata carries a non-zero bound no weaker than this.
+       */
+      amountOutMinimum?: bigint;
+      /** The exact on-chain maximum input for an exact-output swap. */
+      amountInMaximum?: bigint;
+      /** Slippage tolerance (bps) this bound was derived from. */
+      slippageBps: number;
     }
   | { id: string; kind: "transfer"; label: string; token: TokenConfig | null; to: Address; amount: bigint };
 
@@ -35,18 +58,13 @@ export type PaymentPlan = {
   primaryStepId: string;
   /** True when the plan touches the network at all. */
   executable: boolean;
+  /** The slippage tolerance (bps) every swap bound in this plan was built with. */
+  slippageBps: number;
   note?: string;
 };
 
 export function poolTokenAddress(token: TokenConfig): Address {
   return (token.native ? WMON_ADDRESS : token.address) as Address;
-}
-
-function applySlipOut(amount: bigint): bigint {
-  return (amount * (BPS - SLIPPAGE_BPS)) / BPS;
-}
-function applySlipIn(amount: bigint): bigint {
-  return (amount * (BPS + SLIPPAGE_BPS)) / BPS;
 }
 
 /**
@@ -66,8 +84,10 @@ export function buildPaymentPlan(
   quote: Quote,
   sender: Address,
   recipient: Address,
+  slippageBpsInput: number = DEFAULT_SLIPPAGE_BPS,
 ): PaymentPlan {
   const { payToken, receiveToken, route } = quote;
+  const slippageBps = resolveSlippageBps(slippageBpsInput);
   const steps: PlanStep[] = [];
   let n = 0;
   const id = (k: string) => `${k}-${n++}`;
@@ -80,7 +100,7 @@ export function buildPaymentPlan(
     } else {
       steps.push({ id: id("transfer"), kind: "transfer", label: `Send ${payToken.symbol} to recipient`, token: payToken, to: recipient, amount });
     }
-    return { steps, primaryStepId: steps[0].id, executable: true };
+    return { steps, primaryStepId: steps[0].id, executable: true, slippageBps };
   }
 
   // A swap route with no hops carries no pool data to construct a real
@@ -96,8 +116,9 @@ export function buildPaymentPlan(
       fees: [],
       recipient,
       limit: 0n,
+      slippageBps,
     });
-    return { steps, primaryStepId: steps[0].id, executable: false };
+    return { steps, primaryStepId: steps[0].id, executable: false, slippageBps };
   }
 
   // ---- Swaps --------------------------------------------------------------
@@ -126,12 +147,12 @@ export function buildPaymentPlan(
   // 1) Provide the input asset in ERC-20 form.
   if (inputIsNative) {
     // Wrap enough to cover the route plus slippage headroom.
-    const wrapAmount = quote.exactOutput ? applySlipIn(payAmount) : payAmount;
+    const wrapAmount = quote.exactOutput ? applySlippageIn(payAmount, slippageBps) : payAmount;
     steps.push({ id: id("wrap"), kind: "wrap", label: "Wrap MON for the route", amount: wrapAmount });
   }
 
   // 2) Approve the router to pull the input token.
-  const approvalAmount = quote.exactOutput ? applySlipIn(payAmount) : payAmount;
+  const approvalAmount = quote.exactOutput ? applySlippageIn(payAmount, slippageBps) : payAmount;
   steps.push({
     id: id("approve"),
     kind: "approve",
@@ -141,7 +162,11 @@ export function buildPaymentPlan(
     amount: approvalAmount,
   });
 
-  // 3) Execute the swap.
+  // 3) Execute the swap. The on-chain bound is the protection: an exact-output
+  //    swap reverts if it would spend more than `amountInMaximum`; an
+  //    exact-input swap reverts if it would deliver less than
+  //    `amountOutMinimum`. Either way a sandwich that moves the price past the
+  //    tolerance makes the transaction revert instead of filling worse.
   if (quote.exactOutput) {
     steps.push({
       id: id("swap"),
@@ -153,8 +178,11 @@ export function buildPaymentPlan(
       recipient: swapRecipient,
       amountOut: receiveAmount,
       limit: approvalAmount,
+      amountInMaximum: approvalAmount,
+      slippageBps,
     });
   } else {
+    const minOut = applySlippageOut(receiveAmount, slippageBps);
     steps.push({
       id: id("swap"),
       kind: "swap",
@@ -164,7 +192,9 @@ export function buildPaymentPlan(
       fees,
       recipient: swapRecipient,
       amountIn: payAmount,
-      limit: applySlipOut(receiveAmount),
+      limit: minOut,
+      amountOutMinimum: minOut,
+      slippageBps,
     });
   }
 
@@ -175,7 +205,7 @@ export function buildPaymentPlan(
   }
 
   const primary = steps.find((s) => s.kind === "swap" || s.kind === "transfer")!;
-  return { steps, primaryStepId: primary.id, executable: true };
+  return { steps, primaryStepId: primary.id, executable: true, slippageBps };
 }
 
 /** Summarise a plan as short human steps for the "transaction details" panel. */
@@ -201,13 +231,16 @@ export type PlanEconomics = {
  * swap (or a direct transfer) the output is fixed; for an exact-input swap the
  * swap step's `amountOutMinimum` is the guarantee.
  */
-export function planEconomics(quote: Quote): PlanEconomics {
-  const slippageBps = Number(SLIPPAGE_BPS);
+export function planEconomics(
+  quote: Quote,
+  slippageBpsInput: number = DEFAULT_SLIPPAGE_BPS,
+): PlanEconomics {
+  const slippageBps = resolveSlippageBps(slippageBpsInput);
   if (quote.route.kind === "direct" || quote.exactOutput) {
     return { minimumReceived: quote.receiveAmount, slippageBps, exact: true };
   }
   try {
-    const out = applySlipOut(parseUnits(quote.receiveAmount, quote.receiveToken.decimals));
+    const out = applySlippageOut(parseUnits(quote.receiveAmount, quote.receiveToken.decimals), slippageBps);
     return {
       minimumReceived: formatUnits(out, quote.receiveToken.decimals),
       slippageBps,

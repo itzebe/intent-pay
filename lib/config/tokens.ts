@@ -1,6 +1,7 @@
 import { NATIVE_ADDRESS } from "./chains";
 import { CURATED_TOKENS, type CuratedToken } from "./curated";
 import { WMON_ADDRESS } from "@/lib/providers/constants";
+import { isEvmAddress } from "@/lib/format";
 
 /**
  * A payment asset. All token metadata is data — the UI never branches on a
@@ -127,6 +128,35 @@ export function tintForAddress(address: string): string {
   return palette[h % palette.length];
 }
 
+/**
+ * Coerce an untrusted token payload (a wallet indexer, a pasted address, a
+ * remote list) into a complete `TokenConfig`. External metadata is *not*
+ * authoritative and may be missing required display fields; a missing `tint`
+ * used to throw inside the badge and blank the whole app, so every required
+ * field is filled deterministically here — never left undefined.
+ */
+export function normalizeTokenConfig(input: Partial<TokenConfig> & { address?: string }): TokenConfig {
+  const address = (isEvmAddress(input.address ?? "") ? (input.address as `0x${string}`) : NATIVE_ADDRESS) as `0x${string}`;
+  const symbol = typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.trim() : "Unknown";
+  const name = typeof input.name === "string" && input.name.trim() ? input.name.trim() : symbol;
+  const decimals =
+    Number.isInteger(input.decimals) && (input.decimals as number) >= 0 && (input.decimals as number) <= 36
+      ? (input.decimals as number)
+      : 18;
+  return {
+    symbol,
+    name,
+    address,
+    decimals,
+    native: Boolean(input.native),
+    fallbackUsd: Number.isFinite(input.fallbackUsd) ? (input.fallbackUsd as number) : 0,
+    tint: typeof input.tint === "string" && input.tint ? input.tint : tintForAddress(address),
+    source: input.source,
+    logoURI: typeof input.logoURI === "string" ? input.logoURI : undefined,
+    seed: Boolean(input.seed),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Runtime registry
 //
@@ -170,7 +200,7 @@ for (const t of SEED_TOKENS) put(t);
 
 /** Register a dynamically discovered token. Returns the stored record. */
 export function registerToken(token: TokenConfig): TokenConfig {
-  put(token);
+  put(normalizeTokenConfig(token));
   return registry.get(key(token.address))!;
 }
 

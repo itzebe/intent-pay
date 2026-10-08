@@ -129,11 +129,9 @@ export function draftToHandoff(
       receiveAmountUsd: toDecimalString(usd),
       amountMode: "recipient_receives",
       tokenAmount: draft.amount,
-      // A token-quantity instruction ("10 MON") fixes the *source* asset too:
-      // the user named what they want to spend, so we must not later suggest a
-      // different asset to pay with.
-      sourceAsset: draft.asset,
-      sourceOrigin: "intent",
+      // A token-quantity instruction ("10 MON") names the RECIPIENT asset, not
+      // the source. The wallet's live balances decide the best source asset, so
+      // we must not fix the source here.
     },
     summary: `${draft.amount} ${draft.asset}`,
   };

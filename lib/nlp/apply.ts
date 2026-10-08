@@ -85,13 +85,12 @@ export function nlDraftToIntentPatch(input: NlApplyInput): IntentPatch {
   }
 
   // ---- Source / pay asset ------------------------------------------------
-  // Fixed only when the instruction determines it: the "N A worth of B" form
-  // (`sourceAsset`) or a token-quantity instruction ("10 MON" — the user named
-  // what they spend). A USD-value instruction ("$10 worth of MON") leaves the
-  // source to the optimizer/user, so it is not set here.
-  const fixedSource =
-    compose?.sourceAsset ??
-    (draft.sourceAsset ?? (draft.amountType === "TOKEN_AMOUNT" ? draft.asset : null));
+  // Fixed only when the instruction determines both sides: the "N A worth of
+  // B" form (`sourceAsset`) explicitly names what to spend. A token-quantity
+  // instruction ("10 MON") names the RECIPIENT asset, not the source, and a
+  // USD-value instruction ("$10 worth of MON") leaves the source open — so in
+  // both cases the live wallet/source-selection engine chooses the best source.
+  const fixedSource = compose?.sourceAsset ?? draft.sourceAsset ?? null;
   if (fixedSource) {
     patch.payToken = fixedSource;
     patch.payTokenAddress = getToken(fixedSource)?.address;

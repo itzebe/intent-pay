@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SEED_TOKENS, registerToken, type TokenConfig } from "@/lib/config/tokens";
+import { SEED_TOKENS, registerToken, normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import type { MonadNetwork } from "@/lib/config/chains";
 
 /**
@@ -42,8 +42,11 @@ export function useTokenCatalog(network: MonadNetwork) {
       .then((json) => {
         if (cancelled || !json?.ok) return;
         const list = (json.tokens as CatalogToken[]) ?? [];
+        // Register (and normalize) every entry so display fields are never
+        // missing, then expose the same normalized records to the UI.
         for (const t of list) registerToken(t);
-        setTokens(list.length ? list : (SEED_TOKENS as CatalogToken[]));
+        const normalized = list.map((t) => normalizeTokenConfig(t) as CatalogToken);
+        setTokens(normalized.length ? normalized : (SEED_TOKENS as CatalogToken[]));
         setInfo(json.catalog ?? null);
         setError(null);
       })

@@ -12,6 +12,7 @@ import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/
 import { prepareSigning, type FreshPlan } from "@/lib/execution/signGuard";
 import { displayKey } from "@/lib/domain/canonicalIntent";
 import { parseUnits } from "@/lib/domain/math";
+import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
 import { getClientPublicClient } from "@/lib/wallet/clients";
@@ -492,11 +493,16 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               <Step n={3}>
                 <PayAssetPicker
                   balances={flow.balances}
-                  selected={flow.intent.payToken}
+                  selected={flow.intent.payToken || flow.sourceSelection.sourceAsset || ""}
                   payTokenIsSet={
                     flow.intent.payTokenSource === "user" || flow.intent.payTokenSource === "intent"
                   }
                   recommended={flow.recommendedPayToken}
+                  reason={
+                    flow.sourceSelection.sourceAsset || flow.sourceSelection.pending
+                      ? flow.sourceSelection.reason
+                      : undefined
+                  }
                   availability={availability}
                   catalog={catalog.tokens}
                   network={flow.intent.network}
@@ -959,7 +965,13 @@ function useLiveBalances(address: string | undefined, network: MonadNetwork, tic
     fetch(`/api/balances?address=${address}&network=${network}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => {
-        if (!cancelled && json.ok) setBalances(json.balances as Balance[]);
+        if (cancelled || !json.ok) return;
+        // Balance tokens come from external discovery; normalize every one so a
+        // missing display field can never blank the UI downstream.
+        const list = ((json.balances as { token: Partial<TokenConfig> & { address?: string }; amount: string; usd: number }[]) ?? []).map(
+          (b) => ({ ...b, token: normalizeTokenConfig(b.token) }),
+        );
+        setBalances(list as Balance[]);
       })
       .catch(() => {})
       .finally(() => {

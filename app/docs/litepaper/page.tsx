@@ -458,20 +458,14 @@ export default function Litepaper() {
 
       <DocSection id="verified-transaction" title="Verified Mainnet Transaction">
         <Callout tone="ok" title="Confirmed on Monad mainnet">
-          Intent Pay has successfully completed a real-wallet payment on Monad mainnet. In the
-          demonstrated transaction, approximately <Code>16.472555209781755329 WMON</Code> was used to
-          deliver <Code>0.4 USDC</Code> to the intended recipient. The application displayed the
-          payment as delivered and confirmed on Monad, and the recipient wallet notification reported
-          receipt of <Code>0.4 USDC</Code>.
+          Intent Pay has successfully completed a real-wallet payment on Monad mainnet. The
+          transaction was executed successfully, and the intended recipient received the payment.
+          The application displayed the payment as delivered and confirmed on Monad.
         </Callout>
         <P>
-          This demonstrates that the tested payment route can progress from transaction preparation
-          and wallet authorization to confirmed delivery for this specific transaction.
-        </P>
-        <P>
-          This result validates one real payment flow. It does not establish that every token,
-          liquidity route, wallet, or transaction configuration will succeed. Transaction outcomes,
-          available routes, fees, and execution requirements may vary.
+          This successful transaction demonstrates that Intent Pay&apos;s payment flow works in a real
+          mainnet environment. It is evidence of a functioning payment experience, not a guarantee
+          that every token, liquidity route, wallet configuration, or transaction will succeed.
         </P>
       </DocSection>
 
@@ -496,8 +490,9 @@ export default function Litepaper() {
               <LI>Delivery verification from a receipt.</LI>
               <LI>Partial-balance split arithmetic (scaled-integer).</LI>
               <LI>
-                One successful real-wallet payment on Monad mainnet, with confirmed delivery of{" "}
-                <Code>0.4 USDC</Code> (see &ldquo;Verified Mainnet Transaction&rdquo; above).
+                One successful real-wallet payment on Monad mainnet, with the recipient receiving the
+                payment and delivery confirmed on Monad (see &ldquo;Verified Mainnet Transaction&rdquo;
+                above).
               </LI>
             </UL>
           </div>

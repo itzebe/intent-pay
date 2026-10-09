@@ -6,6 +6,7 @@ import { useWallet } from "@/lib/hooks/useWallet";
 import { Hero, HowItWorks } from "@/components/landing/Hero";
 import { AdvancedDiagnostics } from "@/components/landing/AdvancedDiagnostics";
 import { LearnNav } from "@/components/landing/LearnNav";
+import { SiteFooter } from "@/components/landing/SiteFooter";
 import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -76,6 +77,8 @@ function Shell() {
           </div>
         </section>
       </main>
+
+      <SiteFooter />
     </div>
   );
 }

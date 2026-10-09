@@ -35,13 +35,15 @@ export class ExecutionError extends Error {
    * `rejected`/`reverted` happened before any submission completed;
    * `submitted` means a transaction was sent but its outcome is unresolved or
    * unsuccessful — the caller must NOT retry it blindly;
-   * `unknown` is a definite pre-submission failure.
+   * `authorization_failed` is a definite pre-submission failure preparing the
+   * EIP-7702 authorization (unsupported signer, rejection, invalid nonce);
+   * `unknown` is any other definite pre-submission failure.
    */
-  code: "rejected" | "reverted" | "submitted" | "unknown";
+  code: "rejected" | "reverted" | "submitted" | "authorization_failed" | "unknown";
   stepId?: string;
   constructor(
     message: string,
-    code: "rejected" | "reverted" | "submitted" | "unknown",
+    code: "rejected" | "reverted" | "submitted" | "authorization_failed" | "unknown",
     stepId?: string,
   ) {
     super(message);

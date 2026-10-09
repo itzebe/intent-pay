@@ -43,6 +43,7 @@ export type AaCapability = {
     selectedGasToken: GasTokenView | null;
     code: string;
     reason: string | null;
+    walletCompatible: boolean;
   };
   supportedGasTokens: GasTokenView[];
   selection: {

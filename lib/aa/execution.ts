@@ -7,12 +7,39 @@ import { ERC20_ABI, SWAP_ROUTER_ABI, WNATIVE_ABI } from "@/lib/execution/abis";
 import { encodePath } from "@/lib/execution/path";
 import { encodeStep, ExecutionError, type EncodedCall } from "@/lib/execution/execute";
 import type { PaymentPlan, PlanStep } from "@/lib/execution/plan";
-import { ENTRY_POINT_V08, SIMPLE_7702_ABI } from "./abis";
+import { ENTRY_POINT_V08, SIMPLE_7702_ABI, SIMPLE_7702_IMPLEMENTATION } from "./abis";
 import { aaRpcUrl } from "./endpoint";
 import { createAaAccount, type Eip1193Provider } from "./account";
+import { prepareSignedAuthorization, AaAuthorizationError } from "./authorization";
 import { withGasBuffer } from "./safety";
 import { filterUserOperation } from "./userOp";
 import { planGasApproval, type GasPaymasterQuote } from "./gasApproval";
+
+/**
+ * The authorization authority's EOA transaction nonce — the value EIP-7702
+ * requires in the authorization tuple. This is NOT the UserOperation nonce.
+ *
+ * The UserOperation's nonce is an EntryPoint 2D nonce (a nonce *key* packed into
+ * the high 192 bits); passing it as the authorization nonce would exceed the
+ * `uint64` range EIP-7702 accepts and the authorization would be rejected. The
+ * authority for a self-executing 7702 authorization is the sender EOA, and the
+ * nonce is its pending transaction count — the same source viem's own
+ * `prepareAuthorization` uses.
+ *
+ * Carrier-transaction note: in this path the authorization is embedded in an
+ * EntryPoint UserOperation that the *bundler* submits; the sender is not the
+ * outer transaction's signer, so no +1 adjustment applies.
+ */
+async function authorizationNonce(
+  publicClient: PublicClient,
+  authority: Address,
+): Promise<bigint> {
+  const count = await publicClient.getTransactionCount({
+    address: authority,
+    blockTag: "pending",
+  });
+  return BigInt(count);
+}
 
 /**
  * EIP-7702 / ERC-4337 execution path (user pays gas in an ERC-20).
@@ -212,14 +239,53 @@ export async function executePlanViaAa(
 
   plan.steps.forEach((s) => onStep?.({ stepId: s.id, label: s.label, status: "pending" }));
 
-  // Prepare with the exact approval call so the gas fields (and therefore the
-  // bounded allowance) are computed against the real UserOperation, then
-  // re-bound the allowance with those exact fields before sending.
+  // --- Real EIP-7702 authorization (prepared, NOT broadcast) ---------------
+  // viem's `prepareUserOperation` fills the operation with a *placeholder*
+  // authorization when the 7702 account is not yet deployed; that placeholder is
+  // not a valid signature and the EntryPoint rejects it (`AA20 account not
+  // deployed` / `AA33`). We must therefore obtain the REAL signed authorization
+  // from the wallet and pass it explicitly. This step signs only — it performs
+  // no submission.
+  //
+  // The authorization nonce is the authority's EOA transaction nonce (pending),
+  // NOT the UserOperation nonce: the UserOperation nonce is an EntryPoint 2D
+  // nonce that exceeds EIP-7702's `uint64` bound. The two are deliberately
+  // separate sources.
+  const authority = sender;
+  const authNonce = await authorizationNonce(publicClient, authority);
+  const authorized = await prepareSignedAuthorization({
+    signer: bundle.authorizationSigner,
+    owner: sender,
+    chainId: NETWORKS[network].chain.id,
+    implementation: SIMPLE_7702_IMPLEMENTATION,
+    nonce: authNonce,
+  }).catch((err) => {
+    // A precise, pre-submission failure. Convert to an ExecutionError so the UI
+    // shows the real reason (and keeps Review mounted) instead of a generic
+    // message — and never silently fall back to native MON.
+    if (err instanceof AaAuthorizationError) {
+      throw new ExecutionError(err.message, "authorization_failed");
+    }
+    throw err;
+  });
+  const authorization = authorized.authorization;
+  // viem 2.57.3 accepts this authorization at runtime — its `eip7702Auth`
+  // formatter serialises the nonce with `numberToHex`, which handles `bigint` —
+  // but its public `SignedAuthorization` type declares `nonce: number`. The nonce
+  // stays a bigint on the wire; this is a type-only bridge, not a conversion.
+  const authorizationForSdk = authorization as unknown as Parameters<
+    typeof bundlerClient.sendUserOperation
+  >[0]["authorization"];
+
+  // Prepare (simulate + estimate gas) with the REAL authorization, so the gas
+  // fields — and therefore the bounded allowance — are computed against the
+  // operation that will actually be submitted.
   const prepared = await bundlerClient.prepareUserOperation({
     account,
     calls,
     paymaster: erc20Paymaster(gasToken),
     paymasterContext: { token: gasToken },
+    authorization: authorizationForSdk,
   });
 
   const exactApproval = planGasApproval({
@@ -232,11 +298,14 @@ export async function executePlanViaAa(
   }
   const finalCalls = [{ to: exactApproval.call.to, data: exactApproval.call.data, value: 0n }, ...paymentCalls];
 
+  // The submission boundary: everything above is preparation; this is the only
+  // state-changing call in the ERC-20 path.
   const userOpHash = await bundlerClient.sendUserOperation({
     account,
     calls: finalCalls,
     paymaster: erc20Paymaster(gasToken),
     paymasterContext: { token: gasToken },
+    authorization: authorizationForSdk,
   });
 
   plan.steps.forEach((s) => onStep?.({ stepId: s.id, label: s.label, status: "submitted" }));

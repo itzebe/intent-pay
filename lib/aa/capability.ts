@@ -65,6 +65,13 @@ export type WalletAbstractionCapability = {
   code: AbstractionReasonCode;
   /** Human-readable, honest explanation. */
   reason: string | null;
+  /**
+   * The wallet can *attempt* an AA operation. This is a client-supplied signal
+   * (does the wallet advertise a 7702 path?), NOT proof it can sign an
+   * authorization — a generic capability probe cannot establish that. It gates
+   * token selection so the UI never claims ERC-20 gas for an incompatible wallet.
+   */
+  walletCompatible: boolean;
 };
 
 export type WalletAbstractionInput = {
@@ -129,6 +136,7 @@ export function resolveWalletAbstraction(
     provider: input.providerId ?? null,
     account: input.account ?? null,
     supportedGasTokens: input.supportedGasTokens ?? [],
+    walletCompatible: input.walletCompatible,
   };
 
   if (!input.providerConfigured) {

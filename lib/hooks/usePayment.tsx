@@ -30,9 +30,6 @@ import { computeReadiness, type Readiness } from "@/lib/domain/readiness";
 import { createLatestGuard } from "@/lib/domain/latest";
 import { selectSource, type SourceSelection } from "@/lib/domain/sourceSelection";
 import { nlDraftToIntentPatch, type NlApplyInput } from "@/lib/nlp/apply";
-import { alchemyPaymasterServiceUrl, type GasMode } from "@/lib/execution/alchemy";
-import { resolveAbstraction, type AbstractionResult } from "@/lib/domain/abstraction";
-import { NETWORKS } from "@/lib/config/chains";
 
 export type QuoteError = {
   code: string;
@@ -40,49 +37,21 @@ export type QuoteError = {
   alternatives?: string[];
 };
 
-/** The wallet's EIP-5792 capabilities, as probed from the injected provider. */
-export type WalletGasCapabilities = {
-  atomicBatch: boolean;
-  paymasterService: boolean;
-  erc20GasPayment: boolean;
-  /**
-   * The wallet can sign the app's EIP-7702 account-abstraction UserOperation.
-   * This — not the EIP-5792 `erc20GasPayment` flag — is what the app's own
-   * ERC-20 gas path actually requires, so an ordinary injected EOA that can
-   * sign is eligible. Undefined = unknown (never downgraded).
-   */
-  aaCapable?: boolean;
-};
+/**
+ * How the network fee is paid. Intent Pay executes standard EOA transactions,
+ * so gas is always paid in the native asset (MON). The type is retained (and a
+ * single-valued union) so callers stay explicit rather than passing a bare
+ * string.
+ */
+export type GasMode = "native";
 
 /**
- * The resolved gas plan for the current payment. `mode` is only ever a mode the
- * wallet can actually deliver; `paymasterServiceUrl` is present only when a
- * paymaster is configured, and is what the wallet is handed to sponsor gas.
+ * The resolved gas plan for the current payment. Gas is paid in MON; the exact
+ * fee is estimated live before signing and shown on Review.
  */
 export type GasInfo = {
   mode: GasMode;
-  paymasterConfigured: boolean;
-  walletSupportsPaymaster: boolean;
-  walletSupportsErc20Gas: boolean;
-  paymasterServiceUrl?: string;
-  paymasterContext?: Record<string, unknown>;
-  /** The ERC-20 that will pay gas, when the AA paymaster path is selected. */
-  erc20GasToken?: { symbol: string; address: string } | null;
-  /** Honest reason gas is not abstracted, when it isn't. */
-  reason?: string | null;
-};
-
-/**
- * The live, per-wallet ERC-20 gas capability reported by the composer. This is
- * what lets the flow decide — honestly — between "gas paid in an ERC-20" and
- * "you need MON".
- */
-export type AaGasSelection = {
-  available: boolean;
-  mode: "ERC20_PAYMASTER" | "NATIVE" | "UNAVAILABLE";
-  tokenSymbol?: string | null;
-  tokenAddress?: string | null;
-  code?: string;
+  /** Honest reason a fee estimate is not yet available, when it isn't. */
   reason?: string | null;
 };
 
@@ -200,20 +169,8 @@ type FlowContextValue = FlowState & {
   } | null;
   /** How gas will actually be paid, resolved against the connected wallet. */
   gasMode: GasMode;
-  /** The live gas-mode resolution, including whether the wallet is capable. */
+  /** The live gas-mode resolution + an honest reason when unavailable. */
   gasInfo: GasInfo;
-  /**
-   * Deterministic wallet-abstraction state for the current payment. Names the
-   * exact reason abstraction is or isn't available (never a bare boolean).
-   */
-  abstraction: AbstractionResult;
-  /** Report the wallet's EIP-5792 capabilities (from the composer's probe). */
-  setWalletGasCapabilities: (caps: WalletGasCapabilities | null) => void;
-  /** Report the live per-wallet ERC-20 gas capability (from the composer). */
-  aaGas: AaGasSelection;
-  setAaGas: (selection: AaGasSelection | null) => void;
-  /** Choose the ERC-20 that pays gas (null = let the engine auto-select). */
-  setGasPaymentToken: (token: { symbol: string; address?: string } | null, mode?: "NATIVE" | "ERC20_PAYMASTER") => void;
   /** Resolve the canonical gas asset for the intent, when one is chosen. */
   gasTokenConfig: TokenConfig | null;
   /**
@@ -251,12 +208,6 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [recipientConfirmed, setRecipientConfirmed] = useState(false);
-  const [walletGasCaps, setWalletGasCapabilitiesState] = useState<WalletGasCapabilities | null>(null);
-  const [aaGas, setAaGasState] = useState<AaGasSelection>({
-    available: false,
-    mode: "NATIVE",
-    reason: null,
-  });
 
   const [nonce, setNonce] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -272,12 +223,8 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     () => resolveIntentAsset(state.intent.payTokenAddress, state.intent.payToken),
     [state.intent.payTokenAddress, state.intent.payToken, state.tokensVersion],
   );
-  // The chosen gas asset (distinct from the payment source). Null when the user
-  // has not chosen one — the composer then reports the engine's auto-selection.
-  const gasTokenConfig = useMemo(() => {
-    if (!state.intent.gasPaymentToken && !state.intent.gasPaymentTokenAddress) return null;
-    return resolveIntentAsset(state.intent.gasPaymentTokenAddress, state.intent.gasPaymentToken ?? "");
-  }, [state.intent.gasPaymentToken, state.intent.gasPaymentTokenAddress, state.tokensVersion]);
+  // The network fee is always paid in MON, so there is no separate gas asset.
+  const gasTokenConfig = useMemo(() => null, []);
 
   // ---- Canonical intent mutation ------------------------------------------
   // Every edit goes through the reducer, which bumps the version only when an
@@ -305,8 +252,6 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   const setNetwork = useCallback(
     (network: MonadNetwork) => {
       patchIntent({ network });
-      // A different chain invalidates the wallet's capabilities and gas plan.
-      setWalletGasCapabilities(null);
     },
     [patchIntent],
   );
@@ -375,9 +320,9 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   const setWalletAccount = useCallback((address: string | undefined) => {
     setState((s) => {
       if (s.walletAccount === address) return s;
-      // An account change invalidates balances, allowances, smart-account state,
-      // paymaster eligibility and the whole transaction payload. Drop the quote
-      // so it is rebuilt from scratch for the new account.
+      // An account change invalidates balances, allowances and the whole
+      // transaction payload. Drop the quote so it is rebuilt from scratch for
+      // the new account.
       return {
         ...s,
         walletAccount: address,
@@ -389,39 +334,8 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
         quoteRefreshFailedAt: 0,
       };
     });
-    setWalletGasCapabilities(null);
     setNonce((n) => n + 1);
   }, []);
-
-  const setWalletGasCapabilities = useCallback((caps: WalletGasCapabilities | null) => {
-    setWalletGasCapabilitiesState(caps);
-  }, []);
-
-  /**
-   * Report the live ERC-20 gas capability from the composer. It is stored raw;
-   * `gasInfo` decides whether it is trustworthy for the *current* intent (an
-   * explicit token choice or a matching auto-selection).
-   */
-  const setAaGas = useCallback((selection: AaGasSelection | null) => {
-    setAaGasState(selection ?? { available: false, mode: "NATIVE", reason: null });
-  }, []);
-
-  /**
-   * Choose the ERC-20 that pays the network fee, or clear the choice (auto).
-   * The gas token is a canonical-intent field, so a change bumps the version and
-   * invalidates any earlier quote/plan — exactly like changing the source asset.
-   */
-  const setGasPaymentToken = useCallback(
-    (token: { symbol: string; address?: string } | null, mode: "NATIVE" | "ERC20_PAYMASTER" = "ERC20_PAYMASTER") => {
-      const resolvedAddress = token ? (token.address ?? getToken(token.symbol)?.address) : undefined;
-      patchIntent({
-        gasPaymentToken: token?.symbol,
-        gasPaymentTokenAddress: resolvedAddress,
-        gasPaymentMode: token ? mode : undefined,
-      });
-    },
-    [patchIntent],
-  );
 
   const setBalances = useCallback((balances: Balance[]) => {
     setState((s) => ({ ...s, balances }));
@@ -516,12 +430,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Deterministic source selection -------------------------------------
   // The named asset is the RECIPIENT asset; the engine decides what to spend.
-  // A sponsored paymaster / ERC-20-gas path only "covers" gas when it is
-  // genuinely configured AND the wallet advertises it — never assumed.
-  const gasAbstractedForSelection = Boolean(
-    (capabilities?.gas.sponsorshipConfigured && walletGasCaps?.paymasterService) ||
-      (aaGas.available && aaGas.mode === "ERC20_PAYMASTER"),
-  );
+  // Gas is always paid in MON, so it is never abstracted.
   const sourceSelection = useMemo(
     () =>
       selectSource({
@@ -545,8 +454,6 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
                 origin: state.intent.payTokenSource === "user" ? "user" : "intent",
               }
             : null,
-        gasMode: aaGas.available && aaGas.mode === "ERC20_PAYMASTER" ? "erc20" : gasAbstractedForSelection ? "sponsored" : "native",
-        gasAbstracted: gasAbstractedForSelection,
         pending: Boolean(state.balances.length > 0 && !optimizer && optimizerLoading),
       }),
     [
@@ -556,8 +463,6 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       state.balances,
       optimizer,
       optimizerLoading,
-      gasAbstractedForSelection,
-      aaGas,
     ],
   );
 
@@ -842,99 +747,16 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     receiveTokenConfig,
   ]);
 
-  // ---- Wallet abstraction state (partial, honest) --------------------------
-  // Gas handling is per-payment, not a global boolean: whether abstraction is
-  // available depends on the chain, the configured paymaster, the wallet's
-  // advertised capability AND the selected asset.
-  const abstraction = useMemo<AbstractionResult>(() => {
-    const chainId = NETWORKS[state.intent.network].chainId;
-    const supportedTokens: string[] = capabilities?.gas.supportedTokens ?? [];
-    const paymasterConfigured = Boolean(capabilities?.gas.paymasterConfigured);
-    // A configured, reachable ERC-20 gas provider (Pimlico) is a paymaster too,
-    // so the app must not report "no paymaster is configured" when only the
-    // ERC-20 path is configured. `available` folds in reachability + chain.
-    const erc20ProviderConfigured = Boolean(capabilities?.gasPayment?.configured);
-    const erc20ProviderAvailable = capabilities?.gasPayment?.available ?? undefined;
-    return resolveAbstraction(payTokenConfig, {
-      chainId,
-      // Monad mainnet is the only configured chain today; it is supported when
-      // the deployment targets it.
-      chainSupported: state.intent.network === "mainnet",
-      // Capability data not loaded yet (null) or degraded (unreachable) ⇒ the
-      // provider configuration is unknown, so the UI must not assert
-      // "no paymaster is configured".
-      providersKnown: capabilities !== null && !capabilities.unavailable,
-      paymasterConfigured,
-      // A policy is only usable within its window. `sponsorshipConfigured`
-      // already folds in the window, so an expired policy is not abstracted.
-      policyUsable: capabilities?.gas.sponsorshipConfigured ?? paymasterConfigured,
-      policyReason: capabilities?.gas.policyReason,
-      erc20ProviderConfigured,
-      erc20ProviderAvailable,
-      erc20ProviderReason: capabilities?.gasPayment?.error ?? null,
-      walletSupportsPaymaster: Boolean(walletGasCaps?.paymasterService),
-      walletSupportsErc20Gas: Boolean(walletGasCaps?.erc20GasPayment),
-      // The app's ERC-20 gas path is an EIP-7702 UserOperation it builds and
-      // signs through the injected wallet — it does not need the wallet to
-      // advertise EIP-5792 `erc20GasPayment`. Only an explicit "cannot sign AA"
-      // downgrades it (undefined = unknown, never treated as false).
-      walletSupportsAa: walletGasCaps ? walletGasCaps.aaCapable !== false : true,
-      walletSupportsBatch: Boolean(walletGasCaps?.atomicBatch),
-      supportedTokens,
-    });
-  }, [capabilities, walletGasCaps, payTokenConfig, state.intent.network]);
-
-  // ---- Gas handling (abstracted when the wallet can actually deliver it) ---
+  // ---- Gas handling --------------------------------------------------------
+  // The network fee is always paid in MON. A fee that cannot be estimated from
+  // live data is reported honestly rather than assumed to be covered.
   const gasInfo = useMemo<GasInfo>(() => {
-    const paymasterConfigured = Boolean(capabilities?.gas.sponsorshipConfigured);
-    const walletSupportsPaymaster = Boolean(walletGasCaps?.paymasterService);
-    const walletSupportsErc20Gas = Boolean(walletGasCaps?.erc20GasPayment);
-
-    // The ERC-20 paymaster path is selected ONLY from a live per-wallet
-    // capability that the composer resolved from the provider + real balances —
-    // never from a configured boolean. A configured provider with no funded
-    // supported token is honestly "native".
-    if (aaGas.available && aaGas.mode === "ERC20_PAYMASTER" && aaGas.tokenAddress) {
-      return {
-        mode: "erc20",
-        paymasterConfigured: true,
-        walletSupportsPaymaster,
-        walletSupportsErc20Gas: true,
-        erc20GasToken: aaGas.tokenSymbol ? { symbol: aaGas.tokenSymbol, address: aaGas.tokenAddress } : null,
-        reason: aaGas.reason ?? null,
-      };
-    }
-
-    // Alchemy Gas Manager sponsorship (a different, developer-sponsored model).
-    if (abstraction.gasOptions.sponsored) {
-      const pubKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
-      const policyId = capabilities?.gas.policyId;
-      return {
-        mode: "sponsored",
-        paymasterConfigured,
-        walletSupportsPaymaster,
-        walletSupportsErc20Gas,
-        paymasterServiceUrl: pubKey ? alchemyPaymasterServiceUrl(pubKey) : undefined,
-        paymasterContext: policyId ? { policyId } : undefined,
-        reason: null,
-      };
-    }
-
-    return {
-      mode: "native",
-      paymasterConfigured,
-      walletSupportsPaymaster,
-      walletSupportsErc20Gas,
-      reason: aaGas.reason ?? abstraction.message ?? null,
-    };
-  }, [capabilities, walletGasCaps, abstraction, aaGas]);
+    return { mode: "native", reason: null };
+  }, []);
 
   const gasSufficiency = useMemo(() => {
     const native = state.balances.find((b) => b.token.native);
     const availableMon = native?.amount ?? "0";
-    if (gasInfo.mode !== "native") {
-      return { status: "ok" as const, requiredMon: "0", availableMon };
-    }
     if (!native) {
       return { status: "unknown" as const, requiredMon: "0", availableMon };
     }
@@ -954,7 +776,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     } catch {
       return { status: "unknown" as const, requiredMon: "0", availableMon };
     }
-  }, [state.quote, state.balances, gasInfo]);
+  }, [state.quote, state.balances]);
 
   // ---- Deterministic readiness gate ---------------------------------------
   // A source is "set" once it exists (explicitly chosen, fixed by the intent,
@@ -1042,11 +864,6 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     gasMode: gasInfo.mode,
     gasInfo,
     partial,
-    abstraction,
-    setWalletGasCapabilities,
-    aaGas,
-    setAaGas,
-    setGasPaymentToken,
     gasTokenConfig,
     readiness,
   };

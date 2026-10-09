@@ -18,11 +18,9 @@ describe("paymentDiagnostics", () => {
 
   it("uses a fixed, ordered stage list covering the whole path", () => {
     expect(PAYMENT_STAGES[0]).toBe("payment_submit_started");
-    expect(PAYMENT_STAGES).toContain("authorization_signing_started");
-    expect(PAYMENT_STAGES).toContain("authorization_signing_completed");
-    expect(PAYMENT_STAGES).toContain("user_operation_preparation_completed");
-    expect(PAYMENT_STAGES).toContain("bundler_submission_completed");
-    expect(PAYMENT_STAGES).toContain("user_operation_included");
+    expect(PAYMENT_STAGES).toContain("wallet_connection_checked");
+    expect(PAYMENT_STAGES).toContain("chain_validation_completed");
+    expect(PAYMENT_STAGES).toContain("receipt_polling_started");
     expect(PAYMENT_STAGES[PAYMENT_STAGES.length - 1]).toBe("payment_execution_verified");
     // "payment_failed" is terminal and recorded on error, not part of the happy list.
     expect(PAYMENT_STAGES).not.toContain("payment_failed");

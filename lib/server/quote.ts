@@ -5,7 +5,6 @@ import type { Quote, QuoteResult, QuoteRequest } from "@/lib/domain/intent";
 import { validateRecipient, validateUsdAmount } from "@/lib/domain/validation";
 import { isQuoteStale } from "@/lib/domain/freshness";
 import { estimateNetworkCost } from "./gas";
-import { gasCapabilities } from "./gasCapabilities";
 
 /**
  * Intent layer -> quote layer orchestration.
@@ -80,8 +79,6 @@ export async function buildQuote(
   const monPrice = await provider.priceUsd(monToken, network);
   const networkCost = await estimateNetworkCost(network, monPrice, routeResult.gasEstimate);
 
-  const caps = gasCapabilities(network);
-
   const quote: Quote = {
     intent,
     network,
@@ -104,14 +101,10 @@ export async function buildQuote(
     payPriceSource: payPrice.source,
     receivePriceSource: receivePrice.source,
     receivePriceUnavailable: !(receivePrice.usd > 0),
-    // Gas handling is reported honestly: sponsorship / ERC-20 gas is only
-    // offered when an Alchemy gas policy is configured; the wallet must also
-    // advertise the capability (checked in the browser) for it to actually be
-    // used, so a quote never overclaims sponsorship it can't deliver.
+    // Gas is always paid in MON by the standard EOA execution path.
     gas: {
-      mode: caps.sponsorshipConfigured ? "sponsored" : "native",
-      sponsorshipConfigured: caps.sponsorshipConfigured,
-      rpc: caps.rpc,
+      mode: "native",
+      rpc: process.env.ALCHEMY_API_KEY ? "alchemy" : "public",
     },
   };
 

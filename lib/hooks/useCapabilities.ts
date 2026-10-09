@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import type { MonadNetwork } from "@/lib/config/chains";
 
 /**
- * What infrastructure is configured (routing, pricing, wallet intelligence,
- * gas). Fetched once per network; the UI uses it to label providers honestly
- * and to decide whether to offer sponsored / ERC-20 gas.
+ * What infrastructure is configured (routing, pricing, wallet intelligence).
+ * Fetched once per network; the UI uses it to label providers honestly.
+ *
+ * Gas is always paid in MON, so there is no sponsorship / account-abstraction
+ * capability to report.
  */
 export type Capabilities = {
   routing: { provider: string; chain: string; live: boolean };
@@ -25,48 +27,19 @@ export type Capabilities = {
     zerionError?: string;
   };
   gas: {
+    /** The network fee is always paid in the native asset (MON). */
+    mode: "native";
     rpc: "alchemy" | "public";
+    /** Alchemy is configured (may still be unreachable). */
     alchemy: boolean;
-    alchemyConfigured?: boolean;
-    alchemyReachable?: boolean;
+    alchemyConfigured: boolean;
+    alchemyReachable: boolean;
     alchemyError?: string;
-    /** ERC-4337 Bundler reachability. */
-    bundlerConfigured?: boolean;
-    bundlerReachable?: boolean;
-    bundlerError?: string;
-    /** Gas Manager (paymaster) configuration + reachability. */
-    paymasterConfigured?: boolean;
-    paymasterReachable?: boolean;
-    paymasterPolicyValid?: boolean;
-    paymasterError?: string;
-    policyStatus?: "active" | "expired" | "not_yet_active" | "unknown";
-    policyReason?: string;
-    sponsorshipConfigured: boolean;
-    erc20GasConfigured: boolean;
-    /** Addresses the configured paymaster sponsors (empty = unknown). */
-    supportedTokens?: string[];
-    policyId?: string;
   };
-  /**
-   * ERC-20 gas payment provider (lets a user with 0 MON pay gas in a held
-   * token). Distinct from Alchemy sponsorship; `supportedTokens` is discovered
-   * live and is empty when discovery failed.
-   */
-  gasPayment?: {
-    provider: string | null;
-    chainId: number;
-    configured: boolean;
-    reachable: boolean;
-    available: boolean;
-    error: string | null;
-    supportedTokens: { address: string; symbol: string; name: string; decimals: number }[];
-  };
-  /** Whether a wallet-abstraction path is genuinely available. */
-  walletAbstraction?: { available: boolean; reason: string | null };
   /**
    * True only for the degraded fallback returned when /api/capabilities could
-   * not be reached. The provider configuration is then *unknown*, so the UI
-   * must not assert "no paymaster is configured".
+   * not be reached. Provider configuration is then *unknown*, so the UI must not
+   * assert any provider is absent.
    */
   unavailable?: boolean;
 };
@@ -83,16 +56,11 @@ const FALLBACK: Capabilities = {
   },
   wallet: { zerion: false, zerionConfigured: false, zerionReachable: false },
   gas: {
+    mode: "native",
     rpc: "public",
     alchemy: false,
     alchemyConfigured: false,
     alchemyReachable: false,
-    sponsorshipConfigured: false,
-    erc20GasConfigured: false,
-  },
-  walletAbstraction: {
-    available: false,
-    reason: "Capabilities unavailable.",
   },
 };
 

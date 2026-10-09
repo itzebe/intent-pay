@@ -28,35 +28,17 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
 
   const alchemyConfigured = caps.gas.alchemyConfigured ?? caps.gas.alchemy;
   const alchemyReachable = caps.gas.alchemyReachable ?? caps.gas.alchemy;
-  const bundlerReachable = caps.gas.bundlerReachable ?? false;
-  const paymasterConfigured = caps.gas.paymasterConfigured ?? false;
-  const policyStatus = caps.gas.policyStatus ?? "unknown";
-  const sponsorship = caps.gas.sponsorshipConfigured ?? false;
   const zerionConfigured = caps.wallet.zerionConfigured ?? caps.wallet.zerion;
   const zerionReachable = caps.wallet.zerionReachable ?? caps.wallet.zerion;
 
-  const gp = caps.gasPayment;
-  const gpConfigured = gp?.configured ?? false;
-  const gpReachable = gp?.reachable ?? false;
-  const gpTokens = gp?.supportedTokens ?? [];
-
-  // Alchemy's AA stack is only "Active" when the node *and* the Bundler answer;
-  // a configured Gas Manager policy is surfaced separately so a working node is
-  // never hidden by an unrelated policy problem.
+  // Alchemy is the RPC transport (and an optional market-price source). It is
+  // not a gas sponsor — gas is always paid in MON by the standard EOA path.
   const alchemyActive = alchemyReachable;
   const alchemyDetail = !alchemyConfigured
     ? "Add an API key to enable"
     : !alchemyReachable
       ? `Configured, but unreachable${caps.gas.alchemyError ? ` — ${caps.gas.alchemyError}` : ""}`
-      : [
-          "RPC",
-          bundlerReachable ? "Bundler" : "Bundler unavailable",
-          sponsorship
-            ? "Paymaster"
-            : paymasterConfigured
-              ? `Paymaster ${policyStatus === "expired" ? "expired" : "not usable"}`
-              : "no Gas Manager policy",
-        ].join(" · ");
+      : "RPC transport on Monad";
 
   const items: Item[] = [
     {
@@ -67,7 +49,7 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
     },
     {
       name: "Alchemy",
-      role: "AA · Bundler · Paymaster",
+      role: "RPC · Market prices",
       active: alchemyActive,
       degraded: alchemyConfigured && !alchemyReachable,
       detail: alchemyDetail,
@@ -88,19 +70,6 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
       role: "Market prices",
       active: true,
       detail: "Live USD pricing for Monad tokens",
-    },
-    {
-      name: gp?.provider ? `Gas paymaster · ${gp.provider}` : "Gas paymaster",
-      role: "ERC-20 gas",
-      active: gpConfigured && gpReachable,
-      degraded: gpConfigured && !gpReachable,
-      detail: !gpConfigured
-        ? "Add a Pimlico key to enable gas-in-token"
-        : !gpReachable
-          ? `Configured, but unreachable${gp?.error ? ` — ${gp.error}` : ""}`
-          : gpTokens.length
-            ? `Gas payable in ${gpTokens.map((t) => t.symbol).join(", ")}`
-            : "No tokens accepted on this chain",
     },
   ];
 

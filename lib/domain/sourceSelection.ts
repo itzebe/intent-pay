@@ -23,15 +23,11 @@ import { parseUnits } from "@/lib/domain/math";
  *      ranking, which is total live cost (spend + network), using real routes.
  *   3. Never select an asset whose balance is insufficient.
  *   4. Never select an asset with no executable route.
- *   5. Never select an asset whose required gas cannot actually be paid, unless
- *      a configured paymaster/ERC-20-gas path genuinely covers it.
+ *   5. Never select an asset whose required gas cannot actually be paid.
  *   6. Never select an asset merely because of a hardcoded priority; the
  *      recipient asset is preferred only when it is genuinely the best option.
  */
 
-export type GasMode = "sponsored" | "erc20" | "native";
-
-/** One candidate source, as priced by the optimizer. */
 export type SourceOption = {
   symbol: string;
   address?: string;
@@ -53,12 +49,8 @@ export type SourceSelectionInput = {
   options?: SourceOption[];
   /** The user's explicit source, when they chose one or the intent fixed it. */
   explicit?: { symbol: string; origin: "user" | "intent" } | null;
-  /** How gas is expected to be paid for the current payment. */
-  gasMode: GasMode;
   /** MON required for the network fee (base units as a decimal string, if known). */
   gasRequiredMon?: string;
-  /** Whether a configured paymaster/wallet path actually covers gas. */
-  gasAbstracted: boolean;
   /** True while the optimizer is still producing options (avoid false blockers). */
   pending?: boolean;
 };
@@ -119,13 +111,11 @@ function remainingAfter(bal: Balance | undefined, required: string | undefined):
 }
 
 /**
- * Whether the network fee can actually be paid. A sponsored/ERC-20-gas payment
- * is always covered. A native-gas payment needs enough MON; when the source is
- * native MON itself the fee is drawn from the same balance, which the optimizer
- * already reserves for, so the balance check is what matters.
+ * Whether the network fee can actually be paid. The fee is always paid in MON;
+ * when the source is native MON itself the fee is drawn from the same balance,
+ * which the optimizer already reserves for, so the balance check is what matters.
  */
 export function gasCovered(input: SourceSelectionInput): boolean {
-  if (input.gasAbstracted) return true;
   const native = input.balances.find((b) => b.token.native);
   if (!native) return false;
   if (!input.gasRequiredMon) return true; // unknown fee does not block
@@ -140,7 +130,7 @@ export function gasCovered(input: SourceSelectionInput): boolean {
 
 export function selectSource(input: SourceSelectionInput): SourceSelection {
   const options = input.options ?? [];
-  const { balances, explicit, gasMode } = input;
+  const { balances, explicit } = input;
 
   if (balances.length === 0) {
     return {
@@ -227,9 +217,7 @@ export function selectSource(input: SourceSelectionInput): SourceSelection {
     ? "None of your holdings is enough for this payment."
     : !anyRoutable
       ? `No executable route from any funded asset to ${input.recipientAsset}.`
-      : !input.gasAbstracted && gasMode === "native"
-        ? "You don't hold enough MON for the network fee."
-        : "No executable source asset was found.";
+      : "You don't hold enough MON for the network fee.";
   return {
     sourceAsset: null,
     code: "none_executable",

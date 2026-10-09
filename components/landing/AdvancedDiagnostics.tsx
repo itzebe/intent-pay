@@ -6,43 +6,24 @@ import { useCapabilities } from "@/lib/hooks/useCapabilities";
 import { IntegrationStack } from "./IntegrationStack";
 
 /**
- * Collapsed technical surface. Provider names, RPC/paymaster diagnostics and
- * raw errors belong here — never in the primary payment flow, which speaks only
- * in terms of PAY WITH, amount, fee and readiness. Nothing here is hidden from
- * users who want it; it is simply not front-and-centre.
+ * Collapsed technical surface. Provider names, RPC diagnostics and raw errors
+ * belong here — never in the primary payment flow, which speaks only in terms
+ * of PAY WITH, amount, fee and readiness. Nothing here is hidden from users who
+ * want it; it is simply not front-and-centre.
  */
 export function AdvancedDiagnostics({ network }: { network: MonadNetwork }) {
   const [open, setOpen] = useState(false);
   const caps = useCapabilities(network);
-  const gp = caps?.gasPayment;
 
   const rows: { label: string; value: string; warn?: boolean }[] = [];
   if (caps && !caps.unavailable) {
     rows.push(
       { label: "routing provider", value: caps.routing?.provider ?? "—" },
       { label: "rpc source", value: caps.gas?.rpc ?? "—" },
-      { label: "ERC-20 gas provider", value: gp?.provider ?? "not configured" },
-      { label: "ERC-20 gas available", value: gp ? (gp.available ? "yes" : "no") : "—" },
+      { label: "alchemy", value: caps.gas?.alchemyReachable ? "reachable" : caps.gas?.alchemyConfigured ? "configured, unreachable" : "not configured" },
       {
-        label: "supported gas tokens",
-        value: gp?.supportedTokens?.length
-          ? gp.supportedTokens.map((t) => `${t.symbol} (${t.address})`).join(", ")
-          : "none accepted",
-      },
-      {
-        label: "wallet abstraction",
-        value: caps.walletAbstraction
-          ? caps.walletAbstraction.available
-            ? "available"
-            : `unavailable — ${caps.walletAbstraction.reason ?? "unknown reason"}`
-          : "—",
-        warn: caps.walletAbstraction ? !caps.walletAbstraction.available : false,
-      },
-      {
-        label: "gas policy",
-        value: caps.gas?.policyId
-          ? `${caps.gas.policyId} (${caps.gas.policyStatus ?? "unknown"})`
-          : "none configured",
+        label: "market prices",
+        value: caps.pricing?.primary ?? "fallback chain",
       },
       {
         label: "zerion assets",
@@ -54,7 +35,6 @@ export function AdvancedDiagnostics({ network }: { network: MonadNetwork }) {
         warn: Boolean(caps.wallet?.zerionConfigured && !caps.wallet?.zerionReachable),
       },
     );
-    if (gp?.error) rows.push({ label: "ERC-20 gas error", value: gp.error, warn: true });
     if (caps.gas?.alchemyError)
       rows.push({ label: "alchemy error", value: caps.gas.alchemyError, warn: true });
   }

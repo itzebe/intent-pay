@@ -54,17 +54,6 @@ export type CanonicalFields = {
   payTokenAddress?: string;
   /** How the pay asset was established. */
   payTokenSource: PayTokenSource;
-  /**
-   * The asset that pays the NETWORK FEE. This is a distinct concept from the
-   * payment source: a user may spend USDT for the payment while paying gas in
-   * USDC. Absent means "not yet chosen" — never the same as the source by
-   * default.
-   */
-  gasPaymentToken?: string;
-  /** The gas asset's contract address — the authoritative identity. */
-  gasPaymentTokenAddress?: string;
-  /** How gas will be paid: native MON, or an ERC-20 through the paymaster. */
-  gasPaymentMode?: "NATIVE" | "ERC20_PAYMASTER";
   /** Target chain. */
   network: MonadNetwork;
 };
@@ -126,9 +115,6 @@ function sameFields(a: CanonicalFields, b: CanonicalFields): boolean {
     a.payToken === b.payToken &&
     (a.payTokenAddress ?? "") === (b.payTokenAddress ?? "") &&
     a.payTokenSource === b.payTokenSource &&
-    (a.gasPaymentToken ?? "") === (b.gasPaymentToken ?? "") &&
-    (a.gasPaymentTokenAddress ?? "") === (b.gasPaymentTokenAddress ?? "") &&
-    (a.gasPaymentMode ?? "") === (b.gasPaymentMode ?? "") &&
     a.network === b.network
   );
 }
@@ -157,10 +143,6 @@ export function executionKey(f: CanonicalFields): string {
     f.receiveTokenAmount ?? "",
     assetRef(f.payToken, f.payTokenAddress),
     f.recipient.toLowerCase(),
-    // Gas payment is execution-relevant too: switching the gas token must
-    // invalidate any earlier quote/plan. Appended last so existing key
-    // structure is preserved.
-    `${(f.gasPaymentToken ?? "").toLowerCase()}@${(f.gasPaymentTokenAddress ?? "").toLowerCase()}:${f.gasPaymentMode ?? ""}`,
   ].join("|");
 }
 
@@ -189,7 +171,7 @@ export function displayKey(
     | "receiveTokenAmount"
     | "payToken"
     | "recipient"
-    | "gasPaymentToken"
+    | "payTokenAddress"
   >,
 ): string {
   return [
@@ -200,7 +182,7 @@ export function displayKey(
     f.receiveTokenAmount ?? "",
     (f.payToken ?? "").toLowerCase(),
     (f.recipient ?? "").toLowerCase(),
-    (f.gasPaymentToken ?? "").toLowerCase(),
+    (f.payTokenAddress ?? "").toLowerCase(),
   ].join("|");
 }
 

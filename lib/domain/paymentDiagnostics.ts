@@ -4,9 +4,9 @@
  * The reported symptom — the interface returns to "Confirm and Send" with no
  * useful explanation — was impossible to attribute because no stage information
  * survived the failure. This records, for every failure, the exact stage, the
- * normalized code, whether the wallet rejected, whether a UserOperation or
- * transaction hash existed, and whether the operation may already have been
- * submitted (so Retry must track it rather than resubmit).
+ * normalized code, whether the wallet rejected, whether a transaction hash
+ * existed, and whether the operation may already have been submitted (so Retry
+ * must track it rather than resubmit).
  *
  * It deliberately carries NO private keys, seed phrases, signatures, auth
  * tokens, or environment values. The record is built purely and emitted to the
@@ -18,17 +18,7 @@ export type PaymentStage =
   | "payment_submit_started"
   | "wallet_connection_checked"
   | "chain_validation_completed"
-  | "authorization_signing_started"
-  | "authorization_signing_completed"
-  | "user_operation_preparation_started"
-  | "user_operation_preparation_completed"
-  | "paymaster_validation_started"
-  | "paymaster_validation_completed"
-  | "bundler_submission_started"
-  | "bundler_submission_completed"
-  | "user_operation_pending"
   | "receipt_polling_started"
-  | "user_operation_included"
   | "payment_execution_verified"
   | "payment_failed";
 
@@ -37,17 +27,7 @@ export const PAYMENT_STAGES: readonly PaymentStage[] = [
   "payment_submit_started",
   "wallet_connection_checked",
   "chain_validation_completed",
-  "authorization_signing_started",
-  "authorization_signing_completed",
-  "user_operation_preparation_started",
-  "user_operation_preparation_completed",
-  "paymaster_validation_started",
-  "paymaster_validation_completed",
-  "bundler_submission_started",
-  "bundler_submission_completed",
-  "user_operation_pending",
   "receipt_polling_started",
-  "user_operation_included",
   "payment_execution_verified",
 ] as const;
 
@@ -59,8 +39,6 @@ export type PaymentDiagnostic = {
   message?: string;
   /** Did the wallet explicitly reject the request? */
   walletRejected?: boolean;
-  /** A UserOperation hash exists (the op was prepared/submitted). */
-  hasUserOpHash?: boolean;
   /** A transaction hash exists (an on-chain tx was produced). */
   hasTransactionHash?: boolean;
   /** The operation may already have been submitted — Retry must not resubmit. */
@@ -90,7 +68,7 @@ function safeMessage(message: string | undefined): string | undefined {
  */
 export function recordPaymentDiagnostic(diag: PaymentDiagnostic): void {
   if (typeof console === "undefined") return;
-  const { event, code, message, walletRejected, hasUserOpHash, hasTransactionHash, mayHaveSubmitted, returnedToConfirm, at } =
+  const { event, code, message, walletRejected, hasTransactionHash, mayHaveSubmitted, returnedToConfirm, at } =
     diag;
   console.warn(
     JSON.stringify({
@@ -100,7 +78,6 @@ export function recordPaymentDiagnostic(diag: PaymentDiagnostic): void {
       code,
       message: safeMessage(message),
       walletRejected: walletRejected ?? false,
-      hasUserOpHash: hasUserOpHash ?? false,
       hasTransactionHash: hasTransactionHash ?? false,
       mayHaveSubmitted: mayHaveSubmitted ?? false,
       returnedToConfirm: returnedToConfirm ?? false,

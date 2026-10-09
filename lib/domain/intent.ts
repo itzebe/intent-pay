@@ -91,14 +91,10 @@ export type Quote = {
 
   /** How gas will be handled for this payment. */
   gas?: {
-    /** "sponsored" | "erc20" | "native" — what the user should expect. */
-    mode: "sponsored" | "erc20" | "native";
-    /** True when Alchemy sponsorship is configured and usable. */
-    sponsorshipConfigured: boolean;
+    /** The network fee is always paid in MON. */
+    mode: "native";
     /** RPC currently in use. */
     rpc: "alchemy" | "public";
-    /** The user's wallet supports the EIP-5792 batch + paymaster capabilities. */
-    walletCapable?: boolean;
   };
 };
 

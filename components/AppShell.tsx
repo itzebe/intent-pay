@@ -5,6 +5,7 @@ import { PaymentProvider, usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { Hero, HowItWorks } from "@/components/landing/Hero";
 import { AdvancedDiagnostics } from "@/components/landing/AdvancedDiagnostics";
+import { LearnNav } from "@/components/landing/LearnNav";
 import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -31,6 +32,7 @@ function Shell() {
             </div>
           </div>
           <div className="flex items-center gap-2.5">
+            <LearnNav />
             <ConnectButton
               status={wallet.status}
               address={wallet.address}

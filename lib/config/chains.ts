@@ -35,9 +35,9 @@ export type MonadNetwork = "mainnet";
 /**
  * Alchemy RPC endpoint for Monad Mainnet, when an API key is configured.
  *
- * Alchemy serves Monad Mainnet and provides the indexed node, Bundler and Gas
- * Manager used for account abstraction. When no key is present we fall back to
- * the public mainnet RPC and nothing else changes.
+ * Alchemy serves Monad Mainnet and provides the indexed RPC node. When no key
+ * is present we fall back to the public mainnet RPC and nothing else changes.
+ * Gas is always paid in MON; Alchemy is not used for account abstraction.
  */
 export function alchemyRpcUrl(_network: MonadNetwork = "mainnet"): string | null {
   const key = process.env.ALCHEMY_API_KEY;

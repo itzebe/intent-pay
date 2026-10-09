@@ -20,7 +20,7 @@ const TOC = [
   ["execution", "9. Transaction Execution"],
   ["gas", "10. Gas Handling and Fees"],
   ["security", "11. Security and User Control"],
-  ["verified-transaction", "Verified Mainnet Transaction"],
+  ["verified-payment", "Verified Mainnet Payment"],
   ["capabilities", "12. Current Capabilities and Limitations"],
   ["roadmap", "13. Development Roadmap"],
   ["use-cases", "14. Potential Use Cases"],
@@ -456,23 +456,21 @@ export default function Litepaper() {
         </P>
       </DocSection>
 
-      <DocSection id="verified-transaction" title="Verified Mainnet Transaction">
-        <Callout tone="ok" title="Confirmed on Monad mainnet">
-          Intent Pay has successfully completed a real-wallet payment on Monad mainnet. The
-          transaction was executed successfully, and the intended recipient received the payment.
-          The application displayed the payment as delivered and confirmed on Monad.
+      <DocSection id="verified-payment" title="Verified Mainnet Payment">
+        <Callout tone="ok" title="Real-wallet payment confirmed on Monad mainnet">
+          Intent Pay has successfully processed a real-wallet payment on Monad mainnet. The
+          transaction was confirmed on-chain, and the intended recipient received the payment.
         </Callout>
         <P>
-          This successful transaction demonstrates that Intent Pay&apos;s payment flow works in a real
-          mainnet environment. It is evidence of a functioning payment experience, not a guarantee
-          that every token, liquidity route, wallet configuration, or transaction will succeed.
+          This demonstrates Intent Pay&apos;s ability to execute a real payment using its on-chain
+          payment flow.
         </P>
       </DocSection>
 
       <DocSection id="capabilities" title="12. Current Capabilities and Limitations">
         <P>
-          This section separates what is verified, what is implemented but not universally verified,
-          what is in progress, and what is planned. It reflects the repository, not an aspiration.
+          This section separates what is covered by automated tests, what is implemented, and what is
+          genuinely limited or still planned. It reflects the repository, not an aspiration.
         </P>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="card-flat p-4">
@@ -489,25 +487,37 @@ export default function Litepaper() {
               <LI>Signing guard abort reasons.</LI>
               <LI>Delivery verification from a receipt.</LI>
               <LI>Partial-balance split arithmetic (scaled-integer).</LI>
-              <LI>
-                One successful real-wallet payment on Monad mainnet, with the recipient receiving the
-                payment and delivery confirmed on Monad (see &ldquo;Verified Mainnet Transaction&rdquo;
-                above).
-              </LI>
             </UL>
           </div>
           <div className="card-flat p-4">
-            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-300/80">
-              Implemented — not universally verified
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-mono-soft">
+              Implemented capabilities
             </div>
             <UL>
-              <LI>Live Uniswap V3 routing against real Monad pools (opt-in live tests).</LI>
               <LI>
-                The broader routing, execution and delivery-verification functionality across
-                different assets, routes, wallets and transaction configurations — one real-wallet
-                payment has been demonstrated, not the whole matrix.
+                <strong className="text-white/80">Live payment routing.</strong> Uses the implemented
+                Uniswap V3 integration and available liquidity on Monad to identify executable payment
+                routes.
               </LI>
-              <LI>Live price providers, whose availability depends on configuration and network.</LI>
+              <LI>
+                <strong className="text-white/80">Transaction execution and delivery verification.</strong>{" "}
+                Supports payment execution and verification of the intended recipient&apos;s on-chain
+                receipt.
+              </LI>
+              <LI>
+                <strong className="text-white/80">Live pricing.</strong> Integrates live pricing
+                providers, subject to provider availability and configuration.
+              </LI>
+              <LI>
+                <strong className="text-white/80">Asset discovery and selection.</strong> Supports token
+                discovery and source-asset selection according to the payment requirements the
+                application supports.
+              </LI>
+              <LI>
+                <strong className="text-white/80">Payment review and authorization.</strong> Presents
+                payment details for user review and requires the appropriate wallet authorization
+                before execution.
+              </LI>
             </UL>
           </div>
         </div>

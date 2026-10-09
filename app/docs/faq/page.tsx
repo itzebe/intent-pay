@@ -63,6 +63,10 @@ const FAQ_ITEMS: { q: string; a: ReactNode }[] = [
     a: <>A clearly labelled mode that uses deterministic sample data so the flow can be explored without a wallet. It never produces a transaction hash and never claims a real transaction.</>,
   },
   {
+    q: "Has Intent Pay processed a real payment?",
+    a: <>Yes. Intent Pay has completed a real-wallet payment on Monad mainnet: the transaction executed successfully, the recipient received the payment, and the app displayed it as delivered and confirmed on Monad. This demonstrates that the payment flow works in a real mainnet environment. It is not a guarantee that every token, liquidity route, wallet configuration or transaction will succeed.</>,
+  },
+  {
     q: "Where can I read the full design?",
     a: <>See the <Code>/docs/litepaper</Code>. It describes the implementation as built, including its current limits.</>,
   },

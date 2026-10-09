@@ -229,9 +229,24 @@ clear the slot, never a raw spread.
 A `prepareSigning` refusal (a moved price, a drained balance, an account
 switch) is **recoverable**, not a reason to eject the user: `PaymentComposer`
 keeps `stage === "review"`, shows the guard's specific message, refreshes the
-quote, and offers a Retry action (`ReviewSheet.onRetry` → `onConfirm`). The
-review-invalidation effect still drops to `compose` when the *intent itself*
-changed. Do not send a recoverable preparation error back to a blank composer.
+quote, and offers a Retry action (`ReviewSheet.onRetry` → `onConfirm`).
+
+A version bump the **engine itself** performs while the user is on Review (the
+optimizer re-picking a source, an account/revalidation event) must **never**
+eject them back to the composer — that was the reported "Confirm → loading →
+previous screen" loop. The review-invalidation effect therefore no longer calls
+`setStage("compose")`: it keeps Review mounted and, when the intent genuinely
+moved on with no fresh quote yet, shows a soft `reviewNotice` and re-anchors
+`reviewVersionRef`. Rules, in order: (1) a quote that already matches the
+current intent is adopted silently (and clears the notice); (2) a refresh in
+flight does not eject; (3) while `holdReviewRef` is set (a signing attempt owns
+the screen) nothing ejects — `prepareSigning` refuses the signature instead;
+(4) otherwise keep the user on Review. Review also renders from
+`reviewQuote = flow.quote ?? lastQuoteRef.current`, so a momentarily-null quote
+mid-refresh never blanks the subtree; `canConfirm` (fresh quote for the current
+intent + not stale + readiness) gates the Confirm button, and `onRefresh` gives
+an explicit retry on a stale quote. Do not send a recoverable preparation error,
+or an engine-driven version bump, back to a blank composer.
 
 ## Token names resolve internally (never ask for an address)
 
@@ -257,6 +272,15 @@ Alchemy node+Bundler+usable-policy path *or* a reachable ERC-20 provider
 exists, and its `reason` names the ERC-20 provider explicitly when that is the
 one configured but down. `usePayment.tsx` feeds the `gasPayment.*` capability
 fields into `resolveAbstraction`.
+
+The provider configuration can also be **unknown**: `/api/capabilities` may not
+have answered yet (first paint) or may have failed. `usePayment.tsx` passes
+`providersKnown: false` in that case (`capabilities === null` or the degraded
+`unavailable` fallback from `useCapabilities`), and `resolveAbstraction` then
+says "Checking whether gas can be paid without MON…" instead of the false "no
+paymaster is configured". `IntegrationStack` renders nothing when capabilities
+are degraded, so it can't show a configured provider as "Off / add a key".
+Never assert absence of a paymaster from missing data.
 
 ## Execution protection (MEV / sandwich)
 

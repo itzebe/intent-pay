@@ -54,6 +54,14 @@ export type AbstractionCapabilities = {
   /** Why the policy is not usable (shown to the user when relevant). */
   policyReason?: string;
   /**
+   * Whether the *provider configuration* is known yet. When the deployment's
+   * capability surface has not answered (first paint, a failed fetch), we must
+   * NOT assert "no paymaster is configured" — a configured Pimlico paymaster
+   * would be misreported. Defaults to true so callers that only pass concrete
+   * booleans keep their existing behaviour.
+   */
+  providersKnown?: boolean;
+  /**
    * An ERC-20 gas provider (e.g. Pimlico) is configured. This is a paymaster in
    * its own right — it lets a wallet with no MON pay the fee in a token — so it
    * must count as "a paymaster is configured". Omitting it preserves the
@@ -120,6 +128,19 @@ export function resolveAbstraction(
   }
 
   if (!caps.paymasterConfigured) {
+    // The deployment's capability surface has not answered yet: we do not know
+    // whether a paymaster (Alchemy Gas Manager or the Pimlico ERC-20 provider)
+    // is configured, so asserting "no paymaster" would be false. Say we're
+    // still checking instead.
+    if (caps.providersKnown === false && !caps.erc20ProviderConfigured) {
+      return {
+        state: "PAYMASTER_UNAVAILABLE",
+        abstracted: false,
+        gasOptions: nativeGas,
+        message:
+          "Checking whether gas can be paid without MON… your wallet can still pay the network fee in MON.",
+      };
+    }
     // An ERC-20 gas provider (Pimlico) is a paymaster in its own right. When it
     // is configured the app must NOT claim "no paymaster is configured" — the
     // honest state depends on the live probe and the wallet.

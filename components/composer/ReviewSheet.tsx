@@ -30,8 +30,11 @@ export function ReviewSheet({
   onConfirm,
   onBack,
   onRetry,
+  onRefresh,
   confirming,
   error,
+  notice,
+  canConfirm = true,
   networkLabel,
   gasMode = "native",
   batchable = false,
@@ -52,8 +55,17 @@ export function ReviewSheet({
   onBack: () => void;
   /** Retry the same review after a recoverable preparation error. */
   onRetry?: () => void;
+  /** Force a fresh quote when the displayed one has expired. */
+  onRefresh?: () => void;
   confirming: boolean;
   error?: string | null;
+  /** A soft, non-blocking notice (e.g. the payment details were updated). */
+  notice?: string | null;
+  /**
+   * Whether Confirm is currently enabled. False while a fresh quote for the
+   * current intent is still being fetched, so a stale figure is never signed.
+   */
+  canConfirm?: boolean;
   networkLabel: string;
   /** How gas will be handled for this payment. */
   gasMode?: "sponsored" | "erc20" | "native";
@@ -135,9 +147,28 @@ export function ReviewSheet({
         </p>
 
         {quoteStale && (
-          <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.08] px-3 py-2 text-xs text-amber-100">
+          <div className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/[0.08] px-3 py-2 text-xs text-amber-100">
+            <div className="flex items-center justify-center gap-2">
+              <Warning className="h-4 w-4 shrink-0" />
+              <span>This quote expired. Refreshing a live price — confirm again once it updates.</span>
+            </div>
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={confirming}
+                className="btn-ghost mx-auto mt-2 block px-3 py-1.5 text-xs disabled:opacity-50"
+              >
+                Refresh price
+              </button>
+            )}
+          </div>
+        )}
+
+        {notice && (
+          <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-mono/30 bg-mono/[0.08] px-3 py-2 text-xs text-mono-soft">
             <Warning className="h-4 w-4 shrink-0" />
-            <span>This quote expired. Refreshing a live price — confirm again once it updates.</span>
+            <span>{notice}</span>
           </div>
         )}
 
@@ -414,11 +445,11 @@ export function ReviewSheet({
           <button
             onClick={onConfirm}
             className="btn-primary flex-1"
-            disabled={confirming || quoteStale}
+            disabled={confirming || quoteStale || !canConfirm}
           >
             {confirming
               ? "Sending…"
-              : quoteStale
+              : quoteStale || !canConfirm
                 ? "Refreshing price…"
                 : `Confirm & Send ${usdTokenLabel(quote.receiveUsd, receiveToken.symbol)}`}
           </button>

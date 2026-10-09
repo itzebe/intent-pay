@@ -853,6 +853,10 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       // Monad mainnet is the only configured chain today; it is supported when
       // the deployment targets it.
       chainSupported: state.intent.network === "mainnet",
+      // Capability data not loaded yet (null) or degraded (unreachable) ⇒ the
+      // provider configuration is unknown, so the UI must not assert
+      // "no paymaster is configured".
+      providersKnown: capabilities !== null && !capabilities.unavailable,
       paymasterConfigured,
       // A policy is only usable within its window. `sponsorshipConfigured`
       // already folds in the window, so an expired policy is not abstracted.

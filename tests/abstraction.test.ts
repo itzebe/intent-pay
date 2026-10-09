@@ -114,4 +114,30 @@ describe("wallet abstraction state", () => {
     expect(r.state).toBe("ABSTRACTION_UNSUPPORTED_WALLET");
     expect(r.message).not.toMatch(/no paymaster is configured/i);
   });
+
+  /**
+   * The deployment's capability surface may not have answered yet (first paint,
+   * a failed fetch). At that moment the app does not know whether a paymaster
+   * is configured, so it must NOT assert "no paymaster is configured" — the
+   * production Pimlico paymaster on chain 143 would be misreported.
+   */
+  it("does not assert no paymaster while capabilities are still unknown", () => {
+    const r = resolveAbstraction(USDC, {
+      ...base,
+      paymasterConfigured: false,
+      providersKnown: false,
+    });
+    expect(r.message).not.toMatch(/no paymaster is configured/i);
+    expect(r.message).toMatch(/checking/i);
+  });
+
+  it("still reports the honest no-paymaster reason once capabilities are known", () => {
+    const r = resolveAbstraction(USDC, {
+      ...base,
+      paymasterConfigured: false,
+      providersKnown: true,
+    });
+    expect(r.state).toBe("PAYMASTER_UNAVAILABLE");
+    expect(r.message).toMatch(/no paymaster is configured/i);
+  });
 });

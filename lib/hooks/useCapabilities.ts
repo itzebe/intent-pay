@@ -63,9 +63,16 @@ export type Capabilities = {
   };
   /** Whether a wallet-abstraction path is genuinely available. */
   walletAbstraction?: { available: boolean; reason: string | null };
+  /**
+   * True only for the degraded fallback returned when /api/capabilities could
+   * not be reached. The provider configuration is then *unknown*, so the UI
+   * must not assert "no paymaster is configured".
+   */
+  unavailable?: boolean;
 };
 
 const FALLBACK: Capabilities = {
+  unavailable: true,
   routing: { provider: "uniswap-v3", chain: "monad", live: true },
   pricing: { primary: null, fallbacks: [] },
   mevProtection: {

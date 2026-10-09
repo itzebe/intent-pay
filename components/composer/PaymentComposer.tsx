@@ -67,6 +67,22 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // intent, the review is no longer executable and we drop straight back to the
   // composer with a fresh computation.
   const reviewVersionRef = useRef<number | null>(null);
+  // While a signing attempt is in flight, Review is pinned so a version bump the
+  // engine performs mid-payment (a source re-pick, an account/revalidation
+  // event) can never silently pop the user back to the composer. Cleared in the
+  // attempt's `finally`, so a genuine change still ejects immediately after.
+  const holdReviewRef = useRef(false);
+  // A soft, non-ejecting message shown on Review when the intent legitimately
+  // changed under the user (the safety backstop), so they know to review again.
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
+  // The last quote we actually displayed. When a refresh momentarily clears
+  // `flow.quote` (a new version is being priced), we keep rendering the payment
+  // from this instead of blanking the screen — the "interface disappeared"
+  // symptom. It is only ever used for display; signing always re-quotes fresh.
+  const lastQuoteRef = useRef<Quote | null>(null);
+  useEffect(() => {
+    if (flow.quote) lastQuoteRef.current = flow.quote;
+  }, [flow.quote]);
 
   // Ask the wallet what it supports (EIP-5792 atomic batch + paymaster). This
   // is what lets us offer sponsored / ERC-20 gas only when it can actually work.
@@ -166,29 +182,56 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // preparations — that is how duplicate submissions happen.
   const attemptRef = useRef(false);
 
-  // A change to the canonical intent after Review invalidates the review: the
-  // user must not be able to execute a transaction for an older version. A
-  // quote that is momentarily absent because a *refresh is in flight* must NOT
-  // eject them — doing so silently returned the user to the previous screen and
-  // restarted the flow. We only leave Review when the intent genuinely changed,
-  // or when the quote is gone with no refresh coming (Confirm/Retry stay gated
-  // by `quoteStale` until a fresh quote lands).
+  // A change to the canonical intent after Review normally invalidates the
+  // review: the user must not sign a transaction for an older version. But a
+  // version bump can also be produced by the *engine itself* while the user is
+  // on Review (the optimizer re-picking a source, an account/revalidation
+  // event). Ejecting on that is what silently returned the user to the previous
+  // screen — the reported "Confirm → loading → previous screen" loop.
+  //
+  // Rules, in order:
+  //   1. A quote momentarily absent because a refresh is in flight does NOT
+  //      eject (Confirm/Retry stay gated by `quoteStale` until it lands).
+  //   2. While a signing attempt is in flight, Review is pinned: a mid-payment
+  //      version bump must not unmount the composer. The safety invariant is
+  //      preserved by `prepareSigning`, which refuses to sign if the intent
+  //      changed, rather than by ejecting the user.
+  //   3. Otherwise, if the intent genuinely changed, keep the user on Review
+  //      with a soft, recoverable notice — do NOT return to the composer. Their
+  //      recipient/amount/assets are preserved; Review stays mounted and the
+  //      new quote is shown as soon as it lands.
   useEffect(() => {
     if (stage !== "review") return;
+    // A quote that already matches the current intent means nothing changed —
+    // silently adopt the version (this is an engine re-price, e.g. the optimizer
+    // re-picking a source) and stay on Review. A fresh quote also clears any
+    // "details changed" notice, since the updated payment is now on screen.
+    if (flow.quote && flow.quoteVersion === flow.intent.version) {
+      reviewVersionRef.current = flow.intent.version;
+      setReviewNotice((n) => (n ? null : n));
+      return;
+    }
+    // A refresh is in flight: keep showing the last quote; Confirm stays gated.
+    if (flow.quoting) return;
+    // A signing attempt owns the screen until it resolves.
+    if (holdReviewRef.current) return;
+    // Otherwise the intent genuinely moved on with no fresh quote yet. Keep the
+    // user on Review with a recoverable notice — never eject them to the
+    // composer (the loop).
     const samePayment = reviewVersionRef.current === flow.intent.version;
-    if (samePayment && (flow.quote || flow.quoting)) return;
-    setStage("compose");
-    reviewVersionRef.current = null;
-    setError(
+    reviewVersionRef.current = flow.intent.version;
+    setReviewNotice(
       samePayment
         ? "We couldn't refresh the price. Review the payment and try again."
-        : "Your payment changed. Here's the updated quote — review it again.",
+        : "Your payment details were updated. Review the new quote and confirm again.",
     );
-    setSteps([]);
-    setDelivery(null);
-    setTxHash(undefined);
+    if (!samePayment) {
+      setSteps([]);
+      setDelivery(null);
+      setTxHash(undefined);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.intent.version, flow.quote, flow.quoting, stage]);
+  }, [flow.intent.version, flow.quote, flow.quoteVersion, flow.quoting, stage]);
 
   // Routability is discovered, not hardcoded: in live mode we ask the routing
   // layer which tokens were actually probed and have a liquid route.
@@ -204,15 +247,23 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const recipientConfirmed = flow.recipientConfirmed && recipientValid;
   const canContinue = flow.readiness.ready;
 
+  // The quote the Review renders. While a refresh is in flight (or a genuine
+  // change is being re-priced) `flow.quote` can be momentarily null; we keep
+  // showing the last quote so the payment never blanks, and gate Confirm on
+  // freshness so a stale figure is never signed.
+  const reviewQuote = flow.quote ?? lastQuoteRef.current;
+  const quoteFreshForCurrentIntent =
+    flow.quoteVersion === flow.intent.version && Boolean(flow.quote);
+
   // The execution-safety surface for the current quote: MEV capability,
   // slippage tolerance, and the price-impact assessment. Derived from real
   // configuration + the live quote, never from a hardcoded badge.
   const protection: ExecutionProtection | null = useMemo(
     () =>
-      flow.quote
-        ? resolveExecutionProtection(flow.quote.priceImpact)
+      reviewQuote
+        ? resolveExecutionProtection(reviewQuote.priceImpact)
         : null,
-    [flow.quote],
+    [reviewQuote],
   );
 
   // A token-quantity intent that the wallet only partly holds is satisfied by a
@@ -225,17 +276,17 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // A descriptive plan for display only; the *signed* plan is rebuilt fresh
   // inside the signing guard from the current intent.
   const displayPlan = useMemo(() => {
-    if (!flow.quote) return { steps: [], primaryStepId: "", executable: false, slippageBps: 0 };
+    if (!reviewQuote) return { steps: [], primaryStepId: "", executable: false, slippageBps: 0 };
     try {
       return buildPaymentPlan(
-        flow.quote,
+        reviewQuote,
         (wallet.address ?? flow.intent.recipient) as `0x${string}`,
         flow.intent.recipient as `0x${string}`,
       );
     } catch {
       return { steps: [], primaryStepId: "", executable: false, slippageBps: 0 };
     }
-  }, [flow.quote, flow.intent.recipient, wallet.address]);
+  }, [reviewQuote, flow.intent.recipient, wallet.address]);
 
   // Keep the latest intent reachable from inside the async guard so the
   // version check reads the *current* value, not the one captured at render.
@@ -254,6 +305,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const onReview = useCallback(() => {
     if (!flow.readiness.ready || !flow.quote) return;
     setError(null);
+    setReviewNotice(null);
     reviewVersionRef.current = flow.intent.version;
     setStage("review");
   }, [flow.readiness.ready, flow.quote, flow.intent.version]);
@@ -263,8 +315,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     reviewVersionRef.current = null;
     setSteps([]);
     setError(null);
+    setReviewNotice(null);
     setTxHash(undefined);
     setDelivery(null);
+    lastQuoteRef.current = null;
     flow.refreshQuote();
   }, [flow]);
 
@@ -279,7 +333,11 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     // overlapping preparations. Refuse it rather than submit twice.
     if (attemptRef.current) return;
     attemptRef.current = true;
+    // Pin Review for the whole attempt: a version bump the engine performs
+    // mid-payment must not eject the user (the loop). Cleared in `finally`.
+    holdReviewRef.current = true;
     setError(null);
+    setReviewNotice(null);
     setSteps([]);
     setDelivery(null);
 
@@ -538,6 +596,12 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       }
     } finally {
       attemptRef.current = false;
+      holdReviewRef.current = false;
+      // Re-anchor Review to whatever version the intent now holds (read live,
+      // not from the captured render), so a source re-pick the engine performed
+      // during the attempt does not immediately re-trigger the invalidation
+      // effect after the hold is released.
+      reviewVersionRef.current = intentRef.current.version;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -780,7 +844,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           </motion.div>
         )}
 
-        {stage === "review" && flow.quote && (
+        {stage === "review" && reviewQuote && (
           <motion.div
             key="review"
             initial={{ opacity: 0, y: 8 }}
@@ -789,7 +853,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             className="max-h-[80vh] overflow-hidden"
           >
             <ReviewSheet
-              quote={flow.quote}
+              quote={reviewQuote}
               payToken={flow.payTokenConfig}
               receiveToken={flow.receiveTokenConfig}
               recipient={flow.intent.recipient}
@@ -800,12 +864,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 reviewVersionRef.current = null;
               }}
               onRetry={onConfirm}
+              onRefresh={flow.refreshQuote}
               confirming={false}
               error={error}
+              notice={reviewNotice}
+              canConfirm={quoteFreshForCurrentIntent && !flow.quoteStale && flow.readiness.ready}
               networkLabel={networkLabel}
               gasMode={flow.gasMode}
               batchable={Boolean(walletCaps?.atomicBatch)}
-              quotedAt={flow.quote.quotedAt}
+              quotedAt={reviewQuote.quotedAt}
               quoteStale={flow.quoteStale}
               protection={protection}
               gasInfo={flow.gasInfo}
@@ -871,15 +938,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           </motion.div>
         )}
 
-        {stage === "success" && flow.quote && (
+        {stage === "success" && reviewQuote && (
           <motion.div key="success" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="max-h-[85vh] overflow-y-auto">
             <SuccessScreen
               payToken={flow.payTokenConfig}
               receiveToken={flow.receiveTokenConfig}
-              payAmount={flow.quote.payAmount}
-              payUsd={flow.quote.payUsd}
-              receiveAmount={flow.quote.receiveAmount}
-              receiveUsd={flow.quote.receiveUsd}
+              payAmount={reviewQuote.payAmount}
+              payUsd={reviewQuote.payUsd}
+              receiveAmount={reviewQuote.receiveAmount}
+              receiveUsd={reviewQuote.receiveUsd}
               recipient={flow.intent.recipient}
               txHash={txHash}
               network={flow.intent.network}

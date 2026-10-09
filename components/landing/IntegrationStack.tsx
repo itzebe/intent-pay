@@ -21,7 +21,10 @@ type Item = {
 
 export function IntegrationStack({ network }: { network: MonadNetwork }) {
   const caps = useCapabilities(network);
-  if (!caps) return null;
+  // With no real capability answer (degraded fallback) we show nothing rather
+  // than a strip that would falsely read "Off / add a key" for providers that
+  // are in fact configured.
+  if (!caps || caps.unavailable) return null;
 
   const alchemyConfigured = caps.gas.alchemyConfigured ?? caps.gas.alchemy;
   const alchemyReachable = caps.gas.alchemyReachable ?? caps.gas.alchemy;

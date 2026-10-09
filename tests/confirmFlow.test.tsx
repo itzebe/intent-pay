@@ -378,4 +378,57 @@ describe("confirmation flow", () => {
     // It returns to Review with an error, never a fabricated success.
     expect(screen.getByText(/did not confirm/i)).toBeTruthy();
   });
+
+  it("keeps the user on Review when the engine re-prices a new version underneath them (the reported loop)", async () => {
+    baseFlow({});
+    const { rerender } = renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    expect(screen.getByText(/Confirm & Send/)).toBeTruthy();
+
+    // While the user is reading Review, source selection re-picks the same
+    // asset at a new version and clears the quote — the exact loop trigger.
+    // Previously this ejected the user back to the composer (the endless loop).
+    const bumped = reduceIntent(flow.intent, {
+      payToken: "USDT",
+      payTokenSource: "user",
+      receiveToken: "USDC",
+      receiveAmount: "6",
+    });
+    flow.intent = bumped;
+    flow.quote = null;
+    flow.quoteVersion = 0;
+    flow.quoting = false;
+    await act(async () => {
+      rerender(<PaymentComposer networkLabel="Monad" />);
+    });
+
+    // Still inside the payment flow: the composer's Review CTA must NOT
+    // reappear, and the payment is preserved across the re-price.
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    expect(screen.getByText(/Review payment/)).toBeTruthy();
+    expect(flow.intent.recipient).toBe("0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4");
+    expect(flow.intent.receiveToken).toBe("USDC");
+  });
+
+  it("keeps rendering the payment (does not blank) when a refresh momentarily clears the quote", async () => {
+    baseFlow({});
+    const { rerender } = renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    expect(screen.getByText(/Confirm & Send/)).toBeTruthy();
+
+    // A same-version refresh clears the quote and marks it quoting. Previously
+    // the Review subtree required `flow.quote`, so it vanished mid-refresh.
+    flow.quote = null;
+    flow.quoteVersion = 0;
+    flow.quoting = true;
+    flow.quoteStale = true;
+    await act(async () => {
+      rerender(<PaymentComposer networkLabel="Monad" />);
+    });
+
+    // Review is still mounted (the last quote is shown) and Confirm is gated.
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    expect(screen.getByText(/Review payment/)).toBeTruthy();
+    expect(screen.getByText("Refreshing price…")).toBeTruthy();
+  });
 });

@@ -4,6 +4,8 @@ import { deriveState, missingField, sanitizePatch, emptyIntent } from "@/lib/nlp
 import { nextClarification } from "@/lib/nlp/question";
 import { planFromText, applyAsset, applyAddress, applyAmount, mergeDraft } from "@/lib/nlp/engine";
 import { draftToHandoff } from "@/lib/nlp/handoff";
+import { nlDraftToIntentPatch } from "@/lib/nlp/apply";
+import { getToken, getTokenByAddress } from "@/lib/config/tokens";
 
 const SYMBOLS = ["MON", "USDC", "USDT", "SOL", "WETH", "AUSD"];
 const ctx = { symbols: SYMBOLS, network: "mainnet" as const };
@@ -330,5 +332,31 @@ describe("requested output asset is authoritative", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.compose.receiveToken).toBe("MON");
+  });
+});
+
+describe("a token name resolves to the correct Monad contract address", () => {
+  /**
+   * The user names a token ("USDC") and must never type a contract address.
+   * The symbol must resolve internally to the canonical mainnet address, so the
+   * quote, plan and signing guard all target the right contract.
+   */
+  it("maps the USDC name to its canonical Monad address", () => {
+    expect(getToken("USDC")?.address).toBe("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");
+    expect(getTokenByAddress("0x754704Bc059F8C67012fEd69BC8A327a5aafb603")?.symbol).toBe("USDC");
+  });
+
+  it("the resolved symbol is what the draft→intent patch stores as the address", () => {
+    const draft = parseDetailed(`Send 10 USDC to ${ADDR}`, ctx).intent;
+    expect(draft.asset).toBe("USDC");
+    const patch = nlDraftToIntentPatch({ draft });
+    expect(patch.receiveToken).toBe("USDC");
+    // No address was supplied by the caller; it is resolved from the symbol.
+    expect(patch.receiveTokenAddress).toBe("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");
+  });
+
+  it("a token name is case-insensitive but still resolves to the exact contract", () => {
+    expect(getToken("usdc")?.address).toBe(getToken("USDC")?.address);
+    expect(getToken("Usdc")?.address).toBe("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");
   });
 });

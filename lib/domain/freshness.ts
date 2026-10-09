@@ -17,6 +17,14 @@ export const QUOTE_MAX_AGE_MS = 20_000;
 /** We proactively refresh the quote this long after it was produced. */
 export const QUOTE_REFRESH_AFTER_MS = 15_000;
 
+/**
+ * How long to wait before retrying a quote refresh that failed. A failed
+ * refresh keeps the last-known-good quote (see `lib/domain/quoteState`), so this
+ * is a recovery backoff — short enough to recover quickly, long enough never to
+ * hammer a struggling provider.
+ */
+export const QUOTE_RETRY_AFTER_MS = 4_000;
+
 /** True when a quote produced at `quotedAt` is too old to execute at `now`. */
 export function isQuoteStale(
   quotedAt: number | null | undefined,

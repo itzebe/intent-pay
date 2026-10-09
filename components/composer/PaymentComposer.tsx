@@ -362,9 +362,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       );
 
       if (!prepared.ok) {
+        // The review stays inside the payment flow: the quote/plan was rebuilt
+        // from fresh data and the guard refused to sign for a specific reason
+        // (a moved price, a changed balance). We surface a recoverable error and
+        // refresh the quote so the user can retry the same review, rather than
+        // dropping them back to a blank composer.
         setError(prepared.message);
-        setStage("compose");
-        reviewVersionRef.current = null;
+        setStage("review");
         flow.refreshQuote();
         return;
       }
@@ -757,6 +761,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 setStage("compose");
                 reviewVersionRef.current = null;
               }}
+              onRetry={onConfirm}
               confirming={false}
               error={error}
               networkLabel={networkLabel}

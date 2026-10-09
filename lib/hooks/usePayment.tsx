@@ -14,7 +14,8 @@ import type { AmountMode, Balance, Quote } from "@/lib/domain/intent";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { parseUnits } from "@/lib/domain/math";
 import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
-import { isQuoteStale, QUOTE_REFRESH_AFTER_MS } from "@/lib/domain/freshness";
+import { isQuoteStale, QUOTE_REFRESH_AFTER_MS, QUOTE_RETRY_AFTER_MS } from "@/lib/domain/freshness";
+import { applyQuoteFailure, applyQuoteSuccess } from "@/lib/domain/quoteState";
 import {
   initialIntent,
   isQuotable,
@@ -100,6 +101,12 @@ type FlowState = {
   walletAccount: string | undefined;
   /** Bumped periodically to drive live balance/gas revalidation. */
   revalidationTick: number;
+  /**
+   * Wall-clock (ms) of the last failed quote refresh, or 0 when none is
+   * pending. A failed refresh keeps the last-known-good quote, so this drives
+   * an automatic retry rather than blanking the payment.
+   */
+  quoteRefreshFailedAt: number;
   /** Snapshot of the recipient amount the user explicitly asked for. */
   intendedReceiveAmount: string | null;
 };
@@ -231,6 +238,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       autoRefreshAt: 0,
       walletAccount: undefined,
       revalidationTick: 0,
+      quoteRefreshFailedAt: 0,
       intendedReceiveAmount: intent.receiveAmount,
     };
   });
@@ -281,6 +289,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
         quoting: false,
         quoteError: null,
         autoRefreshAt: 0,
+        quoteRefreshFailedAt: 0,
       };
     });
   }, []);
@@ -370,6 +379,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
         quoteVersion: 0,
         quoteError: null,
         autoRefreshAt: 0,
+        quoteRefreshFailedAt: 0,
       };
     });
     setWalletGasCapabilities(null);
@@ -425,7 +435,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
         amountMode: "recipient_receives",
         receiveAmount: s.intendedReceiveAmount,
       });
-      return { ...s, intent, quote: null, quoteVersion: 0, quoteError: null };
+      return { ...s, intent, quote: null, quoteVersion: 0, quoteError: null, quoteRefreshFailedAt: 0 };
     });
     setNonce((n) => n + 1);
   }, []);
@@ -464,6 +474,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
           quoting: sameVersion ? s.quoting : false,
           quoteError: sameVersion ? s.quoteError : null,
           autoRefreshAt: sameVersion ? s.autoRefreshAt : 0,
+          quoteRefreshFailedAt: sameVersion ? s.quoteRefreshFailedAt : 0,
         };
       });
       // A parser-supplied address is an explicit recipient — confirm it so the
@@ -579,7 +590,7 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     if (!isQuotable(intent)) {
       setState((s) =>
         s.quote || s.quoting || s.quoteError
-          ? { ...s, quote: null, quoting: false, quoteError: null }
+          ? { ...s, quote: null, quoting: false, quoteError: null, quoteRefreshFailedAt: 0 }
           : s,
       );
       return;
@@ -624,13 +635,14 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
                 if (before?.toLowerCase() !== t.address.toLowerCase()) learned = true;
               }
             }
-            return {
-              ...s,
+            const next = applyQuoteSuccess(s, {
               quote: q,
-              quoteVersion: issuedVersion,
+              issuedVersion,
+              at: Date.now(),
+            });
+            return {
+              ...next,
               quoting: false,
-              quoteError: null,
-              autoRefreshAt: Date.now(),
               tokensVersion: learned ? s.tokensVersion + 1 : s.tokensVersion,
               intendedReceiveAmount:
                 s.intent.amountMode === "i_spend"
@@ -638,30 +650,32 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
                   : s.intendedReceiveAmount,
             };
           }
-          return {
-            ...s,
-            quote: null,
-            quoteVersion: 0,
-            quoting: false,
-            quoteError: {
+          // A refresh that fails while we still hold a usable quote for this
+          // version keeps that quote (so the payment survives a transient
+          // failure) and schedules a retry; only a failure with nothing usable
+          // clears the quote and blocks.
+          const next = applyQuoteFailure(s, {
+            issuedVersion,
+            at: Date.now(),
+            error: {
               code: json.code ?? "provider_error",
               message: json.message ?? "Could not build a quote.",
               alternatives: json.alternatives,
             },
-          };
+          });
+          return { ...next, quoting: false };
         });
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
         if (!latestRef.current.isCurrent(requestId, issuedVersion)) return;
         setState((s) => {
           if (s.intent.version !== issuedVersion) return s;
-          return {
-            ...s,
-            quote: null,
-            quoteVersion: 0,
-            quoting: false,
-            quoteError: { code: "provider_error", message: "Couldn't reach the routing service." },
-          };
+          const next = applyQuoteFailure(s, {
+            issuedVersion,
+            at: Date.now(),
+            error: { code: "provider_error", message: "Couldn't reach the routing service." },
+          });
+          return { ...next, quoting: false };
         });
       }
     }, 320);
@@ -710,13 +724,26 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     isQuoteStale(state.autoRefreshAt) || state.quoteVersion !== state.intent.version;
 
   // Proactively refresh as the quote approaches staleness (delay 0 when it has
-  // already aged out, so a long-idle tab recovers immediately).
+  // already aged out, so a long-idle tab recovers immediately). A failed
+  // refresh keeps the last-known-good quote and schedules a retry instead of
+  // blanking the payment.
   useEffect(() => {
     if (!state.quote || !state.autoRefreshAt) return;
     const delay = Math.max(0, QUOTE_REFRESH_AFTER_MS - (Date.now() - state.autoRefreshAt));
     const timer = setTimeout(() => setNonce((n) => n + 1), delay);
     return () => clearTimeout(timer);
   }, [state.quote, state.autoRefreshAt]);
+
+  // A refresh that failed while a usable quote is still held retries after a
+  // short backoff. This is what makes "expired quote → refresh failure" a
+  // recoverable state rather than a dead end. We only auto-retry while a quote
+  // is held: with no quote there is nothing to keep alive, and the readiness
+  // gate already surfaces a retryable error driven by user edits.
+  useEffect(() => {
+    if (!state.quoteRefreshFailedAt || !state.quote) return;
+    const timer = setTimeout(() => setNonce((n) => n + 1), QUOTE_RETRY_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [state.quoteRefreshFailedAt, state.quote]);
 
   // ---- Balance sufficiency -------------------------------------------------
   const sufficiency = useMemo(() => {
@@ -816,6 +843,11 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     const chainId = NETWORKS[state.intent.network].chainId;
     const supportedTokens: string[] = capabilities?.gas.supportedTokens ?? [];
     const paymasterConfigured = Boolean(capabilities?.gas.paymasterConfigured);
+    // A configured, reachable ERC-20 gas provider (Pimlico) is a paymaster too,
+    // so the app must not report "no paymaster is configured" when only the
+    // ERC-20 path is configured. `available` folds in reachability + chain.
+    const erc20ProviderConfigured = Boolean(capabilities?.gasPayment?.configured);
+    const erc20ProviderAvailable = capabilities?.gasPayment?.available ?? undefined;
     return resolveAbstraction(payTokenConfig, {
       chainId,
       // Monad mainnet is the only configured chain today; it is supported when
@@ -826,6 +858,9 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       // already folds in the window, so an expired policy is not abstracted.
       policyUsable: capabilities?.gas.sponsorshipConfigured ?? paymasterConfigured,
       policyReason: capabilities?.gas.policyReason,
+      erc20ProviderConfigured,
+      erc20ProviderAvailable,
+      erc20ProviderReason: capabilities?.gasPayment?.error ?? null,
       walletSupportsPaymaster: Boolean(walletGasCaps?.paymasterService),
       walletSupportsErc20Gas: Boolean(walletGasCaps?.erc20GasPayment),
       walletSupportsBatch: Boolean(walletGasCaps?.atomicBatch),

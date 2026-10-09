@@ -29,6 +29,7 @@ export function ReviewSheet({
   planSteps,
   onConfirm,
   onBack,
+  onRetry,
   confirming,
   error,
   networkLabel,
@@ -49,6 +50,8 @@ export function ReviewSheet({
   planSteps: string[];
   onConfirm: () => void;
   onBack: () => void;
+  /** Retry the same review after a recoverable preparation error. */
+  onRetry?: () => void;
   confirming: boolean;
   error?: string | null;
   networkLabel: string;
@@ -387,7 +390,17 @@ export function ReviewSheet({
               className="mt-3 flex items-start gap-2 rounded-2xl border border-red-400/25 bg-red-500/[0.08] p-3 text-xs text-red-200"
             >
               <Warning className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
+              <div className="min-w-0 flex-1">
+                <span>{error}</span>
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  disabled={confirming || quoteStale}
+                  className="btn-ghost mt-2 w-full px-3 py-1.5 text-xs disabled:opacity-50"
+                >
+                  Retry payment
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

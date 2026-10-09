@@ -122,6 +122,32 @@ describe("resolveToken by symbol", () => {
     expect(res?.exists).toBe(true);
   });
 
+  it("resolves a seed symbol case-insensitively", async () => {
+    const res = await resolveToken("usdc", "mainnet");
+    expect(res?.token.symbol).toBe("USDC");
+    expect(res?.token.address).toBe("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");
+  });
+
+  it("resolves a token by its display NAME, returning the canonical address", async () => {
+    // The user must never have to paste a contract address: "USD Coin" must
+    // resolve to the same token (and address) as the "USDC" ticker.
+    const byName = await resolveToken("USD Coin", "mainnet");
+    expect(byName?.token.symbol).toBe("USDC");
+    expect(byName?.token.address).toBe("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");
+    expect(byName?.exists).toBe(true);
+  });
+
+  it("matches the display name case-insensitively", async () => {
+    const res = await resolveToken("usd coin", "mainnet");
+    expect(res?.token.symbol).toBe("USDC");
+  });
+
+  it("prefers the ticker over a name so a shared name cannot shadow it", async () => {
+    // A name that equals another token's ticker still resolves by ticker first.
+    const res = await resolveToken("USDT", "mainnet");
+    expect(res?.token.symbol).toBe("USDT");
+  });
+
   it("returns null for an unknown symbol that is not an address", async () => {
     const res = await resolveToken("NOT-A-TOKEN-XYZ", "mainnet");
     expect(res).toBeNull();

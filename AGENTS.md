@@ -202,11 +202,61 @@ metadata, a trustworthy price *and* a real route. `/api/tokens` exposes
 ## Quote freshness (execution guard)
 
 `lib/domain/freshness.ts` (client-safe) owns the single definition of a
-stale quote: `QUOTE_MAX_AGE_MS` (20s hard limit) and `QUOTE_REFRESH_AFTER_MS`
-(15s proactive refresh). The composer recomputes `quoteStale` each render,
+stale quote: `QUOTE_MAX_AGE_MS` (20s hard limit), `QUOTE_REFRESH_AFTER_MS`
+(15s proactive refresh) and `QUOTE_RETRY_AFTER_MS` (4s backoff for a failed
+refresh). The composer recomputes `quoteStale` each render,
 auto-refreshes before expiry, disables Review/Confirm while stale, and
 `onConfirm` re-checks it so a price the user saw is never the price they
 sign. `lib/server/quote.ts` re-exports `isQuoteStale` for server callers.
+
+### Refresh resilience (a transient failure must not destroy the payment)
+
+`lib/domain/quoteState.ts` (pure) is the one rule for what a failed quote
+*refresh* does to the payment slot. A **transient** failure (`provider_error`,
+`quote_unavailable` — the provider couldn't be reached or timed out) while the
+last-known-good quote for the *current intent version* is still held **keeps
+that quote and its timestamp** (so staleness keeps ageing honestly) and records
+`quoteRefreshFailedAt`; a backoff effect in `usePayment.tsx` re-quotes after
+`QUOTE_RETRY_AFTER_MS`. A **definitive** failure (`route_unavailable`,
+`unsupported_token`, …) is a real state change and clears the quote so the
+honest error shows. A failure with no usable quote for the current version also
+clears. `usePayment.tsx` routes the fetch success and both failure paths through
+`applyQuoteSuccess`/`applyQuoteFailure`; only `applyQuoteFailure` may keep or
+clear the slot, never a raw spread.
+
+## Review stays inside the flow
+
+A `prepareSigning` refusal (a moved price, a drained balance, an account
+switch) is **recoverable**, not a reason to eject the user: `PaymentComposer`
+keeps `stage === "review"`, shows the guard's specific message, refreshes the
+quote, and offers a Retry action (`ReviewSheet.onRetry` → `onConfirm`). The
+review-invalidation effect still drops to `compose` when the *intent itself*
+changed. Do not send a recoverable preparation error back to a blank composer.
+
+## Token names resolve internally (never ask for an address)
+
+The user must never enter a contract address. `resolveToken`
+(`lib/server/discovery.ts`) resolves a token by ticker **or** display name
+("USDC" or "USD Coin" → `0x754704…b603`), symbol first so a shared name can't
+shadow a ticker, and only an *unambiguous* exact name match is accepted (two
+contracts sharing a name are never guessed between). Address remains the
+authoritative identity; the name path only supplies it. Note the deterministic
+NL parser is ticker-only, so "Send 10 USD Coin" still asks which asset — that is
+acceptable because it never guesses and never asks for an address; do not
+loosen the parser to treat a multi-word name as a ticker.
+
+## Paymaster honesty (ERC-20 provider *is* a paymaster)
+
+An ERC-20 gas provider (Pimlico) is a paymaster in its own right — a wallet
+with 0 MON pays the fee in a token. `resolveAbstraction`
+(`lib/domain/abstraction.ts`) takes `erc20ProviderConfigured` /
+`erc20ProviderAvailable` / `erc20ProviderReason`; when the provider is
+configured the app must **never** say "no paymaster is configured". The
+`/api/capabilities` `walletAbstraction.available` is true when *either* the
+Alchemy node+Bundler+usable-policy path *or* a reachable ERC-20 provider
+exists, and its `reason` names the ERC-20 provider explicitly when that is the
+one configured but down. `usePayment.tsx` feeds the `gasPayment.*` capability
+fields into `resolveAbstraction`.
 
 ## Execution protection (MEV / sandwich)
 

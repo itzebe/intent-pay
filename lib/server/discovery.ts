@@ -271,6 +271,12 @@ export async function resolveToken(
 
   if (isEvmAddress(value)) return resolveByAddress(value, network);
 
+  // The user must never have to paste a contract address: a token is resolved
+  // by its ticker ("USDC", "usdc") *or* its display name ("USD Coin"), and the
+  // canonical contract address is found internally. Symbol always wins over
+  // name so a shared name can never shadow the ticker the user typed.
+  const lower = value.toLowerCase();
+
   const known = getToken(value);
   if (known) {
     return {
@@ -281,11 +287,17 @@ export async function resolveToken(
     };
   }
 
-  const match = curatedCatalog().find(
-    (c) => c.symbol.toLowerCase() === value.toLowerCase(),
-  );
-  if (match) {
-    const token = configFromCurated(match);
+  const symbolMatch = curatedCatalog().find((c) => c.symbol.toLowerCase() === lower);
+  if (symbolMatch) {
+    const token = configFromCurated(symbolMatch);
+    return { token, exists: true, source: "list", listed: true };
+  }
+
+  // Exact display-name match, but only when it is unambiguous — two distinct
+  // contracts sharing a name must never be guessed between.
+  const nameMatches = curatedCatalog().filter((c) => c.name.toLowerCase() === lower);
+  if (nameMatches.length === 1) {
+    const token = configFromCurated(nameMatches[0]);
     return { token, exists: true, source: "list", listed: true };
   }
   return null;

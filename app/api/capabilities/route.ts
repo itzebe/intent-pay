@@ -64,13 +64,16 @@ export async function GET() {
   }
   const erc20GasAvailable = erc20Configured && erc20Reachable;
 
-  // A wallet-abstraction path exists only when the node+Bundler answer and a
-  // usable Gas Manager policy is configured. A configured-but-unusable policy
-  // reports a specific reason rather than a bare "unavailable".
+  // A wallet-abstraction path exists when EITHER the Alchemy node+Bundler
+  // answer with a usable Gas Manager policy, OR an ERC-20 gas provider
+  // (Pimlico) is configured and reachable on this chain. The ERC-20 provider is
+  // a paymaster in its own right — a wallet with 0 MON pays the fee in a token —
+  // so it must not be reported as "no paymaster configured".
   const bundlerOk = bundler.reachable;
   const paymasterUsable =
     paymaster.reachable && (paymaster.policyValid ?? true) && gas.sponsorshipConfigured;
-  const abstractionAvailable = alchemy.reachable && bundlerOk && paymasterUsable;
+  const alchemyAbstractionAvailable = alchemy.reachable && bundlerOk && paymasterUsable;
+  const abstractionAvailable = alchemyAbstractionAvailable || erc20GasAvailable;
 
 
   return NextResponse.json({
@@ -153,19 +156,23 @@ export async function GET() {
       available: abstractionAvailable,
       reason: abstractionAvailable
         ? null
-        : !gas.alchemy
-          ? "ALCHEMY_API_KEY is not set"
-          : !alchemy.reachable
-            ? `Alchemy node unreachable: ${alchemy.error ?? "unknown error"}`
-            : !bundlerOk
-              ? `Bundler unreachable: ${bundler.error ?? "unknown error"}`
-              : !gas.policyConfigured
-                ? "No Alchemy Gas Manager policy is configured (ALCHEMY_GAS_POLICY_ID)"
-                : gas.policyStatus === "expired"
-                  ? "The configured gas policy window has ended."
-                  : !paymasterUsable
-                    ? `Gas Manager not usable: ${paymaster.error ?? gas.policyReason ?? "unknown"}`
-                    : null,
+        : !gas.alchemy && !erc20Configured
+          ? "No wallet-abstraction provider is configured (no Alchemy Gas Manager policy and no ERC-20 gas paymaster)"
+          : erc20Configured && !erc20Reachable
+            ? `ERC-20 gas paymaster configured but unreachable: ${erc20Error ?? "unknown error"}`
+            : !gas.alchemy
+              ? "ALCHEMY_API_KEY is not set"
+              : !alchemy.reachable
+                ? `Alchemy node unreachable: ${alchemy.error ?? "unknown error"}`
+                : !bundlerOk
+                  ? `Bundler unreachable: ${bundler.error ?? "unknown error"}`
+                  : !gas.policyConfigured
+                    ? "No Alchemy Gas Manager policy is configured (ALCHEMY_GAS_POLICY_ID)"
+                    : gas.policyStatus === "expired"
+                      ? "The configured gas policy window has ended."
+                      : !paymasterUsable
+                        ? `Gas Manager not usable: ${paymaster.error ?? gas.policyReason ?? "unknown"}`
+                        : null,
     },
   });
 }

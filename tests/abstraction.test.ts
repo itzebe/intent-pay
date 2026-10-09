@@ -69,4 +69,49 @@ describe("wallet abstraction state", () => {
     expect(isTokenSponsored(USDC, [USDC.address])).toBe(true);
     expect(isTokenSponsored(MON, [MON.address])).toBe(false);
   });
+
+  /**
+   * A configured, reachable ERC-20 gas provider (Pimlico) is a paymaster in its
+   * own right. When it is configured the app must NEVER claim "no paymaster is
+   * configured" — that was the false production message.
+   */
+  it("does not claim no paymaster when an ERC-20 gas provider is configured", () => {
+    const r = resolveAbstraction(USDC, {
+      ...base,
+      paymasterConfigured: false,
+      erc20ProviderConfigured: true,
+      erc20ProviderAvailable: true,
+      walletSupportsErc20Gas: true,
+    });
+    expect(r.state).not.toBe("PAYMASTER_UNAVAILABLE");
+    expect(r.message).not.toMatch(/no paymaster is configured/i);
+    expect(r.gasOptions.erc20GasPayment).toBe(true);
+  });
+
+  it("reports a specific ERC-20-provider reason when it is configured but unavailable", () => {
+    const r = resolveAbstraction(USDC, {
+      ...base,
+      paymasterConfigured: false,
+      erc20ProviderConfigured: true,
+      erc20ProviderAvailable: false,
+      erc20ProviderReason: "Request timed out",
+      walletSupportsErc20Gas: true,
+    });
+    expect(r.state).toBe("PAYMASTER_UNAVAILABLE");
+    expect(r.message).toContain("Request timed out");
+    expect(r.message).not.toMatch(/no paymaster is configured/i);
+  });
+
+  it("says the wallet can't pay in an ERC-20 when the provider is up but the wallet is not compatible", () => {
+    const r = resolveAbstraction(USDC, {
+      ...base,
+      paymasterConfigured: false,
+      erc20ProviderConfigured: true,
+      erc20ProviderAvailable: true,
+      walletSupportsErc20Gas: false,
+      walletSupportsPaymaster: false,
+    });
+    expect(r.state).toBe("ABSTRACTION_UNSUPPORTED_WALLET");
+    expect(r.message).not.toMatch(/no paymaster is configured/i);
+  });
 });

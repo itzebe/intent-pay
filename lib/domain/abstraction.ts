@@ -53,6 +53,17 @@ export type AbstractionCapabilities = {
   policyUsable?: boolean;
   /** Why the policy is not usable (shown to the user when relevant). */
   policyReason?: string;
+  /**
+   * An ERC-20 gas provider (e.g. Pimlico) is configured. This is a paymaster in
+   * its own right — it lets a wallet with no MON pay the fee in a token — so it
+   * must count as "a paymaster is configured". Omitting it preserves the
+   * Alchemy-only behaviour for existing callers.
+   */
+  erc20ProviderConfigured?: boolean;
+  /** The ERC-20 provider answered a live probe on this chain. */
+  erc20ProviderAvailable?: boolean;
+  /** The precise per-wallet ERC-20 reason (from the live capability probe). */
+  erc20ProviderReason?: string | null;
   /** The wallet advertises the EIP-5792 `paymasterService` capability. */
   walletSupportsPaymaster: boolean;
   /** The wallet advertises ERC-20 gas payment. */
@@ -109,6 +120,38 @@ export function resolveAbstraction(
   }
 
   if (!caps.paymasterConfigured) {
+    // An ERC-20 gas provider (Pimlico) is a paymaster in its own right. When it
+    // is configured the app must NOT claim "no paymaster is configured" — the
+    // honest state depends on the live probe and the wallet.
+    if (caps.erc20ProviderConfigured) {
+      if (caps.erc20ProviderAvailable === false) {
+        return {
+          state: "PAYMASTER_UNAVAILABLE",
+          abstracted: false,
+          gasOptions: nativeGas,
+          message: `Gas abstraction is configured but unavailable right now${caps.erc20ProviderReason ? `: ${caps.erc20ProviderReason}` : "."} Your wallet needs MON for network fees.`,
+        };
+      }
+      if (!caps.walletSupportsErc20Gas) {
+        return {
+          state: "ABSTRACTION_UNSUPPORTED_WALLET",
+          abstracted: false,
+          gasOptions: nativeGas,
+          message:
+            "Gas abstraction is configured, but this wallet can't pay the network fee in an ERC-20. Your wallet needs MON for network fees.",
+        };
+      }
+      // The provider is configured, reachable and the wallet can deliver it, but
+      // no supported+funded token was selected for this payment yet.
+      return {
+        state: "INSUFFICIENT_TOKEN_BALANCE",
+        abstracted: false,
+        gasOptions: { erc20GasPayment: true, sponsored: false, native: true },
+        message:
+          caps.erc20ProviderReason ??
+          "Pay the network fee in a token you hold — no MON required.",
+      };
+    }
     return {
       state: "PAYMASTER_UNAVAILABLE",
       abstracted: false,

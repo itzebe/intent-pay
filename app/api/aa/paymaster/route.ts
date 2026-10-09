@@ -82,6 +82,7 @@ export async function POST(req: Request) {
     userOperation?: Record<string, unknown>;
     entryPoint?: string;
     token?: string;
+    authorization?: unknown;
   };
   try {
     body = await req.json();
@@ -114,13 +115,30 @@ export async function POST(req: Request) {
   }
 
   // Forward only real UserOperation fields — Pimlico rejects unknown keys, and
-  // the client must never be able to inject transport-only fields.
+  // the client must never be able to inject transport-only fields. EntryPoint
+  // v0.7+ names the EIP-7702 authorization `eip7702Auth`, which the client sends
+  // alongside the operation; fold it back in so the provider sees a complete op.
   const userOperation = filterUserOperation(body.userOperation ?? {});
+  if (body.authorization && !userOperation.eip7702Auth) {
+    userOperation.eip7702Auth = body.authorization;
+  }
+  // viem's built-in paymaster action defaults the not-yet-estimated gas fields
+  // to `0x0`; a custom paymaster object (this app's proxy) skips that, and
+  // Pimlico rejects the request with a schema error when they are undefined.
+  for (const k of ["callGasLimit", "verificationGasLimit", "preVerificationGas"] as const) {
+    if (userOperation[k] === undefined) userOperation[k] = "0x0";
+  }
+
+  // Use the method the client actually requested. `pm_getPaymasterStubData` is
+  // what viem's `prepareUserOperation` calls for gas estimation; only the final
+  // submission uses `pm_getPaymasterData`. Answering a stub request with the
+  // data method fails, because the operation's gas fields do not exist yet.
   const quote = await provider.quote({
     chainId,
     entryPoint,
     token,
     userOperation,
+    method: method as "pm_getPaymasterStubData" | "pm_getPaymasterData",
   });
   if (!quote) {
     return NextResponse.json({ ok: false, message: "The paymaster did not return a quote." }, { status: 502 });

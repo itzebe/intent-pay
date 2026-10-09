@@ -105,12 +105,19 @@ export type PaymasterProvider = {
   /**
    * Obtain a fresh paymaster quote for a UserOperation paying gas in `token`.
    * Returns null when the provider cannot quote (unreachable, token rejected).
+   *
+   * `method` selects the ERC-20 stage: `pm_getPaymasterStubData` (default; used
+   * for gas estimation, before the operation's gas fields exist) or
+   * `pm_getPaymasterData` (the signed payload for submission, which requires a
+   * fully-estimated operation). Passing the wrong one for the stage makes the
+   * provider reject the request.
    */
   quote(input: {
     chainId: number;
     entryPoint: `0x${string}`;
     token: PaymasterToken;
     userOperation: Record<string, unknown>;
+    method?: "pm_getPaymasterStubData" | "pm_getPaymasterData";
   }): Promise<PaymasterQuote | null>;
   /**
    * The live ERC-20 gas quote for a token (paymaster, exchange rate, postOp

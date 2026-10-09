@@ -63,8 +63,9 @@ vi.mock("@/lib/hooks/useTokenCatalog", () => ({
   useTokenCatalog: () => ({ tokens: [], info: null, loading: false, error: null }),
 }));
 
+let aaCapabilityValue: any = null;
 vi.mock("@/lib/hooks/useAaCapability", () => ({
-  useAaCapability: () => ({ capability: null }),
+  useAaCapability: () => ({ capability: aaCapabilityValue }),
 }));
 
 // Stub the heavy presentational children so the test only exercises the flow.
@@ -102,6 +103,13 @@ const prepareSigning = vi.fn();
 vi.mock("@/lib/execution/signGuard", async () => {
   const actual = await vi.importActual<any>("@/lib/execution/signGuard");
   return { ...actual, prepareSigning: (...a: unknown[]) => prepareSigning(...a) };
+});
+
+let executePlanViaAa: any;
+vi.mock("@/lib/aa/execution", async () => {
+  const actual = await vi.importActual<any>("@/lib/aa/execution");
+  executePlanViaAa = vi.fn();
+  return { ...actual, executePlanViaAa: (...a: unknown[]) => executePlanViaAa(...a) };
 });
 
 const executePlan = vi.fn();
@@ -222,6 +230,8 @@ describe("confirmation flow", () => {
     prepareSigning.mockReset();
     executePlan.mockReset();
     executePlanBatched.mockReset();
+    executePlanViaAa.mockReset();
+    aaCapabilityValue = null;
   });
 
   afterEach(() => {
@@ -540,5 +550,144 @@ describe("confirmation flow", () => {
     expect(screen.queryByText("Review Payment")).toBeNull();
     expect(screen.getByText(/Review payment/)).toBeTruthy();
     expect(screen.getByText(/did not confirm/i)).toBeTruthy();
+  });
+
+  it("prepares and submits via the ERC-20 paymaster path when the wallet holds only USDC and 0 MON", async () => {
+    const USDC = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603";
+    // The exact production shape: a token selected to pay gas (zero MON held).
+    const gasTokenView = {
+      chainId: 143,
+      address: USDC,
+      symbol: "USDC",
+      name: "USD Coin",
+      decimals: 6,
+      held: true,
+      balance: "100",
+      sufficientBalance: true,
+      quoteKnown: true,
+      estimatedFee: "0.012",
+      estimatedFeeUsd: "0.012",
+      selected: true,
+    };
+    aaCapabilityValue = {
+      ok: true,
+      chainId: 143,
+      walletAbstraction: {
+        available: true,
+        mode: "ERC20_PAYMASTER",
+        code: "native_required",
+        reason: "Best available gas token: USDC.",
+        selectedGasToken: gasTokenView,
+        supportedGasTokens: [gasTokenView],
+      },
+      supportedGasTokens: [gasTokenView],
+    };
+    baseFlow({
+      gasMode: "erc20",
+      gasInfo: {
+        mode: "erc20",
+        paymasterConfigured: true,
+        walletSupportsPaymaster: false,
+        walletSupportsErc20Gas: true,
+        erc20GasToken: { symbol: "USDC", address: USDC },
+        reason: null,
+      },
+      aaGas: { available: true, mode: "ERC20_PAYMASTER", tokenSymbol: "USDC", tokenAddress: USDC, code: "native_required", reason: "Best available gas token: USDC." },
+    });
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: USDC, symbol: "USDC" },
+            amount: 300_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "5" },
+      receiveToken: "USDC",
+      expectedReceive: "5",
+      partial: false,
+      gasMode: "erc20",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    executePlanViaAa.mockResolvedValue({
+      userOpHash: "0xop",
+      transactionHash: "0xreceipt",
+      success: true,
+      logs: [],
+    });
+
+    renderComposer();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The ERC-20 path (not the sequential EOA path) was used, and it was asked
+    // to bound the allowance against the real USDC balance.
+    expect(executePlanViaAa).toHaveBeenCalledTimes(1);
+    const args = executePlanViaAa.mock.calls[0];
+    expect(args[4]).toBe(USDC); // gas token
+    expect(args[7]).toBe(100_000_000n); // gas-token balance, base units
+    expect(executePlan).not.toHaveBeenCalled();
+  });
+
+  it("honest fallback: when gas is native the ERC-20 path is never attempted", async () => {
+    baseFlow({ gasMode: "native" });
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" },
+            amount: 300_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "5" },
+      receiveToken: "USDC",
+      expectedReceive: "5",
+      partial: false,
+      gasMode: "native",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    executePlan.mockResolvedValue({ primaryHash: "0xdead", results: [] });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(executePlanViaAa).not.toHaveBeenCalled();
+    expect(executePlan).toHaveBeenCalledTimes(1);
   });
 });

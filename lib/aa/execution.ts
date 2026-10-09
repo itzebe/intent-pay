@@ -81,7 +81,11 @@ export function erc20Paymaster(token: Address) {
   };
 }
 
-async function proxyPaymaster(method: string, params: any, token: Address) {
+async function proxyPaymaster(
+  method: "pm_getPaymasterData" | "pm_getPaymasterStubData",
+  params: any,
+  token: Address,
+) {
   const res = await fetch("/api/aa/paymaster", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -91,6 +95,10 @@ async function proxyPaymaster(method: string, params: any, token: Address) {
       entryPoint: params.entryPointAddress ?? ENTRY_POINT_V08,
       chainId: 143,
       token,
+      // viem passes the op's EIP-7702 authorization under a transport-only key;
+      // forward it so the provider can validate the authorization for a 7702
+      // operation (EntryPoint v0.7+ names it `eip7702Auth`).
+      ...(params.authorization ? { authorization: params.authorization } : {}),
     }),
   });
   const json = await res.json();

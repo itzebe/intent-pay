@@ -141,13 +141,23 @@ export function createPimlicoProvider(apiKey?: string, chainIdDefault = 143): Pa
       });
     },
 
-    async quote({ chainId, entryPoint, token, userOperation }): Promise<PaymasterQuote | null> {
+    async quote({ chainId, entryPoint, token, userOperation, method }): Promise<PaymasterQuote | null> {
       if (!configured()) return null;
       try {
-        // pm_getPaymasterData returns the authoritative paymaster payload the
-        // contract will settle against. We ask with the ERC-20 context so the
-        // fee is denominated in the chosen token.
-        const result = (await pimlicoRpc(apiKey!, chainId, "pm_getPaymasterData", [
+        // Pimlico exposes two distinct ERC-20 paymaster methods and only one is
+        // valid at each stage of preparing a UserOperation:
+        //   - `pm_getPaymasterStubData` fills stub paymaster fields so the
+        //     operation can be gas-estimated (it does NOT require the final gas
+        //     fields, and it is the ONLY method a bundler will serve before gas
+        //     estimation);
+        //   - `pm_getPaymasterData` returns the signed payload for submission and
+        //     REQUIRES `paymasterVerificationGasLimit` plus the operation's gas
+        //     fields, i.e. it can only succeed AFTER estimation.
+        // Always calling the data method (the previous behaviour) made every
+        // preparation fail with "The paymaster did not return a quote." because
+        // the operation had not been estimated yet.
+        const rpcMethod = method ?? "pm_getPaymasterStubData";
+        const result = (await pimlicoRpc(apiKey!, chainId, rpcMethod, [
           userOperation,
           entryPoint,
           "0x" + chainId.toString(16),

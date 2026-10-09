@@ -90,8 +90,8 @@ export default function FAQ() {
 
       <Callout tone="info" title="Still unsure?">
         Read <Code>/docs/security</Code> for the protection model and <Code>/docs/litepaper</Code>{" "}
-        §12 for exactly which capabilities are verified, which need live confirmation, and which are
-        planned.
+        §12 for exactly which capabilities are verified, which are implemented but not universally
+        verified, and which are planned.
       </Callout>
     </DocsShell>
   );

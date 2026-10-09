@@ -83,8 +83,35 @@ export function DocsShell({ children }: { children: ReactNode }) {
 
       <footer className="mx-auto max-w-6xl px-5 pb-16 pt-4 text-xs text-white/30">
         <div className="hairline pt-6">
-          Intent Pay · intent-based payments on Monad mainnet (chain id 143). Documentation
-          describes the implementation as built.
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              Intent Pay · intent-based payments on Monad mainnet (chain id 143). Documentation
+              describes the implementation as built.
+            </div>
+            <nav aria-label="Contact" className="flex shrink-0 items-center gap-4">
+              <a
+                href="https://x.com/IntentPayApp"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-white/45 transition hover:text-white"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5 fill-current">
+                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.66l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+                </svg>
+                Follow Intent Pay on X
+              </a>
+              <a
+                href="mailto:jonathanebi05@gmail.com"
+                className="inline-flex items-center gap-1.5 text-white/45 transition hover:text-white"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="1.7">
+                  <rect x="3" y="5" width="18" height="14" rx="2" />
+                  <path d="m3.5 6.5 8.5 6 8.5-6" />
+                </svg>
+                Contact Support
+              </a>
+            </nav>
+          </div>
         </div>
       </footer>
     </div>

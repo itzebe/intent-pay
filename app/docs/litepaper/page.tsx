@@ -20,11 +20,13 @@ const TOC = [
   ["execution", "9. Transaction Execution"],
   ["gas", "10. Gas Handling and Fees"],
   ["security", "11. Security and User Control"],
+  ["verified-transaction", "Verified Mainnet Transaction"],
   ["capabilities", "12. Current Capabilities and Limitations"],
   ["roadmap", "13. Development Roadmap"],
   ["use-cases", "14. Potential Use Cases"],
   ["faq", "15. Frequently Asked Questions"],
   ["conclusion", "16. Conclusion"],
+  ["contact", "Contact"],
 ] as const;
 
 export default function Litepaper() {
@@ -454,10 +456,29 @@ export default function Litepaper() {
         </P>
       </DocSection>
 
+      <DocSection id="verified-transaction" title="Verified Mainnet Transaction">
+        <Callout tone="ok" title="Confirmed on Monad mainnet">
+          Intent Pay has successfully completed a real-wallet payment on Monad mainnet. In the
+          demonstrated transaction, approximately <Code>16.472555209781755329 WMON</Code> was used to
+          deliver <Code>0.4 USDC</Code> to the intended recipient. The application displayed the
+          payment as delivered and confirmed on Monad, and the recipient wallet notification reported
+          receipt of <Code>0.4 USDC</Code>.
+        </Callout>
+        <P>
+          This demonstrates that the tested payment route can progress from transaction preparation
+          and wallet authorization to confirmed delivery for this specific transaction.
+        </P>
+        <P>
+          This result validates one real payment flow. It does not establish that every token,
+          liquidity route, wallet, or transaction configuration will succeed. Transaction outcomes,
+          available routes, fees, and execution requirements may vary.
+        </P>
+      </DocSection>
+
       <DocSection id="capabilities" title="12. Current Capabilities and Limitations">
         <P>
-          This section separates what is verified, what is implemented but unverified, what is in
-          progress, and what is planned. It reflects the repository, not an aspiration.
+          This section separates what is verified, what is implemented but not universally verified,
+          what is in progress, and what is planned. It reflects the repository, not an aspiration.
         </P>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="card-flat p-4">
@@ -474,15 +495,23 @@ export default function Litepaper() {
               <LI>Signing guard abort reasons.</LI>
               <LI>Delivery verification from a receipt.</LI>
               <LI>Partial-balance split arithmetic (scaled-integer).</LI>
+              <LI>
+                One successful real-wallet payment on Monad mainnet, with confirmed delivery of{" "}
+                <Code>0.4 USDC</Code> (see &ldquo;Verified Mainnet Transaction&rdquo; above).
+              </LI>
             </UL>
           </div>
           <div className="card-flat p-4">
             <div className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-300/80">
-              Implemented — needs live confirmation
+              Implemented — not universally verified
             </div>
             <UL>
               <LI>Live Uniswap V3 routing against real Monad pools (opt-in live tests).</LI>
-              <LI>End-to-end execution and delivery verification with a real wallet (no automated test can sign for a user).</LI>
+              <LI>
+                The broader routing, execution and delivery-verification functionality across
+                different assets, routes, wallets and transaction configurations — one real-wallet
+                payment has been demonstrated, not the whole matrix.
+              </LI>
               <LI>Live price providers, whose availability depends on configuration and network.</LI>
             </UL>
           </div>
@@ -585,6 +614,29 @@ export default function Litepaper() {
           failure. Gas is paid in MON; cross-chain delivery is out of scope; and features that are not
           finished are documented as such rather than implied to work.
         </P>
+      </DocSection>
+
+      <DocSection id="contact" title="Contact">
+        <P>
+          For announcements and updates, follow the official Intent Pay account on X. For support,
+          questions, or to report an issue, contact the team by email.
+        </P>
+        <div className="flex flex-wrap gap-3">
+          <a
+            href="https://x.com/IntentPayApp"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-ghost inline-flex items-center gap-2 px-4 py-2 text-sm"
+          >
+            Follow Intent Pay on X
+          </a>
+          <a
+            href="mailto:jonathanebi05@gmail.com"
+            className="btn-ghost inline-flex items-center gap-2 px-4 py-2 text-sm"
+          >
+            Contact Support
+          </a>
+        </div>
       </DocSection>
     </DocsShell>
   );

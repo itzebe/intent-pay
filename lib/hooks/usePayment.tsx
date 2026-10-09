@@ -45,6 +45,13 @@ export type WalletGasCapabilities = {
   atomicBatch: boolean;
   paymasterService: boolean;
   erc20GasPayment: boolean;
+  /**
+   * The wallet can sign the app's EIP-7702 account-abstraction UserOperation.
+   * This — not the EIP-5792 `erc20GasPayment` flag — is what the app's own
+   * ERC-20 gas path actually requires, so an ordinary injected EOA that can
+   * sign is eligible. Undefined = unknown (never downgraded).
+   */
+  aaCapable?: boolean;
 };
 
 /**
@@ -867,6 +874,11 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       erc20ProviderReason: capabilities?.gasPayment?.error ?? null,
       walletSupportsPaymaster: Boolean(walletGasCaps?.paymasterService),
       walletSupportsErc20Gas: Boolean(walletGasCaps?.erc20GasPayment),
+      // The app's ERC-20 gas path is an EIP-7702 UserOperation it builds and
+      // signs through the injected wallet — it does not need the wallet to
+      // advertise EIP-5792 `erc20GasPayment`. Only an explicit "cannot sign AA"
+      // downgrades it (undefined = unknown, never treated as false).
+      walletSupportsAa: walletGasCaps ? walletGasCaps.aaCapable !== false : true,
       walletSupportsBatch: Boolean(walletGasCaps?.atomicBatch),
       supportedTokens,
     });

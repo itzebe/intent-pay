@@ -4,7 +4,7 @@ import { useRef } from "react";
 import { PaymentProvider, usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { Hero, HowItWorks } from "@/components/landing/Hero";
-import { IntegrationStack } from "@/components/landing/IntegrationStack";
+import { AdvancedDiagnostics } from "@/components/landing/AdvancedDiagnostics";
 import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -56,7 +56,7 @@ function Shell() {
           <ErrorBoundary scope="composer">
             <PaymentComposer networkLabel="Monad" />
           </ErrorBoundary>
-          <IntegrationStack network={flow.intent.network} />
+          <AdvancedDiagnostics network={flow.intent.network} />
         </div>
 
         <HowItWorks />

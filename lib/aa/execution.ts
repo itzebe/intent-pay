@@ -33,6 +33,13 @@ export type AaExecutionResult = {
   /** The on-chain transaction hash that included the UserOperation. */
   transactionHash?: Hash;
   success: boolean;
+  /**
+   * The UserOperation was accepted by the bundler (a hash exists) but its
+   * receipt was not obtained before the wait timed out. This is NOT a failure:
+   * the payment may still land, so it must never be reported as failed and must
+   * never be blindly resubmitted.
+   */
+  unconfirmed?: boolean;
   /** Receipt logs, for delivery verification. */
   logs: { address: string; topics: string[]; data: string }[];
   actualGasCost?: bigint;
@@ -89,6 +96,10 @@ async function proxyPaymaster(
   const res = await fetch("/api/aa/paymaster", {
     method: "POST",
     headers: { "content-type": "application/json" },
+    // Bound the proxy call: a stalled serverless function must surface as a
+    // retryable error instead of leaving the UI on "Waiting for confirmation…"
+    // forever.
+    signal: timeoutSignal(AA_PAYMASTER_TIMEOUT_MS),
     body: JSON.stringify({
       method,
       userOperation: serializeUserOperation(params),
@@ -104,6 +115,18 @@ async function proxyPaymaster(
   const json = await res.json();
   if (!json.ok) throw new Error(json.message ?? "Paymaster request failed");
   return { ...json.result };
+}
+
+/** Hard ceiling for a single paymaster proxy round-trip. */
+export const AA_PAYMASTER_TIMEOUT_MS = 20_000;
+
+/** An AbortSignal that fires after `ms` (falls back to undefined when unsupported). */
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  try {
+    return AbortSignal.timeout(ms);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -218,10 +241,33 @@ export async function executePlanViaAa(
 
   plan.steps.forEach((s) => onStep?.({ stepId: s.id, label: s.label, status: "submitted" }));
 
-  const receipt = await bundlerClient.waitForUserOperationReceipt({
-    hash: userOpHash,
-    timeout: 90_000,
-  });
+  // Wait for the receipt, but never let a timeout masquerade as a failure: the
+  // UserOperation is already submitted (a real hash exists) and may still land.
+  // A user must not be told the payment failed, and Retry must re-check status
+  // rather than resubmit.
+  let receipt: Awaited<ReturnType<typeof bundlerClient.waitForUserOperationReceipt>> | undefined;
+  try {
+    receipt = await bundlerClient.waitForUserOperationReceipt({
+      hash: userOpHash,
+      timeout: 90_000,
+    });
+  } catch {
+    plan.steps.forEach((s) =>
+      onStep?.({
+        stepId: s.id,
+        label: s.label,
+        status: "submitted",
+        error: "Confirmation is taking longer than expected",
+      }),
+    );
+    return {
+      userOpHash,
+      success: false,
+      unconfirmed: true,
+      logs: [],
+      reason: "The transaction was submitted but not confirmed yet.",
+    };
+  }
 
   const success = Boolean(receipt?.success);
   plan.steps.forEach((s) =>
@@ -254,7 +300,10 @@ export async function executePlanViaAa(
  */
 async function fetchGasQuote(token: Address): Promise<GasPaymasterQuote | null> {
   try {
-    const res = await fetch(`/api/aa/paymaster?token=${token}`, { method: "GET" });
+    const res = await fetch(`/api/aa/paymaster?token=${token}`, {
+      method: "GET",
+      signal: timeoutSignal(AA_PAYMASTER_TIMEOUT_MS),
+    });
     const json = await res.json();
     if (!json.ok || !json.quote) return null;
     return {
@@ -265,6 +314,43 @@ async function fetchGasQuote(token: Address): Promise<GasPaymasterQuote | null> 
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Ask the bundler for a submitted UserOperation's receipt without waiting.
+ * Returns `undefined` while it is not yet available (or on any transient
+ * error), so callers can poll a previously-submitted operation to determine its
+ * true outcome instead of resubmitting it.
+ */
+export async function checkUserOperationReceipt(
+  publicClient: PublicClient,
+  network: MonadNetwork,
+  userOpHash: Hash,
+): Promise<AaExecutionResult | undefined> {
+  try {
+    const bundler = createBundlerClient({
+      chain: NETWORKS[network].chain,
+      client: publicClient,
+      transport: http(aaRpcUrl(), { timeout: 30_000 }),
+    });
+    const receipt = await bundler.getUserOperationReceipt?.({ hash: userOpHash });
+    if (!receipt) return undefined;
+    const success = Boolean(receipt.success);
+    return {
+      userOpHash,
+      transactionHash: receipt.receipt?.transactionHash as Hash | undefined,
+      success,
+      logs: (receipt.logs ?? []).map((l) => ({
+        address: l.address,
+        topics: l.topics as unknown as string[],
+        data: l.data,
+      })),
+      actualGasCost: receipt.actualGasCost as bigint | undefined,
+      reason: receipt.reason,
+    };
+  } catch {
+    return undefined;
   }
 }
 

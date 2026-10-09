@@ -106,10 +106,16 @@ vi.mock("@/lib/execution/signGuard", async () => {
 });
 
 let executePlanViaAa: any;
+let checkUserOperationReceipt: any;
 vi.mock("@/lib/aa/execution", async () => {
   const actual = await vi.importActual<any>("@/lib/aa/execution");
   executePlanViaAa = vi.fn();
-  return { ...actual, executePlanViaAa: (...a: unknown[]) => executePlanViaAa(...a) };
+  checkUserOperationReceipt = vi.fn();
+  return {
+    ...actual,
+    executePlanViaAa: (...a: unknown[]) => executePlanViaAa(...a),
+    checkUserOperationReceipt: (...a: unknown[]) => checkUserOperationReceipt(...a),
+  };
 });
 
 const executePlan = vi.fn();
@@ -231,6 +237,7 @@ describe("confirmation flow", () => {
     executePlan.mockReset();
     executePlanBatched.mockReset();
     executePlanViaAa.mockReset();
+    checkUserOperationReceipt.mockReset();
     aaCapabilityValue = null;
   });
 
@@ -288,6 +295,84 @@ describe("confirmation flow", () => {
     expect(screen.getByText("Retry payment")).toBeTruthy();
     expect(screen.queryByText("Review Payment")).toBeNull();
   });
+
+  it("shows an ERC-20 gas offer, not a MON demand, for a 0-MON wallet when abstraction is available", async () => {
+    // The reported bug: 0 MON + USDC, gas abstraction configured, but the
+    // composer printed "You need a small amount of MON for network fees … Your
+    // wallet needs MON" while advertising ERC-20 gas. With an ERC-20 path
+    // offered, the warning must NOT demand MON.
+    baseFlow({
+      readiness: { ready: false, code: "insufficient_gas", cta: "Not enough MON for network fee", severity: "error" },
+      // The flow resolved a genuinely offered ERC-20 path for this payment.
+      abstraction: {
+        state: "INSUFFICIENT_TOKEN_BALANCE",
+        abstracted: false,
+        gasOptions: { native: true, sponsored: false, erc20GasPayment: true },
+        message: "Best available gas token: WMON.",
+      },
+      gasSufficiency: { status: "insufficient", requiredMon: "0.01212", availableMon: "0" },
+    });
+
+    renderComposer();
+    // The honest warning names the real blocker and does not assert MON is needed.
+    expect(screen.queryByText(/Your wallet needs MON/)).toBeNull();
+    expect(screen.queryByText(/Your wallet holds 0 MON/)).toBeNull();
+    expect(screen.getByText(/Best available gas token: WMON/)).toBeTruthy();
+  });
+
+  it("keeps Review and the payment intent when paymaster preparation fails (no premature reset)", async () => {
+    baseFlow({
+      walletCaps: { atomicBatch: false, paymasterService: false, erc20GasPayment: false },
+      gasMode: "erc20",
+      gasInfo: {
+        mode: "erc20",
+        paymasterConfigured: true,
+        walletSupportsPaymaster: false,
+        walletSupportsErc20Gas: true,
+        erc20GasToken: { symbol: "USDC", address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603" },
+      },
+    });
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: { executable: true, primaryStepId: "transfer", slippageBps: 50, steps: [
+        {
+          id: "transfer",
+          kind: "transfer",
+          label: "Send USDC",
+          token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" },
+          to: flow.intent.recipient,
+          amount: 300_000n,
+        },
+      ] },
+      quote: { receiveAmount: "0.3" },
+      receiveToken: "USDC",
+      expectedReceive: "0.3",
+      partial: false,
+      gasMode: "erc20",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    // The paymaster quote succeeded, but operation preparation failed.
+    executePlanViaAa.mockRejectedValue(new Error("The paymaster did not return a quote."));
+
+    renderComposer();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+
+    // Still on Review with a real error — never ejected to a blank composer.
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    // Recipient/amount/asset preserved across the recoverable failure.
+    expect(flow.intent.recipient).toBe("0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4");
+    expect(flow.intent.receiveAmount).toBe("5");
+    expect(flow.intent.receiveToken).toBe("USDC");
+  });
+
 
   it("prevents duplicate submissions while an attempt is in progress", async () => {
     baseFlow({});
@@ -689,5 +774,178 @@ describe("confirmation flow", () => {
 
     expect(executePlanViaAa).not.toHaveBeenCalled();
     expect(executePlan).toHaveBeenCalledTimes(1);
+  });
+
+  const USDC_ADDR = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603";
+
+  /** Set up a zero-MON USDC transfer that selected the ERC-20 paymaster. */
+  function erc20TransferSetup() {
+    const gasTokenView = {
+      chainId: 143,
+      address: USDC_ADDR,
+      symbol: "USDC",
+      name: "USD Coin",
+      decimals: 6,
+      held: true,
+      balance: "100",
+      sufficientBalance: true,
+      quoteKnown: true,
+      estimatedFee: "0.012",
+      estimatedFeeUsd: "0.012",
+      selected: true,
+    };
+    aaCapabilityValue = {
+      ok: true,
+      chainId: 143,
+      walletAbstraction: {
+        available: true,
+        mode: "ERC20_PAYMASTER",
+        code: "native_required",
+        reason: "Best available gas token: USDC.",
+        selectedGasToken: gasTokenView,
+        supportedGasTokens: [gasTokenView],
+      },
+      supportedGasTokens: [gasTokenView],
+    };
+    baseFlow({
+      gasMode: "erc20",
+      gasInfo: {
+        mode: "erc20",
+        paymasterConfigured: true,
+        walletSupportsPaymaster: false,
+        walletSupportsErc20Gas: true,
+        erc20GasToken: { symbol: "USDC", address: USDC_ADDR },
+        reason: null,
+      },
+      aaGas: {
+        available: true,
+        mode: "ERC20_PAYMASTER",
+        tokenSymbol: "USDC",
+        tokenAddress: USDC_ADDR,
+        code: "native_required",
+        reason: "Best available gas token: USDC.",
+      },
+    });
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: USDC_ADDR, symbol: "USDC" },
+            amount: 300_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "5" },
+      receiveToken: "USDC",
+      expectedReceive: "5",
+      partial: false,
+      gasMode: "erc20",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+  }
+
+  it("keeps Review and does not resubmit when the UserOperation is submitted but unconfirmed", async () => {
+    erc20TransferSetup();
+    // The user approved; the op was submitted, but the receipt timed out. This
+    // previously left the user looping on "Waiting for confirmation…" with no
+    // truthful outcome — and risked resubmitting (double-spending) on Retry.
+    executePlanViaAa.mockResolvedValue({
+      userOpHash: "0xop",
+      success: false,
+      unconfirmed: true,
+      logs: [],
+      reason: "The transaction was submitted but not confirmed yet.",
+    });
+
+    renderComposer();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Back on Review with an honest, recoverable message — never a success, and
+    // never still stuck on the executing screen.
+    expect(screen.getByText(/submitted but Monad hasn't confirmed/i)).toBeTruthy();
+    expect(screen.queryByText(/Payment sent/i)).toBeNull();
+    expect(screen.queryByText(/Waiting for confirmation/i)).toBeNull();
+    expect(executePlanViaAa).toHaveBeenCalledTimes(1);
+
+    // Retry must re-check the submitted hash's status, NOT resubmit it.
+    checkUserOperationReceipt.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Retry payment"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(executePlanViaAa).toHaveBeenCalledTimes(1); // no duplicate submission
+    expect(checkUserOperationReceipt).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/still awaiting confirmation/i)).toBeTruthy();
+  });
+
+  it("resolves a pending UserOperation to success on Retry without resubmitting", async () => {
+    erc20TransferSetup();
+    executePlanViaAa.mockResolvedValue({
+      userOpHash: "0xop",
+      success: false,
+      unconfirmed: true,
+      logs: [],
+      reason: "The transaction was submitted but not confirmed yet.",
+    });
+
+    renderComposer();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The op confirms before the user retries: Retry adopts the confirmed
+    // receipt and shows success — still without a second submission.
+    checkUserOperationReceipt.mockResolvedValue({
+      userOpHash: "0xop",
+      transactionHash: "0xreceipt",
+      success: true,
+      logs: [],
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Retry payment"));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(executePlanViaAa).toHaveBeenCalledTimes(1);
+    expect(checkUserOperationReceipt).toHaveBeenCalledTimes(1);
+    // The pending op resolved: the user is no longer stuck or told it is still
+    // awaiting confirmation, and no second submission was made. (The success
+    // subtree itself sits behind AnimatePresence `mode="wait"`, whose exit
+    // animation does not settle reliably under jsdom, so it is asserted via the
+    // cleared pending/error state rather than the animated child.)
+    expect(screen.queryByText(/Waiting for confirmation/i)).toBeNull();
+    expect(screen.queryByText(/still awaiting confirmation/i)).toBeNull();
+    expect(screen.queryByText(/submitted but Monad hasn't confirmed/i)).toBeNull();
   });
 });

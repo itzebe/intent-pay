@@ -102,7 +102,11 @@ describe("wallet abstraction state", () => {
     expect(r.message).not.toMatch(/no paymaster is configured/i);
   });
 
-  it("says the wallet can't pay in an ERC-20 when the provider is up but the wallet is not compatible", () => {
+  it("offers ERC-20 gas to an ordinary injected EOA that can sign the AA operation", () => {
+    // The app's ERC-20 gas path is its OWN EIP-7702 UserOperation, built and
+    // signed through the injected wallet. It does NOT depend on the wallet
+    // advertising EIP-5792 `erc20GasPayment`. Reporting "this wallet can't pay
+    // the network fee in an ERC-20" here was the false production message.
     const r = resolveAbstraction(USDC, {
       ...base,
       paymasterConfigured: false,
@@ -110,6 +114,22 @@ describe("wallet abstraction state", () => {
       erc20ProviderAvailable: true,
       walletSupportsErc20Gas: false,
       walletSupportsPaymaster: false,
+      // undefined = unknown/optimistic
+    });
+    expect(r.state).not.toBe("ABSTRACTION_UNSUPPORTED_WALLET");
+    expect(r.message).not.toMatch(/can't pay the network fee in an ERC-20/i);
+    expect(r.gasOptions.erc20GasPayment).toBe(true);
+  });
+
+  it("says the wallet can't pay in an ERC-20 only when it explicitly cannot sign AA", () => {
+    const r = resolveAbstraction(USDC, {
+      ...base,
+      paymasterConfigured: false,
+      erc20ProviderConfigured: true,
+      erc20ProviderAvailable: true,
+      walletSupportsErc20Gas: false,
+      walletSupportsPaymaster: false,
+      walletSupportsAa: false,
     });
     expect(r.state).toBe("ABSTRACTION_UNSUPPORTED_WALLET");
     expect(r.message).not.toMatch(/no paymaster is configured/i);

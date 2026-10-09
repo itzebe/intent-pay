@@ -122,7 +122,7 @@ export function ReviewSheet({
 
   const gasRow =
     gasMode === "sponsored"
-      ? { value: "Sponsored", sub: "by Alchemy" }
+      ? { value: "Sponsored", sub: "network fee covered" }
       : gasMode === "erc20"
         ? {
             value: `Paid in ${erc20GasToken?.symbol ?? "an ERC-20"}`,
@@ -371,7 +371,7 @@ export function ReviewSheet({
                   <span className="text-white/40">Gas</span>
                   <span className="font-mono text-white/70">
                     {gasMode === "sponsored"
-                      ? "Sponsored (Alchemy)"
+                      ? "Sponsored (network fee covered)"
                       : gasMode === "erc20"
                         ? "Paid in an ERC-20 (chosen by your wallet)"
                         : "Paid in MON"}

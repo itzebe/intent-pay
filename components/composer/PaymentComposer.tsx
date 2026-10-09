@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { formatAmount, formatUsd, isEvmAddress } from "@/lib/format";
+import { nativeGasWarning } from "@/lib/domain/gasWarning";
 import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
@@ -10,7 +11,7 @@ import { describePlan, buildPaymentPlan, buildPartialPlan } from "@/lib/executio
 import { executePlan, executePlanBatched, ExecutionError, type StepResult } from "@/lib/execution/execute";
 import { getWalletCapabilities, type WalletCapabilities } from "@/lib/execution/alchemy";
 import { prepareSigning, type FreshPlan } from "@/lib/execution/signGuard";
-import { executePlanViaAa, type AaExecutionResult } from "@/lib/aa/execution";
+import { executePlanViaAa, checkUserOperationReceipt, type AaExecutionResult } from "@/lib/aa/execution";
 import { walletSupportsEip7702 } from "@/lib/aa/account";
 import { useAaCapability } from "@/lib/hooks/useAaCapability";
 import { displayKey } from "@/lib/domain/canonicalIntent";
@@ -57,6 +58,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | undefined>();
   const [walletCaps, setWalletCaps] = useState<WalletCapabilities | null>(null);
+  // Whether the wallet can sign an EIP-7702 UserOperation. Declared here, above
+  // the capability effect that reports it into the flow. `null` ⇒ unknown.
+  const [walletAaCompatible, setWalletAaCompatible] = useState<boolean | null>(null);
   const [delivery, setDelivery] = useState<
     { verified: boolean; delivered: string; expected: string; reason?: string } | null
   >(null);
@@ -80,6 +84,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // from this instead of blanking the screen — the "interface disappeared"
   // symptom. It is only ever used for display; signing always re-quotes fresh.
   const lastQuoteRef = useRef<Quote | null>(null);
+  // A UserOperation that was submitted but whose receipt we did not obtain
+  // (a confirmation timeout). Retry must re-check this hash's status instead of
+  // resubmitting — a second submission would double-spend the payment.
+  const submittedUserOpRef = useRef<{
+    hash: `0x${string}`;
+    version: number;
+    slippageBps: bigint;
+    delivery: { verified: boolean; delivered: string; expected: string; reason?: string };
+  } | null>(null);
   useEffect(() => {
     if (flow.quote) lastQuoteRef.current = flow.quote;
   }, [flow.quote]);
@@ -100,13 +113,17 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         atomicBatch: caps.atomicBatch,
         paymasterService: caps.paymasterService,
         erc20GasPayment: caps.erc20GasPayment,
+        // The app's ERC-20 gas path is its own EIP-7702 UserOperation, which the
+        // injected wallet signs — this does NOT need EIP-5792 `erc20GasPayment`.
+        // `null` ⇒ unknown (never downgraded to "can't pay in an ERC-20").
+        aaCapable: walletAaCompatible ?? true,
       });
     });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.intent.network, wallet.provider, wallet.address]);
+  }, [flow.intent.network, wallet.provider, wallet.address, walletAaCompatible]);
 
   // Report the connected account to the flow. An account change invalidates
   // balances, gas eligibility and the whole transaction payload.
@@ -118,7 +135,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // Whether the wallet can sign an EIP-7702 UserOperation. This is a browser
   // fact; the server capability is combined with it. Inconclusive ⇒ optimistic
   // (execution degrades cleanly on a rejection rather than blocking the user).
-  const [walletAaCompatible, setWalletAaCompatible] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
     if (!wallet.provider) {
@@ -319,6 +335,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     setTxHash(undefined);
     setDelivery(null);
     lastQuoteRef.current = null;
+    submittedUserOpRef.current = null;
     flow.refreshQuote();
   }, [flow]);
 
@@ -347,13 +364,6 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         return;
       }
 
-      // The approval gate evaluates the CURRENT intent only.
-      if (!flow.readiness.ready) {
-        flow.refreshQuote();
-        setError("This payment changed. Review it again before confirming.");
-        return;
-      }
-
       const onChain = await wallet.ensureMonad();
       if (!onChain) {
         setError("Please switch your wallet to Monad to continue.");
@@ -361,6 +371,61 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       }
 
       setStage("executing");
+
+      // A previously-submitted-but-unconfirmed UserOperation owns Retry: never
+      // resubmit it. Re-check its real receipt instead. This is the path that
+      // previously left the user looping on "Waiting for confirmation…" with no
+      // way to learn the true outcome, and risks a double submission. It runs
+      // before the freshness gate because confirming a submitted payment must
+      // never be blocked by a quote that expired during the wait.
+      const pending = submittedUserOpRef.current;
+      if (pending) {
+        // If the intent moved on since the submission, the pending hash belongs
+        // to a different payment — stop treating it as this payment's operation.
+        if (pending.version !== flow.intent.version) {
+          submittedUserOpRef.current = null;
+        } else {
+          const receipt = await checkUserOperationReceipt(
+            getClientPublicClient(flow.intent.network),
+            flow.intent.network,
+            pending.hash,
+          );
+          submittedUserOpRef.current = null;
+          if (receipt?.success) {
+            const check = verifyDeliveryFromLogs(
+              receipt.logs,
+              flow.receiveTokenConfig,
+              flow.intent.recipient,
+              pending.delivery.expected,
+              pending.slippageBps,
+            );
+            setDelivery(check);
+            setTxHash(receipt.transactionHash ?? pending.hash);
+            setStage("success");
+          } else if (receipt) {
+            setDelivery({ ...pending.delivery, verified: false, reason: receipt.reason ?? "the transaction reverted" });
+            setError(receipt.reason ?? "The payment reverted on-chain and was not delivered.");
+            setStage("review");
+          } else {
+            // Still unresolved: tell the truth and let the user check again.
+            submittedUserOpRef.current = pending;
+            setError(
+              "This payment was already submitted and is still awaiting confirmation. It was not resubmitted — use Retry to check its status again.",
+            );
+            setStage("review");
+          }
+          return;
+        }
+      }
+
+      // The approval gate evaluates the CURRENT intent only. It runs after the
+      // pending re-check so it never blocks confirming a submitted payment.
+      if (!flow.readiness.ready) {
+        flow.refreshQuote();
+        setError("This payment changed. Review it again before confirming.");
+        return;
+      }
+
       // Track locally whether any submission was attempted: an ambiguous batch
       // failure must not be retried sequentially, even before React state lands.
       let sawSubmission = false;
@@ -486,6 +551,29 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           primaryHash = aaResult.transactionHash ?? aaResult.userOpHash;
           stepHashes = aaResult.transactionHash ? [aaResult.transactionHash] : [];
           setTxHash(primaryHash);
+
+          // Submitted but not yet confirmed: record the hash so Retry re-checks
+          // its status instead of resubmitting, and keep Review mounted with the
+          // real reason. It is neither success nor failure.
+          if (aaResult.unconfirmed) {
+            submittedUserOpRef.current = {
+              hash: aaResult.userOpHash,
+              version: flow.intent.version,
+              slippageBps: BigInt(prepared.plan.slippageBps),
+              delivery: {
+                verified: false,
+                delivered: "0",
+                expected: prepared.quote.receiveAmount,
+                reason: "the transaction was submitted but is not confirmed yet",
+              },
+            };
+            setDelivery(null);
+            setError(
+              "The transaction was submitted but Monad hasn't confirmed it yet. It was not resubmitted — Retry to check its status again.",
+            );
+            setStage("review");
+            return;
+          }
 
           // A reverted UserOperation is a failed payment — never reported success.
           if (!aaResult.success) {
@@ -776,22 +864,29 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               )}
 
               {flow.sufficiency.status !== "insufficient" &&
-                flow.gasSufficiency.status === "insufficient" && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="flex items-start gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-xs text-amber-100"
-                  >
-                    <Warning className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>
-                      {`You need a small amount of MON for network fees (about ${formatAmount(
-                        flow.gasSufficiency.requiredMon,
-                      )} MON). Your wallet holds ${formatAmount(
-                        flow.gasSufficiency.availableMon,
-                      )} MON. ${flow.abstraction.message}`}
-                    </span>
-                  </motion.div>
-                )}
+                flow.gasSufficiency.status === "insufficient" &&
+                (() => {
+                  // Never word this as a MON demand while the same screen offers
+                  // an ERC-20 gas path — that contradiction is the reported bug.
+                  const g = nativeGasWarning({
+                    requiredMon: formatAmount(flow.gasSufficiency.requiredMon),
+                    availableMon: formatAmount(flow.gasSufficiency.availableMon),
+                    erc20GasOffered: flow.abstraction.gasOptions.erc20GasPayment,
+                    reason: flow.abstraction.gasOptions.erc20GasPayment
+                      ? flow.abstraction.message
+                      : null,
+                  });
+                  return (
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="flex items-start gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-xs text-amber-100"
+                    >
+                      <Warning className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{`${g.title}. ${g.detail}`}</span>
+                    </motion.div>
+                  );
+                })()}
             </div>
 
             {/* right: live result */}

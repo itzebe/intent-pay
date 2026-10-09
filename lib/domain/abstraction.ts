@@ -79,6 +79,17 @@ export type AbstractionCapabilities = {
   /** The wallet can submit an atomic batch at all. */
   walletSupportsBatch: boolean;
   /**
+   * The connected wallet can sign the account-abstraction (EIP-7702)
+   * UserOperation that the app's own ERC-20 gas path requires. This is the REAL
+   * requirement for paying gas in a token: the app builds a 7702 smart account
+   * for the user's existing EOA and settles the fee through the server-side
+   * paymaster, so it does NOT depend on the wallet advertising EIP-5792's
+   * `erc20GasPayment` capability. An ordinary injected EOA that can sign is
+   * fully eligible. Defaults to `true` when omitted, so a caller that only knows
+   * the wallet can sign is not downgraded.
+   */
+  walletSupportsAa?: boolean;
+  /**
    * Addresses the configured paymaster will sponsor. Empty = unknown/any;
    * when non-empty, a token outside it is honestly "unsupported token".
    */
@@ -154,12 +165,30 @@ export function resolveAbstraction(
         };
       }
       if (!caps.walletSupportsErc20Gas) {
+        // The app's own ERC-20 gas path does NOT require the wallet to advertise
+        // EIP-5792 `erc20GasPayment`: it builds an EIP-7702 smart account for the
+        // user's existing EOA and settles the fee through the server paymaster.
+        // The real requirement is that the wallet can sign the AA UserOperation
+        // (`walletSupportsAa`, which we only downgrade when the wallet explicitly
+        // cannot). An ordinary injected EOA is therefore eligible.
+        if (caps.walletSupportsAa === false) {
+          return {
+            state: "ABSTRACTION_UNSUPPORTED_WALLET",
+            abstracted: false,
+            gasOptions: nativeGas,
+            message:
+              "Gas abstraction is configured, but this wallet can't sign the account-abstraction transaction needed to pay the network fee in an ERC-20. Your wallet needs MON for network fees.",
+          };
+        }
+        // Wallet can sign the AA operation; the ERC-20 path is offered and the
+        // live per-payment capability resolves whether a funded gas token exists.
         return {
-          state: "ABSTRACTION_UNSUPPORTED_WALLET",
+          state: "INSUFFICIENT_TOKEN_BALANCE",
           abstracted: false,
-          gasOptions: nativeGas,
+          gasOptions: { erc20GasPayment: true, sponsored: false, native: true },
           message:
-            "Gas abstraction is configured, but this wallet can't pay the network fee in an ERC-20. Your wallet needs MON for network fees.",
+            caps.erc20ProviderReason ??
+            "Pay the network fee in a token you hold — no MON required.",
         };
       }
       // The provider is configured, reachable and the wallet can deliver it, but

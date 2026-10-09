@@ -161,22 +161,34 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveBalances, wallet.address]);
 
+  // One signing attempt at a time. A double click (or a Retry tapped while the
+  // first attempt is still preparing) must never run two overlapping
+  // preparations — that is how duplicate submissions happen.
+  const attemptRef = useRef(false);
+
   // A change to the canonical intent after Review invalidates the review: the
-  // user must not be able to execute a transaction for an older version. The
-  // same applies when the quote is dropped entirely (wallet-account change,
-  // network change), which leaves nothing executable to review.
+  // user must not be able to execute a transaction for an older version. A
+  // quote that is momentarily absent because a *refresh is in flight* must NOT
+  // eject them — doing so silently returned the user to the previous screen and
+  // restarted the flow. We only leave Review when the intent genuinely changed,
+  // or when the quote is gone with no refresh coming (Confirm/Retry stay gated
+  // by `quoteStale` until a fresh quote lands).
   useEffect(() => {
     if (stage !== "review") return;
-    if (!flow.quote || reviewVersionRef.current !== flow.intent.version) {
-      setStage("compose");
-      reviewVersionRef.current = null;
-      setError("Your payment changed. Here's the updated quote — review it again.");
-      setSteps([]);
-      setDelivery(null);
-      setTxHash(undefined);
-    }
+    const samePayment = reviewVersionRef.current === flow.intent.version;
+    if (samePayment && (flow.quote || flow.quoting)) return;
+    setStage("compose");
+    reviewVersionRef.current = null;
+    setError(
+      samePayment
+        ? "We couldn't refresh the price. Review the payment and try again."
+        : "Your payment changed. Here's the updated quote — review it again.",
+    );
+    setSteps([]);
+    setDelivery(null);
+    setTxHash(undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.intent.version, flow.quote, stage]);
+  }, [flow.intent.version, flow.quote, flow.quoting, stage]);
 
   // Routability is discovered, not hardcoded: in live mode we ask the routing
   // layer which tokens were actually probed and have a liquid route.
@@ -263,243 +275,269 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
    * reused from an earlier build.
    */
   const onConfirm = useCallback(async () => {
+    // A second attempt while the first is still preparing would run two
+    // overlapping preparations. Refuse it rather than submit twice.
+    if (attemptRef.current) return;
+    attemptRef.current = true;
     setError(null);
     setSteps([]);
     setDelivery(null);
 
-    if (!wallet.address || !wallet.walletClient) {
-      setError("Connect your wallet to pay on Monad.");
-      return;
-    }
-
-    // The approval gate evaluates the CURRENT intent only.
-    if (!flow.readiness.ready) {
-      flow.refreshQuote();
-      setError("This payment changed. Review it again before confirming.");
-      return;
-    }
-
-    const onChain = await wallet.ensureMonad();
-    if (!onChain) {
-      setError("Please switch your wallet to Monad to continue.");
-      return;
-    }
-
-    setStage("executing");
-    const onStep = (r: StepResult) =>
-      setSteps((prev) => {
-        const idx = prev.findIndex((x) => x.stepId === r.stepId);
-        if (idx >= 0) {
-          const copy = [...prev];
-          copy[idx] = r;
-          return copy;
-        }
-        return [...prev, r];
-      });
-
     try {
-      // --- Fresh intent build, immediately before signing -------------------
-      const prepared = await prepareSigning(
-        {
-          intent: flow.intent,
-          sender: wallet.address,
-          recipient: flow.intent.recipient as `0x${string}`,
-          // The clamped tolerance encoded into the on-chain swap bound.
-          slippageBps: protection?.slippage.bps,
-          // Proof the payment the user is looking at is the canonical intent.
-          displayedKey: displayKey(flow.intent),
-        },
-        {
-          fetchBalances: () => fetchBalances(wallet.address!, flow.intent.network),
-          fetchQuote: (intent) => fetchQuote(intent),
-          // A partial-balance payment has two legs; the guard asks the partial
-          // planner to rebuild both from the fresh balances and applies every
-          // protection (freshness, price impact, per-leg on-chain bounds).
-          ...(partialEligible
-            ? {
-                fetchPlan: async (intent, balances) =>
-                  fetchPartialPlan(
-                    intent,
-                    balances,
-                    wallet.address!,
-                    flow.receiveTokenConfig.symbol,
-                    protection?.slippage.bps,
-                  ),
-                covers: (balances, plan) => coversPartialPlan(balances, plan),
-              }
-            : {}),
-          resolveGas: async () => flow.gasInfo.mode,
-          readGas: async () => ({
-            gasLimit: flow.quote?.gasLimit,
-            gasPriceWei: flow.quote?.gasPriceWei,
-          }),
-          // Re-resolve the ERC-20 gas payment right before signing: the wallet
-          // must still hold the gas token and still be AA-compatible. Losing it
-          // between review and signing blocks the signature.
-          readGasPayment: async () => {
-            const wa = aaCapability?.walletAbstraction;
-            const token = wa?.selectedGasToken;
-            if (!token) return { mode: flow.gasInfo.mode as "native" | "erc20" | "sponsored" };
-            const balance = aaCapability?.supportedGasTokens.find(
-              (t) => t.address.toLowerCase() === token.address.toLowerCase(),
-            );
-            const decimals = token.decimals;
-            const estimate =
-              token.estimatedFee && Number.isFinite(Number(token.estimatedFee))
-                ? parseUnits(token.estimatedFee, decimals)
-                : undefined;
-            const gasTokenBalance = balance ? parseUnits(balance.balance, decimals) : undefined;
-            return {
-              mode: wa?.mode === "ERC20_PAYMASTER" ? ("erc20" as const) : ("native" as const),
-              gasToken: { address: token.address, decimals, symbol: token.symbol },
-              gasTokenBalance,
-              gasEstimate: estimate,
-            };
-          },
-          readIntent: () => intentRef.current,
-          readAccount: () => accountRef.current,
-        },
-      );
-
-      if (!prepared.ok) {
-        // The review stays inside the payment flow: the quote/plan was rebuilt
-        // from fresh data and the guard refused to sign for a specific reason
-        // (a moved price, a changed balance). We surface a recoverable error and
-        // refresh the quote so the user can retry the same review, rather than
-        // dropping them back to a blank composer.
-        setError(prepared.message);
-        setStage("review");
-        flow.refreshQuote();
+      if (!wallet.address || !wallet.walletClient) {
+        setError("Connect your wallet to pay on Monad.");
         return;
       }
 
-      const plan = prepared.plan;
+      // The approval gate evaluates the CURRENT intent only.
+      if (!flow.readiness.ready) {
+        flow.refreshQuote();
+        setError("This payment changed. Review it again before confirming.");
+        return;
+      }
 
-      let primaryHash: `0x${string}` | undefined;
-      let stepHashes: `0x${string}`[] = [];
-      let aaResult: AaExecutionResult | null = null;
+      const onChain = await wallet.ensureMonad();
+      if (!onChain) {
+        setError("Please switch your wallet to Monad to continue.");
+        return;
+      }
 
-      // --- ERC-20 gas path (EIP-7702 + paymaster) --------------------------
-      // When gas is paid in a token, the payment MUST execute as one atomic
-      // UserOperation so the paymaster can settle the fee. This is a genuinely
-      // different submission path from the sequential EOA path below, not a
-      // relabelling: an EOA transaction cannot carry a paymaster.
-      if (prepared.gasMode === "erc20" && flow.gasInfo.erc20GasToken && wallet.provider) {
-        // Bound the paymaster allowance against the user's real gas-token
-        // balance — the approval is never unlimited.
-        const gasTokenView = aaCapability?.supportedGasTokens.find(
-          (t) => t.address.toLowerCase() === flow.gasInfo.erc20GasToken!.address.toLowerCase(),
+      setStage("executing");
+      // Track locally whether any submission was attempted: an ambiguous batch
+      // failure must not be retried sequentially, even before React state lands.
+      let sawSubmission = false;
+      const onStep = (r: StepResult) => {
+        if (r.status === "submitted" || r.hash) sawSubmission = true;
+        setSteps((prev) => {
+          const idx = prev.findIndex((x) => x.stepId === r.stepId);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = r;
+            return copy;
+          }
+          return [...prev, r];
+        });
+      };
+
+      try {
+      // --- Fresh intent build, immediately before signing -------------------
+        const prepared = await prepareSigning(
+          {
+            intent: flow.intent,
+            sender: wallet.address,
+            recipient: flow.intent.recipient as `0x${string}`,
+            // The clamped tolerance encoded into the on-chain swap bound.
+            slippageBps: protection?.slippage.bps,
+            // Proof the payment the user is looking at is the canonical intent.
+            displayedKey: displayKey(flow.intent),
+          },
+          {
+            fetchBalances: () => fetchBalances(wallet.address!, flow.intent.network),
+            fetchQuote: (intent) => fetchQuote(intent),
+            // A partial-balance payment has two legs; the guard asks the partial
+            // planner to rebuild both from the fresh balances and applies every
+            // protection (freshness, price impact, per-leg on-chain bounds).
+            ...(partialEligible
+              ? {
+                  fetchPlan: async (intent, balances) =>
+                    fetchPartialPlan(
+                      intent,
+                      balances,
+                      wallet.address!,
+                      flow.receiveTokenConfig.symbol,
+                      protection?.slippage.bps,
+                    ),
+                  covers: (balances, plan) => coversPartialPlan(balances, plan),
+                }
+              : {}),
+            resolveGas: async () => flow.gasInfo.mode,
+            readGas: async () => ({
+              gasLimit: flow.quote?.gasLimit,
+              gasPriceWei: flow.quote?.gasPriceWei,
+            }),
+            // Re-resolve the ERC-20 gas payment right before signing: the wallet
+            // must still hold the gas token and still be AA-compatible. Losing it
+            // between review and signing blocks the signature.
+            readGasPayment: async () => {
+              const wa = aaCapability?.walletAbstraction;
+              const token = wa?.selectedGasToken;
+              if (!token) return { mode: flow.gasInfo.mode as "native" | "erc20" | "sponsored" };
+              const balance = aaCapability?.supportedGasTokens.find(
+                (t) => t.address.toLowerCase() === token.address.toLowerCase(),
+              );
+              const decimals = token.decimals;
+              const estimate =
+                token.estimatedFee && Number.isFinite(Number(token.estimatedFee))
+                  ? parseUnits(token.estimatedFee, decimals)
+                  : undefined;
+              const gasTokenBalance = balance ? parseUnits(balance.balance, decimals) : undefined;
+              return {
+                mode: wa?.mode === "ERC20_PAYMASTER" ? ("erc20" as const) : ("native" as const),
+                gasToken: { address: token.address, decimals, symbol: token.symbol },
+                gasTokenBalance,
+                gasEstimate: estimate,
+              };
+            },
+            readIntent: () => intentRef.current,
+            readAccount: () => accountRef.current,
+          },
         );
-        const gasTokenBalance = gasTokenView
-          ? parseUnits(gasTokenView.balance, gasTokenView.decimals)
-          : undefined;
-        aaResult = await executePlanViaAa(
-          plan,
-          wallet.provider as never,
-          wallet.address,
-          flow.intent.network,
-          flow.gasInfo.erc20GasToken.address as `0x${string}`,
-          getClientPublicClient(flow.intent.network),
-          onStep,
-          gasTokenBalance,
-        );
-        primaryHash = aaResult.transactionHash ?? aaResult.userOpHash;
-        stepHashes = aaResult.transactionHash ? [aaResult.transactionHash] : [];
-        setTxHash(primaryHash);
 
-        // A reverted UserOperation is a failed payment — never reported success.
-        if (!aaResult.success) {
-          setDelivery({
-            verified: false,
-            delivered: "0",
-            expected: prepared.quote.receiveAmount,
-            reason: aaResult.reason ?? "the transaction reverted",
-          });
-          setError(aaResult.reason ?? "The payment reverted on-chain and was not delivered.");
+        if (!prepared.ok) {
+          // The review stays inside the payment flow: the quote/plan was rebuilt
+          // from fresh data and the guard refused to sign for a specific reason
+          // (a moved price, a changed balance). We surface a recoverable error and
+          // refresh the quote so the user can retry the same review, rather than
+          // dropping them back to a blank composer.
+          setError(prepared.message);
           setStage("review");
+          flow.refreshQuote();
           return;
         }
 
-        // Prove the recipient actually received the token from the real receipt
-        // logs — the UserOperation's success flag alone is not delivery.
-        const check = verifyDeliveryFromLogs(
-          aaResult.logs,
-          flow.receiveTokenConfig,
-          flow.intent.recipient,
-          prepared.quote.receiveAmount,
-          BigInt(prepared.plan.slippageBps),
-        );
-        setDelivery(check);
-        setStage("success");
-        return;
-      }
+        const plan = prepared.plan;
 
-      // Prefer an atomic EIP-5792 batch when the wallet supports it and the plan
-      // needs more than one step, or when gas is abstracted (a single-step
-      // payment must still go through `wallet_sendCalls` for a paymaster to
-      // sponsor it).
-      const useBatch =
-        plan.executable &&
-        Boolean(wallet.provider) &&
-        Boolean(walletCaps?.atomicBatch) &&
-        (plan.steps.length > 1 || prepared.gasMode !== "native");
+        let primaryHash: `0x${string}` | undefined;
+        let stepHashes: `0x${string}`[] = [];
+        let aaResult: AaExecutionResult | null = null;
 
-      if (useBatch) {
-        try {
-          const result = await executePlanBatched(
-            plan,
-            wallet.provider!,
-            wallet.address,
-            NETWORKS[flow.intent.network].chainId,
-            flow.intent.network,
-            {
-              paymasterServiceUrl: flow.gasInfo.paymasterServiceUrl,
-              paymasterContext: flow.gasInfo.paymasterContext,
-              erc20GasPayment: prepared.gasMode === "erc20",
-            },
-            { onStep },
+        // --- ERC-20 gas path (EIP-7702 + paymaster) --------------------------
+        // When gas is paid in a token, the payment MUST execute as one atomic
+        // UserOperation so the paymaster can settle the fee. This is a genuinely
+        // different submission path from the sequential EOA path below, not a
+        // relabelling: an EOA transaction cannot carry a paymaster.
+        if (prepared.gasMode === "erc20" && flow.gasInfo.erc20GasToken && wallet.provider) {
+          // Bound the paymaster allowance against the user's real gas-token
+          // balance — the approval is never unlimited.
+          const gasTokenView = aaCapability?.supportedGasTokens.find(
+            (t) => t.address.toLowerCase() === flow.gasInfo.erc20GasToken!.address.toLowerCase(),
           );
-          primaryHash = result.primaryHash;
-          stepHashes = hashOf(result.results);
-        } catch (batchErr) {
-          if (batchErr instanceof ExecutionError && batchErr.code === "rejected") throw batchErr;
+          const gasTokenBalance = gasTokenView
+            ? parseUnits(gasTokenView.balance, gasTokenView.decimals)
+            : undefined;
+          aaResult = await executePlanViaAa(
+            plan,
+            wallet.provider as never,
+            wallet.address,
+            flow.intent.network,
+            flow.gasInfo.erc20GasToken.address as `0x${string}`,
+            getClientPublicClient(flow.intent.network),
+            onStep,
+            gasTokenBalance,
+          );
+          primaryHash = aaResult.transactionHash ?? aaResult.userOpHash;
+          stepHashes = aaResult.transactionHash ? [aaResult.transactionHash] : [];
+          setTxHash(primaryHash);
+
+          // A reverted UserOperation is a failed payment — never reported success.
+          if (!aaResult.success) {
+            setDelivery({
+              verified: false,
+              delivered: "0",
+              expected: prepared.quote.receiveAmount,
+              reason: aaResult.reason ?? "the transaction reverted",
+            });
+            setError(aaResult.reason ?? "The payment reverted on-chain and was not delivered.");
+            setStage("review");
+            return;
+          }
+
+          // Prove the recipient actually received the token from the real receipt
+          // logs — the UserOperation's success flag alone is not delivery.
+          const check = verifyDeliveryFromLogs(
+            aaResult.logs,
+            flow.receiveTokenConfig,
+            flow.intent.recipient,
+            prepared.quote.receiveAmount,
+            BigInt(prepared.plan.slippageBps),
+          );
+          setDelivery(check);
+          setStage("success");
+          return;
+        }
+
+        // Prefer an atomic EIP-5792 batch when the wallet supports it and the plan
+        // needs more than one step, or when gas is abstracted (a single-step
+        // payment must still go through `wallet_sendCalls` for a paymaster to
+        // sponsor it).
+        const useBatch =
+          plan.executable &&
+          Boolean(wallet.provider) &&
+          Boolean(walletCaps?.atomicBatch) &&
+          (plan.steps.length > 1 || prepared.gasMode !== "native");
+
+        if (useBatch) {
+          try {
+            const result = await executePlanBatched(
+              plan,
+              wallet.provider!,
+              wallet.address,
+              NETWORKS[flow.intent.network].chainId,
+              flow.intent.network,
+              {
+                paymasterServiceUrl: flow.gasInfo.paymasterServiceUrl,
+                paymasterContext: flow.gasInfo.paymasterContext,
+                erc20GasPayment: prepared.gasMode === "erc20",
+              },
+              { onStep },
+            );
+            primaryHash = result.primaryHash;
+            stepHashes = hashOf(result.results);
+          } catch (batchErr) {
+            if (batchErr instanceof ExecutionError && batchErr.code === "rejected") throw batchErr;
+            // If the batch already produced a transaction hash (pre- or
+            // post-confirmation), the submission is ambiguous or done. Never fire
+            // a second, sequential submission for it — that would double-submit.
+            if (
+              (batchErr instanceof ExecutionError && batchErr.code === "submitted") ||
+              sawSubmission ||
+              stepHashes.length > 0
+            ) {
+              throw batchErr;
+            }
+            const result = await executePlan(plan, wallet.walletClient, flow.intent.network, { onStep });
+            primaryHash = result.primaryHash;
+            stepHashes = hashOf(result.results);
+          }
+        } else {
           const result = await executePlan(plan, wallet.walletClient, flow.intent.network, { onStep });
           primaryHash = result.primaryHash;
           stepHashes = hashOf(result.results);
         }
-      } else {
-        const result = await executePlan(plan, wallet.walletClient, flow.intent.network, { onStep });
-        primaryHash = result.primaryHash;
-        stepHashes = hashOf(result.results);
-      }
 
-      setTxHash(primaryHash);
+        setTxHash(primaryHash);
 
-      const hashes = stepHashes.length ? stepHashes : primaryHash ? [primaryHash] : [];
-      if (hashes.length) {
-        try {
-          const check = await verifyDelivery(
-            getClientPublicClient(flow.intent.network),
-            hashes,
-            flow.receiveTokenConfig,
-            flow.intent.recipient,
-            prepared.quote.receiveAmount,
-            // Use the tolerance the transaction actually enforced on-chain, so
-            // a legitimate fill is never reported as unverified.
-            BigInt(prepared.plan.slippageBps),
-          );
-          setDelivery(check);
-        } catch {
-          setDelivery(null);
+        const hashes = stepHashes.length ? stepHashes : primaryHash ? [primaryHash] : [];
+        if (hashes.length) {
+          try {
+            const check = await verifyDelivery(
+              getClientPublicClient(flow.intent.network),
+              hashes,
+              flow.receiveTokenConfig,
+              flow.intent.recipient,
+              prepared.quote.receiveAmount,
+              // Use the tolerance the transaction actually enforced on-chain, so
+              // a legitimate fill is never reported as unverified.
+              BigInt(prepared.plan.slippageBps),
+            );
+            setDelivery(check);
+          } catch {
+            setDelivery(null);
+          }
         }
-      }
 
-      setStage("success");
-    } catch (err) {
-      const message =
-        err instanceof ExecutionError ? err.message : "The payment could not be completed.";
-      setError(message);
-      setStage("review");
+        setStage("success");
+      } catch (err) {
+        const message =
+          err instanceof ExecutionError ? err.message : "The payment could not be completed.";
+        setError(message);
+        // A definite pre-submission outcome (rejection/revert) or an ambiguous
+        // post-submission one both return to Review — never silently to compose.
+        // The recipient, amount and selected asset are preserved in the intent.
+        setStage("review");
+      }
+    } finally {
+      attemptRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [

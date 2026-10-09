@@ -31,9 +31,19 @@ export const FINALITY_CONFIRMATIONS = 2;
 export type ExecuteCallbacks = { onStep?: (result: StepResult) => void };
 
 export class ExecutionError extends Error {
-  code: "rejected" | "reverted" | "unknown";
+  /**
+   * `rejected`/`reverted` happened before any submission completed;
+   * `submitted` means a transaction was sent but its outcome is unresolved or
+   * unsuccessful — the caller must NOT retry it blindly;
+   * `unknown` is a definite pre-submission failure.
+   */
+  code: "rejected" | "reverted" | "submitted" | "unknown";
   stepId?: string;
-  constructor(message: string, code: "rejected" | "reverted" | "unknown", stepId?: string) {
+  constructor(
+    message: string,
+    code: "rejected" | "reverted" | "submitted" | "unknown",
+    stepId?: string,
+  ) {
     super(message);
     this.code = code;
     this.stepId = stepId;
@@ -440,7 +450,7 @@ export async function executePlanBatched(
   });
 
   if (failed) {
-    throw new ExecutionError("The payment did not confirm on Monad.", "unknown");
+    throw new ExecutionError("The payment did not confirm on Monad.", "submitted");
   }
 
   // Best-effort wait for a receipt so callers can verify delivery immediately.

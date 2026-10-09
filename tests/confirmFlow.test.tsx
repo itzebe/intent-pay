@@ -44,7 +44,10 @@ vi.mock("@/lib/hooks/usePayment", () => ({
 const SENDER = "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4";
 const STABLE_PROVIDER = { request: vi.fn() };
 const STABLE_WALLET_CLIENT = { account: { address: SENDER } };
-const ensureMonad = vi.fn(async () => true);
+const ensureMonad = vi.fn(
+  async (): Promise<{ ok: true } | { ok: false; error: { kind: string; rejected: boolean; message: string; code?: number } }> =>
+    ({ ok: true }),
+);
 
 vi.mock("@/lib/hooks/useWallet", () => ({
   // Stable references: the composer keys effects on `provider`/`walletClient`,
@@ -238,6 +241,10 @@ describe("confirmation flow", () => {
     executePlanBatched.mockReset();
     executePlanViaAa.mockReset();
     checkUserOperationReceipt.mockReset();
+    // Default: already on Monad. Individual tests override to exercise the
+    // honest chain-error path, then this restores the default.
+    ensureMonad.mockReset();
+    ensureMonad.mockResolvedValue({ ok: true } as const);
     aaCapabilityValue = null;
   });
 
@@ -947,5 +954,118 @@ describe("confirmation flow", () => {
     expect(screen.queryByText(/Waiting for confirmation/i)).toBeNull();
     expect(screen.queryByText(/still awaiting confirmation/i)).toBeNull();
     expect(screen.queryByText(/submitted but Monad hasn't confirmed/i)).toBeNull();
+  });
+
+  it("surfaces the wallet's real chain-switch rejection and never silently resets", async () => {
+    baseFlow({});
+    // The user (or wallet) rejected the switch to Monad. Before the fix this
+    // collapsed into "Please switch your wallet to Monad to continue." with the
+    // true cause swallowed.
+    ensureMonad.mockResolvedValue({
+      ok: false,
+      error: { kind: "rejected", code: 4001, rejected: true, message: "You rejected the request in your wallet. Nothing was sent." },
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The real reason is shown, the payment intent is preserved, and the user is
+    // NOT dropped back to the composer's Review CTA.
+    expect(screen.getByText(/You rejected the request in your wallet/i)).toBeTruthy();
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    expect(flow.intent.recipient).toBe("0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4");
+    expect(flow.intent.receiveAmount).toBe("5");
+    expect(flow.intent.receiveToken).toBe("USDC");
+    // Not on the executing screen, and nothing was prepared or submitted.
+    expect(screen.queryByText(/Waiting for confirmation/i)).toBeNull();
+    expect(prepareSigning).not.toHaveBeenCalled();
+    expect(executePlan).not.toHaveBeenCalled();
+    expect(executePlanViaAa).not.toHaveBeenCalled();
+  });
+
+  it("differentiates an unsupported chain switch from a rejection", async () => {
+    baseFlow({});
+    ensureMonad.mockResolvedValue({
+      ok: false,
+      error: { kind: "unsupported", code: 4200, rejected: false, message: "Your wallet doesn't support this request. Update it or use a wallet that does, then try again." },
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/doesn't support this request/i)).toBeTruthy();
+    // Never the blanket "switch to Monad" message.
+    expect(screen.queryByText(/Please switch your wallet to Monad/i)).toBeNull();
+    expect(screen.queryByText("Review Payment")).toBeNull();
+  });
+
+  it("keeps Review and the intent when prepareSigning blocks on account change", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: false,
+      reason: "account_changed",
+      message: "Your wallet account changed. Balances and gas were rebuilt for the new account — review and confirm again.",
+      expectedVersion: flow.intent.version,
+      actualVersion: flow.intent.version,
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/account changed/i)).toBeTruthy();
+    expect(screen.getByText("Retry payment")).toBeTruthy();
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    expect(flow.intent.receiveAmount).toBe("5");
+  });
+
+  it("does not report success when delivery verification cannot prove the receipt", async () => {
+    erc20TransferSetup();
+    // A submitted op that included successfully but whose logs do not prove the
+    // recipient's transfer must still advance (inclusion is real) — but it must
+    // never fabricate a success that contradicts the receipt.
+    executePlanViaAa.mockResolvedValue({
+      userOpHash: "0xop",
+      transactionHash: "0xreceipt",
+      success: true,
+      logs: [],
+    });
+
+    renderComposer();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Exactly one submission and no double-spend on the verified path.
+    expect(executePlanViaAa).toHaveBeenCalledTimes(1);
+    expect(checkUserOperationReceipt).not.toHaveBeenCalled();
   });
 });

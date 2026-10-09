@@ -14,6 +14,7 @@ import { prepareSignedAuthorization, AaAuthorizationError } from "./authorizatio
 import { withGasBuffer } from "./safety";
 import { filterUserOperation } from "./userOp";
 import { planGasApproval, type GasPaymasterQuote } from "./gasApproval";
+import type { PaymentStage } from "@/lib/domain/paymentDiagnostics";
 
 /**
  * The authorization authority's EOA transaction nonce — the value EIP-7702
@@ -187,6 +188,8 @@ export async function executePlanViaAa(
   onStep?: AaStepCallback,
   /** The user's on-chain balance of the gas token, base units (bound the approval). */
   gasTokenBalance?: bigint,
+  /** Stage observer for the structured payment diagnostic trail. */
+  onStage?: (stage: PaymentStage) => void,
 ): Promise<AaExecutionResult> {
   if (!plan.executable) {
     throw new Error("This payment has no executable on-chain route.");
@@ -252,6 +255,7 @@ export async function executePlanViaAa(
   // nonce that exceeds EIP-7702's `uint64` bound. The two are deliberately
   // separate sources.
   const authority = sender;
+  onStage?.("authorization_signing_started");
   const authNonce = await authorizationNonce(publicClient, authority);
   const authorized = await prepareSignedAuthorization({
     signer: bundle.authorizationSigner,
@@ -268,6 +272,7 @@ export async function executePlanViaAa(
     }
     throw err;
   });
+  onStage?.("authorization_signing_completed");
   const authorization = authorized.authorization;
   // viem 2.57.3 accepts this authorization at runtime — its `eip7702Auth`
   // formatter serialises the nonce with `numberToHex`, which handles `bigint` —
@@ -280,6 +285,8 @@ export async function executePlanViaAa(
   // Prepare (simulate + estimate gas) with the REAL authorization, so the gas
   // fields — and therefore the bounded allowance — are computed against the
   // operation that will actually be submitted.
+  onStage?.("user_operation_preparation_started");
+  onStage?.("paymaster_validation_started");
   const prepared = await bundlerClient.prepareUserOperation({
     account,
     calls,
@@ -287,6 +294,8 @@ export async function executePlanViaAa(
     paymasterContext: { token: gasToken },
     authorization: authorizationForSdk,
   });
+  onStage?.("paymaster_validation_completed");
+  onStage?.("user_operation_preparation_completed");
 
   const exactApproval = planGasApproval({
     userOperation: prepared as unknown as Record<string, unknown>,
@@ -300,6 +309,7 @@ export async function executePlanViaAa(
 
   // The submission boundary: everything above is preparation; this is the only
   // state-changing call in the ERC-20 path.
+  onStage?.("bundler_submission_started");
   const userOpHash = await bundlerClient.sendUserOperation({
     account,
     calls: finalCalls,
@@ -307,8 +317,11 @@ export async function executePlanViaAa(
     paymasterContext: { token: gasToken },
     authorization: authorizationForSdk,
   });
+  onStage?.("bundler_submission_completed");
 
   plan.steps.forEach((s) => onStep?.({ stepId: s.id, label: s.label, status: "submitted" }));
+  onStage?.("user_operation_pending");
+  onStage?.("receipt_polling_started");
 
   // Wait for the receipt, but never let a timeout masquerade as a failure: the
   // UserOperation is already submitted (a real hash exists) and may still land.
@@ -339,6 +352,7 @@ export async function executePlanViaAa(
   }
 
   const success = Boolean(receipt?.success);
+  onStage?.("user_operation_included");
   plan.steps.forEach((s) =>
     onStep?.({
       stepId: s.id,

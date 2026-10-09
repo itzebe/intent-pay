@@ -15,6 +15,10 @@ import { executePlanViaAa, checkUserOperationReceipt, type AaExecutionResult } f
 import { walletSupportsEip7702 } from "@/lib/aa/account";
 import { useAaCapability } from "@/lib/hooks/useAaCapability";
 import { displayKey } from "@/lib/domain/canonicalIntent";
+import {
+  buildPaymentDiagnostic,
+  recordPaymentDiagnostic,
+} from "@/lib/domain/paymentDiagnostics";
 import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery, verifyDeliveryFromLogs } from "@/lib/execution/verify";
@@ -358,17 +362,44 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     setSteps([]);
     setDelivery(null);
 
+    // Structured, secret-free trail: every failure records the exact stage so
+    // the "returns to Confirm and Send with no explanation" symptom can be
+    // attributed instead of guessed. Console-only; never sent to a server.
+    recordPaymentDiagnostic(buildPaymentDiagnostic({ event: "payment_submit_started" }));
+
     try {
       if (!wallet.address || !wallet.walletClient) {
         setError("Connect your wallet to pay on Monad.");
+        recordPaymentDiagnostic(
+          buildPaymentDiagnostic({
+            event: "payment_failed",
+            code: "no_wallet",
+            message: "Connect your wallet to pay on Monad.",
+            returnedToConfirm: true,
+          }),
+        );
         return;
       }
+      recordPaymentDiagnostic(buildPaymentDiagnostic({ event: "wallet_connection_checked" }));
 
       const onChain = await wallet.ensureMonad();
-      if (!onChain) {
-        setError("Please switch your wallet to Monad to continue.");
+      if (!onChain.ok) {
+        // Show the wallet's REAL reason (rejection vs unsupported vs transient)
+        // rather than a blanket "switch to Monad", and record which it was.
+        const { error } = onChain;
+        setError(error.message);
+        recordPaymentDiagnostic(
+          buildPaymentDiagnostic({
+            event: "payment_failed",
+            code: `chain_${error.kind}`,
+            message: error.message,
+            walletRejected: error.rejected,
+            returnedToConfirm: true,
+          }),
+        );
         return;
       }
+      recordPaymentDiagnostic(buildPaymentDiagnostic({ event: "chain_validation_completed" }));
 
       setStage("executing");
 
@@ -401,16 +432,41 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             );
             setDelivery(check);
             setTxHash(receipt.transactionHash ?? pending.hash);
+            recordPaymentDiagnostic(
+              buildPaymentDiagnostic({
+                event: "payment_execution_verified",
+                hasUserOpHash: true,
+                hasTransactionHash: Boolean(receipt.transactionHash),
+              }),
+            );
             setStage("success");
           } else if (receipt) {
             setDelivery({ ...pending.delivery, verified: false, reason: receipt.reason ?? "the transaction reverted" });
             setError(receipt.reason ?? "The payment reverted on-chain and was not delivered.");
+            recordPaymentDiagnostic(
+              buildPaymentDiagnostic({
+                event: "payment_failed",
+                code: "op_reverted",
+                message: receipt.reason ?? "the transaction reverted",
+                hasUserOpHash: true,
+                returnedToConfirm: true,
+              }),
+            );
             setStage("review");
           } else {
             // Still unresolved: tell the truth and let the user check again.
             submittedUserOpRef.current = pending;
             setError(
               "This payment was already submitted and is still awaiting confirmation. It was not resubmitted — use Retry to check its status again.",
+            );
+            recordPaymentDiagnostic(
+              buildPaymentDiagnostic({
+                event: "user_operation_pending",
+                code: "receipt_not_available",
+                hasUserOpHash: true,
+                mayHaveSubmitted: true,
+                returnedToConfirm: true,
+              }),
             );
             setStage("review");
           }
@@ -423,6 +479,14 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       if (!flow.readiness.ready) {
         flow.refreshQuote();
         setError("This payment changed. Review it again before confirming.");
+        recordPaymentDiagnostic(
+          buildPaymentDiagnostic({
+            event: "payment_failed",
+            code: `readiness_${flow.readiness.code}`,
+            message: "This payment changed. Review it again before confirming.",
+            returnedToConfirm: true,
+          }),
+        );
         return;
       }
 
@@ -513,6 +577,16 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           // refresh the quote so the user can retry the same review, rather than
           // dropping them back to a blank composer.
           setError(prepared.message);
+          recordPaymentDiagnostic(
+            buildPaymentDiagnostic({
+              // `prepareSigning` refuses before any signature/submission, so the
+              // failing stage is operation preparation.
+              event: "payment_failed",
+              code: prepared.reason,
+              message: prepared.message,
+              returnedToConfirm: true,
+            }),
+          );
           setStage("review");
           flow.refreshQuote();
           return;
@@ -547,6 +621,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             getClientPublicClient(flow.intent.network),
             onStep,
             gasTokenBalance,
+            // Stage observer: records the exact stage reached (authorization →
+            // preparation → paymaster → bundler → receipt) so a failure can be
+            // attributed, never guessed.
+            (stage) => recordPaymentDiagnostic(buildPaymentDiagnostic({ event: stage })),
           );
           primaryHash = aaResult.transactionHash ?? aaResult.userOpHash;
           stepHashes = aaResult.transactionHash ? [aaResult.transactionHash] : [];
@@ -598,6 +676,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             BigInt(prepared.plan.slippageBps),
           );
           setDelivery(check);
+          recordPaymentDiagnostic(
+            buildPaymentDiagnostic({
+              event: "payment_execution_verified",
+              hasUserOpHash: true,
+              hasTransactionHash: Boolean(aaResult.transactionHash),
+            }),
+          );
           setStage("success");
           return;
         }
@@ -653,6 +738,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
         setTxHash(primaryHash);
 
+        recordPaymentDiagnostic(
+          buildPaymentDiagnostic({
+            event: "receipt_polling_started",
+            hasTransactionHash: Boolean(primaryHash),
+          }),
+        );
+
         const hashes = stepHashes.length ? stepHashes : primaryHash ? [primaryHash] : [];
         if (hashes.length) {
           try {
@@ -672,14 +764,34 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           }
         }
 
+        // A native-path payment only reaches `success` after its receipt(s) were
+        // fetched and delivery was verified; the UserOperation path returns above.
+        recordPaymentDiagnostic(
+          buildPaymentDiagnostic({
+            event: "payment_execution_verified",
+            hasTransactionHash: hashes.length > 0,
+          }),
+        );
         setStage("success");
       } catch (err) {
         const message =
           err instanceof ExecutionError ? err.message : "The payment could not be completed.";
+        const code = err instanceof ExecutionError ? err.code : "unknown";
         setError(message);
         // A definite pre-submission outcome (rejection/revert) or an ambiguous
         // post-submission one both return to Review — never silently to compose.
         // The recipient, amount and selected asset are preserved in the intent.
+        recordPaymentDiagnostic(
+          buildPaymentDiagnostic({
+            event: "payment_failed",
+            code,
+            message,
+            // `submitted` is the only code that means the operation may already
+            // be on-chain and must not be blindly retried.
+            mayHaveSubmitted: code === "submitted" || sawSubmission,
+            returnedToConfirm: true,
+          }),
+        );
         setStage("review");
       }
     } finally {

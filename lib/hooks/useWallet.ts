@@ -5,6 +5,7 @@ import { createWalletClient, custom, type Address, type WalletClient } from "vie
 import { NETWORKS, type MonadNetwork } from "@/lib/config/chains";
 import { monadAddChainParams } from "@/lib/wallet/monadChain";
 import type { Balance } from "@/lib/domain/intent";
+import { classifyWalletError, type WalletErrorInfo } from "@/lib/domain/walletError";
 
 type Eip1193Provider = {
   request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown>;
@@ -120,18 +121,27 @@ export function useWallet(network: MonadNetwork = "mainnet") {
     setState((s) => ({ ...s, status: "disconnected", address: undefined }));
   }, []);
 
-  const ensureMonad = useCallback(async () => {
+  const ensureMonad = useCallback(async (): Promise<{ ok: true } | { ok: false; error: WalletErrorInfo }> => {
     const provider = providerRef.current ?? pickProvider();
-    if (!provider) return false;
+    if (!provider) {
+      return {
+        ok: false,
+        error: {
+          kind: "unknown",
+          rejected: false,
+          message: "No browser wallet detected. Connect a wallet to pay on Monad.",
+        },
+      };
+    }
     const target = NETWORKS[network].chainId;
     try {
       const chainIdHex = (await provider.request({ method: "eth_chainId" })) as string;
-      if (parseInt(chainIdHex, 16) === target) return true;
+      if (parseInt(chainIdHex, 16) === target) return { ok: true };
       await provider.request({
         method: "wallet_switchEthereumChain",
         params: [{ chainId: "0x" + target.toString(16) }],
       });
-      return true;
+      return { ok: true };
     } catch (err: any) {
       if (err?.code === 4902 || /Unrecognized chain/i.test(err?.message ?? "")) {
         try {
@@ -139,12 +149,15 @@ export function useWallet(network: MonadNetwork = "mainnet") {
             method: "wallet_addEthereumChain",
             params: [monadAddChainParams(network)],
           });
-          return true;
-        } catch {
-          return false;
+          return { ok: true };
+        } catch (addErr) {
+          return { ok: false, error: classifyWalletError(addErr) };
         }
       }
-      return false;
+      // Distinguish a user rejection / unsupported method / transient error so
+      // the caller can show the real reason instead of a blanket "switch to
+      // Monad". Never swallow the cause.
+      return { ok: false, error: classifyWalletError(err) };
     }
   }, [network]);
 

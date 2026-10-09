@@ -64,7 +64,7 @@ const FAQ_ITEMS: { q: string; a: ReactNode }[] = [
   },
   {
     q: "Has Intent Pay processed a real payment?",
-    a: <>Yes. Intent Pay has completed a real-wallet payment on Monad mainnet: the transaction executed successfully, the recipient received the payment, and the app displayed it as delivered and confirmed on Monad. This demonstrates that the payment flow works in a real mainnet environment. It is not a guarantee that every token, liquidity route, wallet configuration or transaction will succeed.</>,
+    a: <>Yes. Intent Pay has successfully processed a real-wallet payment on Monad mainnet: the transaction was confirmed on-chain and the intended recipient received the payment. This demonstrates the ability to execute a real payment using its on-chain payment flow. Availability for a given payment still depends on the connected wallet, the token, and an executable route.</>,
   },
   {
     q: "Where can I read the full design?",

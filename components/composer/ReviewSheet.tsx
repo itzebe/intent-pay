@@ -36,15 +36,11 @@ export function ReviewSheet({
   notice,
   canConfirm = true,
   networkLabel,
-  gasMode = "native",
-  batchable = false,
   quotedAt,
   quoteStale = false,
   protection,
   partial,
   gasInfo,
-  supportedGasTokens,
-  onSelectGasToken,
 }: {
   quote: Quote;
   payToken: TokenConfig;
@@ -67,10 +63,6 @@ export function ReviewSheet({
    */
   canConfirm?: boolean;
   networkLabel: string;
-  /** How gas will be handled for this payment. */
-  gasMode?: "sponsored" | "erc20" | "native";
-  /** The connected wallet can submit the plan as one atomic batch. */
-  batchable?: boolean;
   /** Unix ms the current quote was produced — shown as a live timestamp. */
   quotedAt?: number;
   /** True when the quote has aged out; the review is then not executable. */
@@ -87,25 +79,11 @@ export function ReviewSheet({
     shortfall: string;
     sourceSymbol: string | null;
   } | null;
-  /** Live gas-handling detail: the selected ERC-20 and an honest reason. */
+  /** Live gas-handling detail: always paid in MON. */
   gasInfo?: {
-    mode: "sponsored" | "erc20" | "native";
-    erc20GasToken?: { symbol: string; address: string } | null;
+    mode: "native";
     reason?: string | null;
   };
-  /** ERC-20 gas tokens the paymaster accepts, with per-wallet status. */
-  supportedGasTokens?: {
-    address: string;
-    symbol: string;
-    decimals: number;
-    held: boolean;
-    sufficientBalance: boolean;
-    quoteKnown: boolean;
-    estimatedFee: string | null;
-    selected: boolean;
-  }[];
-  /** Choose the ERC-20 that pays the network fee (null = auto / MON). */
-  onSelectGasToken?: (address: string | null) => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -115,22 +93,10 @@ export function ReviewSheet({
     ? new Date(quotedAt).toLocaleTimeString("en-US", { hour12: false })
     : null;
 
-  const erc20GasToken = gasInfo?.erc20GasToken ?? null;
-  const viableGasTokens = (supportedGasTokens ?? []).filter(
-    (t) => t.held && t.sufficientBalance && t.quoteKnown,
-  );
-
   const gasRow =
-    gasMode === "sponsored"
-      ? { value: "Sponsored", sub: "network fee covered" }
-      : gasMode === "erc20"
-        ? {
-            value: `Paid in ${erc20GasToken?.symbol ?? "an ERC-20"}`,
-            sub: "no MON required",
-          }
-        : quote.networkCostUsdAvailable === false
-          ? { value: "Unavailable", sub: "no live MON price" }
-          : { value: formatGasUsd(quote.networkCostUsd), sub: "paid in MON" };
+    quote.networkCostUsdAvailable === false
+      ? { value: "Unavailable", sub: "no live MON price" }
+      : { value: formatGasUsd(quote.networkCostUsd), sub: "paid in MON" };
 
   // When gas could not be priced from live data the total understates the real
   // cost, so show it as a lower bound rather than a precise figure.
@@ -211,31 +177,6 @@ export function ReviewSheet({
             value={gasRow.value}
             sub={gasRow.sub}
           />
-          {viableGasTokens.length > 0 && onSelectGasToken && (
-            <div className="pt-1">
-              <div className="mb-1.5 text-[11px] text-white/40">
-                Pay network fee with
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                <GasTokenChip
-                  label="MON"
-                  active={gasMode !== "erc20"}
-                  onClick={() => onSelectGasToken(null)}
-                />
-                {viableGasTokens.map((t) => (
-                  <GasTokenChip
-                    key={t.address}
-                    label={t.symbol}
-                    active={
-                      gasMode === "erc20" &&
-                      erc20GasToken?.address.toLowerCase() === t.address.toLowerCase()
-                    }
-                    onClick={() => onSelectGasToken(t.address)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
           <div className="hairline mt-1 pt-3">
             <SummaryRow label="Total sender cost" value={totalSenderCost} strong />
           </div>
@@ -305,21 +246,9 @@ export function ReviewSheet({
             />
             <SafetyRow
               label="Gas payment"
-              value={
-                gasMode === "erc20"
-                  ? `ERC-20 (${erc20GasToken?.symbol ?? "token"})`
-                  : gasMode === "sponsored"
-                    ? "Sponsored"
-                    : "MON"
-              }
-              tone={gasMode === "native" && gasInfo?.reason ? "warn" : "ok"}
-              sub={
-                gasMode === "erc20"
-                  ? "same wallet · EIP-7702"
-                  : gasInfo?.reason
-                    ? gasInfo.reason
-                    : "native network fee"
-              }
+              value="MON"
+              tone={gasInfo?.reason ? "warn" : "ok"}
+              sub={gasInfo?.reason ? gasInfo.reason : "native network fee"}
             />
           </div>
         )}
@@ -328,7 +257,7 @@ export function ReviewSheet({
           onClick={() => setShowDetails((d) => !d)}
           className="mt-4 flex w-full items-center justify-between rounded-xl px-2 py-2 text-sm text-white/55 transition hover:bg-white/[0.04] hover:text-white/85"
         >
-          <span>View transaction details</span>
+          <span>View route &amp; transaction details</span>
           <ChevronDown className={`h-4 w-4 transition-transform ${showDetails ? "rotate-180" : ""}`} />
         </button>
 
@@ -369,20 +298,8 @@ export function ReviewSheet({
                 )}
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Gas</span>
-                  <span className="font-mono text-white/70">
-                    {gasMode === "sponsored"
-                      ? "Sponsored (network fee covered)"
-                      : gasMode === "erc20"
-                        ? "Paid in an ERC-20 (chosen by your wallet)"
-                        : "Paid in MON"}
-                  </span>
+                  <span className="font-mono text-white/70">Paid in MON</span>
                 </div>
-                {batchable && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-white/40">Submission</span>
-                    <span className="font-mono text-white/70">Atomic batch (EIP-5792)</span>
-                  </div>
-                )}
                 <div className="flex items-center justify-between">
                   <span className="text-white/40">Price source</span>
                   <span className="font-mono text-white/70">
@@ -511,34 +428,6 @@ function SafetyRow({
         {sub && <span className="text-[11px] text-white/35">{sub}</span>}
       </span>
     </div>
-  );
-}
-
-/**
- * A selectable gas-token chip. Kept intentionally plain: selection is a real
- * canonical-intent change (it rebuilds the transaction), not a display toggle.
- */
-function GasTokenChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition ${
-        active
-          ? "border-mono/50 bg-mono/15 text-white"
-          : "border-white/10 bg-white/[0.02] text-white/55 hover:border-white/25 hover:text-white/80"
-      }`}
-    >
-      {label}
-    </button>
   );
 }
 

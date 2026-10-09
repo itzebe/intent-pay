@@ -1,6 +1,6 @@
 # Intent Pay — intent-based payments on Monad
 
-**Pay in what you have. Send what they need.**
+**Tell Intent Pay what you want to pay. Review the route. Send on Monad.**
 
 Intent Pay is an intent-based payment layer for Monad. You choose who receives,
 how much they should receive, and which token they should receive — the app
@@ -89,8 +89,23 @@ INTENT_LLM_BASE_URL=https://api.openai.com/v1
 INTENT_LLM_MODEL=gpt-4o-mini
 ```
 
-## Notes
+## Gas
 
-Gas abstraction is only claimed where the infrastructure supports the exact
-wallet and transaction flow. The UI states plainly when a step will require a
-wallet approval.
+Gas is always paid in native MON by the user's own injected wallet. There is no
+sponsored, ERC-20 or account-abstracted gas path — an earlier EIP-7702 /
+paymaster experiment was removed because it could not be demonstrated to
+complete a real end-to-end payment on Monad. Intent Pay is not a gasless
+product, and it does not claim to be.
+
+## Documentation
+
+The docs live under `/docs` and are reachable from the **Learn** menu:
+
+- `/docs` — hub / overview
+- `/docs/litepaper` — the full design and status document
+- `/docs/how-it-works` — the payment journey, step by step
+- `/docs/architecture` — layers, routing and execution
+- `/docs/security` — guards, bounds and honest limits
+- `/docs/roadmap` — built, in progress, planned
+- `/docs/faq` — direct answers
+- `/docs/developers` — repo layout, routes and configuration

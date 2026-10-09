@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import {
   alchemyStatus,
-  alchemyBundlerStatus,
-  alchemyPaymasterStatus,
   alchemyPricingStatus,
   zerionStatus,
 } from "@/lib/server/diagnostics";
@@ -20,17 +18,14 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   const network: MonadNetwork = "mainnet";
-  const [alchemy, bundler, paymaster, pricing, zerion] = await Promise.all([
+  const [alchemy, pricing, zerion] = await Promise.all([
     alchemyStatus(network),
-    alchemyBundlerStatus(),
-    alchemyPaymasterStatus(),
     alchemyPricingStatus(network),
     zerionStatus(),
   ]);
 
   const env = {
     ALCHEMY_API_KEY: Boolean(process.env.ALCHEMY_API_KEY),
-    ALCHEMY_GAS_POLICY_ID: Boolean(process.env.ALCHEMY_GAS_POLICY_ID),
     ZERION_API_KEY: Boolean(process.env.ZERION_API_KEY),
     ZERION_ENABLED: process.env.ZERION_ENABLED ?? null,
     NEXT_PUBLIC_ALCHEMY_API_KEY: Boolean(process.env.NEXT_PUBLIC_ALCHEMY_API_KEY),
@@ -47,8 +42,6 @@ export async function GET() {
     env,
     integrations: {
       alchemy: { ...alchemy, role: "RPC" },
-      alchemyBundler: { ...bundler, role: "ERC-4337 Bundler" },
-      alchemyPaymaster: { ...paymaster, role: "Gas Manager (Paymaster)" },
       alchemyPricing: { ...pricing, role: "Market prices" },
       zerion: { ...zerion, role: "Wallet intelligence" },
     },

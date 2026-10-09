@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PublicClient } from "viem";
 import { decodeEventLog } from "viem";
-import { verifyDelivery, verifyDeliveryFromLogs } from "@/lib/execution/verify";
-import { parseUnits } from "@/lib/domain/math";
+import { verifyDelivery } from "@/lib/execution/verify";
 import { getToken } from "@/lib/config/tokens";
 import { ERC20_ABI } from "@/lib/execution/abis";
 
@@ -199,85 +198,5 @@ describe("verifyDelivery — cannot prove", () => {
     );
     expect(check.verified).toBe(false);
     expect(check.reason).toMatch(/no successful receipt/i);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// UserOperation (ERC-20 gas) delivery verification
-// ---------------------------------------------------------------------------
-describe("verifyDeliveryFromLogs (ERC-20 gas / EIP-7702 path)", () => {
-  it("verifies delivery when the recipient received at least the minimum", () => {
-    const amount = parseUnits("5", USDC.decimals);
-    const check = verifyDeliveryFromLogs(
-      [
-        {
-          address: USDC.address,
-          topics: [TRANSFER_TOPIC, pad(OTHER), pad(RECIPIENT)],
-          data: word(amount),
-        },
-      ],
-      USDC,
-      RECIPIENT,
-      "5",
-      50n,
-    );
-    expect(check.verified).toBe(true);
-    expect(check.delivered).toBe("5");
-  });
-
-  it("fails when the recipient received below the protected minimum", () => {
-    // 4.9 USDC delivered against 5 expected at 50 bps tolerance (min 4.975).
-    const delivered = parseUnits("4.9", USDC.decimals);
-    const check = verifyDeliveryFromLogs(
-      [
-        {
-          address: USDC.address,
-          topics: [TRANSFER_TOPIC, pad(OTHER), pad(RECIPIENT)],
-          data: word(delivered),
-        },
-      ],
-      USDC,
-      RECIPIENT,
-      "5",
-      50n,
-    );
-    expect(check.verified).toBe(false);
-    expect(check.reason).toMatch(/less than intended/);
-  });
-
-  it("ignores transfers to anyone other than the recipient", () => {
-    const amount = parseUnits("5", USDC.decimals);
-    const check = verifyDeliveryFromLogs(
-      [
-        {
-          address: USDC.address,
-          topics: [TRANSFER_TOPIC, pad(OTHER), pad(OTHER)],
-          data: word(amount),
-        },
-      ],
-      USDC,
-      RECIPIENT,
-      "5",
-      50n,
-    );
-    expect(check.verified).toBe(false);
-  });
-
-  it("never reports success with no logs at all", () => {
-    const check = verifyDeliveryFromLogs([], USDC, RECIPIENT, "5", 50n);
-    expect(check.verified).toBe(false);
-    expect(check.reason).toBe("no logs");
-  });
-
-  it("refuses to claim native delivery from logs alone", () => {
-    const check = verifyDeliveryFromLogs(
-      [{ address: MON.address, topics: [], data: "0x" }],
-      MON,
-      RECIPIENT,
-      "5",
-      50n,
-    );
-    expect(check.verified).toBe(false);
-    expect(check.reason).toMatch(/cannot be proven/);
   });
 });

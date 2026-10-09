@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Intent Pay — Pay with what you have. Send what they need.",
+  title: "Intent Pay — Review the route. Send on Monad.",
   description:
-    "Intent-based payments on Monad. Choose what the recipient should receive; we handle the token conversion and transaction details underneath.",
+    "Intent-based payments on Monad. Tell Intent Pay what you want to pay, review the route, and confirm your payment from one simple interface.",
   applicationName: "Intent Pay",
 };
 

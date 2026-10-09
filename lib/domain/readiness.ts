@@ -215,7 +215,7 @@ export function computeReadiness(input: ReadinessInput): Readiness {
     };
   }
 
-  // 9. The wallet must be able to cover the network fee (MON), unless sponsored.
+  // 9. The wallet must be able to cover the network fee (MON).
   if (gasSufficiency.status === "insufficient") {
     return {
       ready: false,

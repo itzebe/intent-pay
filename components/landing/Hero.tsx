@@ -23,10 +23,10 @@ export function Hero({ onTry }: { onTry: () => void }) {
         transition={{ duration: 0.5, delay: 0.05 }}
         className="text-balance text-4xl font-semibold leading-[1.05] tracking-tight text-white sm:text-6xl"
       >
-        Pay in what you have.
+        Tell Intent Pay what you want to pay.
         <br />
         <span className="bg-gradient-to-r from-mono-soft via-white to-accent-cyan bg-clip-text text-transparent">
-          Send what they need.
+          Review the route. Send on Monad.
         </span>
       </motion.h1>
 
@@ -36,8 +36,8 @@ export function Hero({ onTry }: { onTry: () => void }) {
         transition={{ duration: 0.5, delay: 0.12 }}
         className="mx-auto mt-5 max-w-xl text-pretty text-base leading-relaxed text-white/55 sm:text-lg"
       >
-        Choose what the recipient should receive. We handle the token conversion and the
-        transaction details underneath.
+        Turn a payment intent into a clear, reviewable onchain transaction. Explore supported
+        tokens, compare available routes, and confirm your payment from one simple interface.
       </motion.p>
 
       <motion.div
@@ -58,9 +58,11 @@ export function Hero({ onTry }: { onTry: () => void }) {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
-        className="mt-4 text-xs text-white/35"
+        className="mx-auto mt-4 max-w-lg text-xs text-white/35"
       >
-        Pay with USDT. They receive SOL. No swaps to think about.
+        You state the recipient, the amount and the token they should receive. Intent Pay reads
+        your real Monad balances, finds the best available route and prepares one reviewable
+        transaction you approve in your own wallet.
       </motion.p>
     </section>
   );
@@ -70,8 +72,8 @@ export function Hero({ onTry }: { onTry: () => void }) {
 export function HowItWorks() {
   const items = [
     { t: "You choose what they receive", d: "Recipient, exact amount, and token — that's your intent." },
-    { t: "We find the route", d: "The system picks the best asset you hold and the best Monad route." },
-    { t: "They get exactly that", d: "You confirm once. The recipient receives the token they need." },
+    { t: "We find the route", d: "The system picks a funded asset you hold and the best available route it can quote." },
+    { t: "You confirm once", d: "You authorize a single prepared transaction; the recipient receives the token you asked for." },
   ];
   return (
     <section id="how" className="mx-auto max-w-4xl scroll-mt-24 px-5 pt-14">

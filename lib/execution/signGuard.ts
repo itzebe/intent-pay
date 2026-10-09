@@ -6,7 +6,12 @@ import { displayKey, type CanonicalIntent } from "@/lib/domain/canonicalIntent";
 import { isQuoteStale } from "@/lib/domain/freshness";
 import { assessPriceImpact, DEFAULT_SLIPPAGE_BPS } from "@/lib/domain/protection";
 import { buildPaymentPlan, type PaymentPlan } from "./plan";
-import { resolveGasMode, type GasMode } from "./alchemy";
+
+/**
+ * How the network fee is paid. Intent Pay executes standard EOA transactions,
+ * so gas is always paid in the native asset (MON).
+ */
+export type GasMode = "native";
 
 /**
  * Signing safety pipeline.
@@ -17,12 +22,12 @@ import { resolveGasMode, type GasMode } from "./alchemy";
  *   + FRESH LIVE DATA
  *   + FRESH TRANSACTION BUILD
  *   + MATCHING INTENT VERSION
- *   + VALID PAYMASTER/GAS STATE
+ *   + VALID GAS STATE
  *
  * This module enforces it in code, not merely in the UI. Immediately before the
  * wallet is asked to sign, it:
  *   1. reads the current canonical intent and captures its version,
- *   2. fetches *fresh* balances, route/quote and gas/paymaster state,
+ *   2. fetches *fresh* balances, route/quote and gas state,
  *   3. rebuilds the transaction plan from those fresh values,
  *   4. re-reads the intent version and confirms it did not change mid-preparation,
  *   5. confirms the fresh quote is still within its freshness window,
@@ -42,7 +47,7 @@ export type FreshBalances = Balance[];
 export type FreshData = {
   balances: FreshBalances;
   quote: Quote;
-  /** Live gas-mode resolution (paymaster eligibility + wallet capability). */
+  /** Live gas-mode resolution (always native MON for the injected wallet). */
   gasMode: GasMode;
 };
 
@@ -103,42 +108,26 @@ export type SigningFetchers = {
    */
   covers?: (balances: Balance[], plan: PaymentPlan) => boolean;
   /**
-   * Re-resolve paymaster/gas eligibility against the connected wallet right
-   * now. Returns the mode the wallet can actually deliver.
+   * Resolve gas eligibility against the connected wallet right now. Gas is
+   * always paid in MON, so this always returns "native"; it stays a fetcher so
+   * the guard re-checks it live rather than trusting a captured value.
    */
   resolveGas: () => Promise<GasMode>;
   /**
-   * The live MON price and a current gas estimate, used to check the wallet can
-   * still pay the fee in MON when sponsorship is unavailable. Optional: when
-   * absent we do not fabricate a fee.
+   * The live gas estimate, used to check the wallet can still pay the network
+   * fee in MON. Optional: when absent we do not fabricate a fee.
    */
   readGas?: () => Promise<{ gasLimit?: bigint; gasPriceWei?: bigint }>;
   /** The canonical intent as it stands *now* (re-read after fetching). */
   readIntent: () => CanonicalIntent;
   /**
    * The wallet account as it stands *now*. If it differs from the account the
-   * payment was prepared for, the signature is aborted: balances, allowances,
-   * smart-account state and the paymaster payload all belong to the old account.
+   * payment was prepared for, the signature is aborted: balances, allowances
+   * and gas state all belong to the old account.
    */
   readAccount: () => Address | undefined;
   /** Injectable clock for deterministic staleness tests. */
   now?: () => number;
-  /**
-   * Optional: the live ERC-20 gas payment state, re-resolved against the wallet
-   * right now. When gas is paid in a token, the guard verifies the wallet can
-   * actually cover the fee in that token before allowing a signature — losing
-   * the token balance between review and signing must block, exactly as losing
-   * MON does on the native path.
-   */
-  readGasPayment?: () => Promise<{
-    mode: GasMode;
-    /** The gas token that will be charged. */
-    gasToken?: { address: string; decimals: number; symbol: string };
-    /** The wallet's balance of the gas token, base units. */
-    gasTokenBalance?: bigint;
-    /** The estimated fee in the gas token, base units. */
-    gasEstimate?: bigint;
-  }>;
 };
 
 export type SigningPlan = {
@@ -173,7 +162,6 @@ export type SigningAbortReason =
   | "intent_mismatch"
   | "insufficient_balance"
   | "insufficient_gas"
-  | "insufficient_gas_token"
   | "account_changed"
   | "price_impact"
   | "unprotected"
@@ -186,9 +174,7 @@ const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
   quote_stale: "The price moved. We refreshed it — review the new price and confirm again.",
   intent_mismatch: "The prepared transaction no longer matches your request. Please review it again.",
   insufficient_balance: "Your balance changed and no longer covers this payment. Review it again.",
-  insufficient_gas: "Gas can no longer be sponsored and your wallet doesn't hold enough MON for the fee. Review the payment again.",
-  insufficient_gas_token:
-    "Your balance of the gas token no longer covers the network fee. Review the payment again.",
+  insufficient_gas: "Your wallet doesn't hold enough MON to cover the network fee. Review the payment again.",
   account_changed: "Your wallet account changed. Balances and gas were rebuilt for the new account — review and confirm again.",
   price_impact:
     "This route's price impact is too high to execute safely. Slippage is never widened to force it — choose a different amount or payment asset.",
@@ -273,8 +259,8 @@ export async function prepareSigning(
   }
 
   // The wallet account must be the one this payment was prepared for. A switch
-  // mid-preparation invalidates balances, allowances, smart-account state and
-  // the paymaster payload — so it aborts rather than signs for the wrong account.
+  // mid-preparation invalidates balances, allowances and gas state — so it
+  // aborts rather than signs for the wrong account.
   const account = fetchers.readAccount();
   if (!account || account.toLowerCase() !== ctx.sender.toLowerCase()) {
     return block("account_changed", current.version);
@@ -319,31 +305,18 @@ export async function prepareSigning(
     : coversBalance(balances, quote);
   if (!covered) return block("insufficient_balance", current.version);
 
-  // 7. Paymaster/gas eligibility is resolved live, against the connected wallet.
+  // 7. Gas eligibility is resolved live: the fee is always paid in MON.
   const gasMode = await fetchers.resolveGas();
 
-  // 8. The wallet must still be able to pay the fee. On the native path that is
-  // MON; on the ERC-20 path it is the gas token, and its balance must still
-  // cover the fee. Losing the ability to pay between review and signing blocks —
-  // we never widen anything to force the transaction through.
+  // 8. The wallet must still be able to pay the network fee in MON. Losing the
+  // ability to cover the fee between review and signing blocks — we never widen
+  // anything to force the transaction through.
   if (gasMode === "native") {
     const gas = fetchers.readGas
       ? await fetchers.readGas().catch(() => ({ gasLimit: undefined, gasPriceWei: undefined }))
       : {};
     if (!coversGas(balances, gas.gasLimit, gas.gasPriceWei)) {
       return block("insufficient_gas", current.version);
-    }
-  } else if (gasMode === "erc20" && fetchers.readGasPayment) {
-    const gp = await fetchers.readGasPayment().catch(() => null);
-    if (gp && gp.mode === "erc20" && gp.gasEstimate !== undefined) {
-      if (!coversGasToken(gp.gasTokenBalance, gp.gasEstimate)) {
-        return block("insufficient_gas_token", current.version);
-      }
-    }
-    // If the live probe no longer reports an ERC-20 path, we do not silently
-    // fall back to MON gas here — the caller re-resolves the mode and rebuilds.
-    if (gp && gp.mode !== "erc20") {
-      return block("insufficient_gas_token", current.version);
     }
   }
 
@@ -423,17 +396,6 @@ export function coversGas(
 }
 
 /**
- * True when the wallet holds enough of the ERC-20 gas token to cover the fee.
- * Unknown inputs (no balance, no estimate) do not block — we never fabricate a
- * fee. A known-but-insufficient balance blocks.
- */
-export function coversGasToken(balance: bigint | undefined, estimate: bigint | undefined): boolean {
-  if (balance === undefined || estimate === undefined) return true;
-  if (estimate <= 0n) return true;
-  return balance >= estimate;
-}
-
-/**
  * Confirm a quote describes exactly the intent it is about to execute. Checks
  * the recipient, both tokens, the amount semantics and the network — the
  * parameters that decide where money goes and how much.
@@ -510,5 +472,4 @@ function bigIntReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
 
-export { resolveGasMode };
 export type { MonadNetwork };

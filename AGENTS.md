@@ -87,20 +87,12 @@ whether they are configured. `.env.example` documents every key.
 - **Uniswap** — `lib/providers/uniswapV3.ts` is the live routing engine
   (exact-output, pool discovery, all fee tiers). Do not replace it; the
   optimizer and quote layer call through `getRoutingProvider`.
-- **Alchemy** — `lib/server/gasCapabilities.ts` (server) and
-  `lib/execution/alchemy.ts` (client). Provides Alchemy RPC transport, and,
-  when `ALCHEMY_API_KEY` + `ALCHEMY_GAS_POLICY_ID` are set, EIP-5792
-  `wallet_sendCalls` batching with optional gas sponsorship / ERC-20 gas.
-  `getWalletCapabilities` asks the user's own wallet what it supports; when it
-  does not, execution falls back to sequential MON-gas txs. Never claim
-  sponsorship that isn't configured. The integration strip and review screen
-  label the *sub-capabilities* honestly: node, ERC-4337 Bundler and Gas Manager
-  are probed separately (`lib/server/diagnostics.ts`), a policy past its window
-  (`ALCHEMY_GAS_POLICY_START_UNIX`/`_END_UNIX`) reads as "expired" rather than
-  active, and `ALCHEMY_PAYMASTER_TOKENS` (a comma list of addresses) is the only
-  thing that lets the app name a *specific* gas-abstracted pay asset. A bare
-  policy id is not proof of sponsorship: `walletAbstraction.available` in
-  `/api/capabilities` requires node + Bundler reachability *and* a usable policy.
+- **Alchemy** — RPC transport only (`lib/server/diagnostics.ts` probes the
+  node; `lib/config/chains.ts` builds the browser RPC URL). Alchemy is **not**
+  used to sponsor or abstract gas: the standard EOA path always pays the network
+  fee in MON. The integration strip reports node reachability, and the
+  configured market-price source, honestly. There is no paymaster, bundler,
+  UserOperation or EIP-7702 code in the repository.
 - **Zerion** — `lib/server/zerion.ts`. HTTP Basic auth (key as username, empty
   password) against `https://api.zerion.io`; supplies wallet asset discovery and
   USD valuation. Balances that get spent are still confirmed on-chain
@@ -260,27 +252,19 @@ NL parser is ticker-only, so "Send 10 USD Coin" still asks which asset — that 
 acceptable because it never guesses and never asks for an address; do not
 loosen the parser to treat a multi-word name as a ticker.
 
-## Paymaster honesty (ERC-20 provider *is* a paymaster)
+## Gas is always paid in MON (no abstraction)
 
-An ERC-20 gas provider (Pimlico) is a paymaster in its own right — a wallet
-with 0 MON pays the fee in a token. `resolveAbstraction`
-(`lib/domain/abstraction.ts`) takes `erc20ProviderConfigured` /
-`erc20ProviderAvailable` / `erc20ProviderReason`; when the provider is
-configured the app must **never** say "no paymaster is configured". The
-`/api/capabilities` `walletAbstraction.available` is true when *either* the
-Alchemy node+Bundler+usable-policy path *or* a reachable ERC-20 provider
-exists, and its `reason` names the ERC-20 provider explicitly when that is the
-one configured but down. `usePayment.tsx` feeds the `gasPayment.*` capability
-fields into `resolveAbstraction`.
+Intent Pay executes through the user's own injected wallet (an EOA). The
+network fee is **always** paid in native MON. There is no paymaster, bundler,
+UserOperation, EIP-7702 authorization or ERC-20-gas path in the codebase — that
+infrastructure was removed. `lib/domain/sourceSelection.ts` (`selectSource`,
+`gasCovered`) and `lib/execution/signGuard.ts` therefore treat MON coverage as a
+hard requirement: a wallet with no MON to cover the fee is blocked with an
+explicit reason, never silently routed through a sponsorship path that does not
+exist. `GasMode` is the single member `"native"`.
 
-The provider configuration can also be **unknown**: `/api/capabilities` may not
-have answered yet (first paint) or may have failed. `usePayment.tsx` passes
-`providersKnown: false` in that case (`capabilities === null` or the degraded
-`unavailable` fallback from `useCapabilities`), and `resolveAbstraction` then
-says "Checking whether gas can be paid without MON…" instead of the false "no
-paymaster is configured". `IntegrationStack` renders nothing when capabilities
-are degraded, so it can't show a configured provider as "Off / add a key".
-Never assert absence of a paymaster from missing data.
+Do not reintroduce a "gasless" claim or a sponsorship badge. If a wallet holds
+no MON, say so plainly and name the real blocker.
 
 ## Execution protection (MEV / sandwich)
 
@@ -337,8 +321,8 @@ asset is decided separately and never inferred from the recipient's asset.
   the best executable + sufficient option (live cost order) → honest failure
   codes (`no_balances`, `none_executable`, `explicit_unusable`).
 - Gas is a hard constraint: with native gas and no MON reserve the engine
-  refuses every option (`gasCovered`); a configured paymaster that really
-  sponsors gas lifts it.
+  refuses every option (`gasCovered`). There is no sponsorship path that lifts
+  it.
 - `pending` is a distinct state — while the optimizer is still loading
   (balances present, no options yet) the engine says "Finding…", it never emits
   a false "none of your holdings is enough".
@@ -402,86 +386,6 @@ the payment runs as **two protected legs**:
 - Native MON is never used to cover a shortfall (reserved for gas), and a split
   is only taken when `flow.partial.covered` is true — otherwise the normal or
   insufficient path runs unchanged.
-
-## ERC-20 gas payment (EIP-7702 + paymaster)
-
-A wallet holding USDC/USDT but **0 MON** can pay the network fee in a token it
-already holds, through an EIP-7702 smart account that keeps the **same EOA
-address** (no migration, no new wallet).
-
-- **Provider is authoritative.** `lib/server/paymaster/*` (Pimlico today) is the
-  *only* thing that declares an ERC-20 usable for gas. The supported-token list
-  is discovered live via `pimlico_getSupportedTokens`; nothing hardcodes it.
-  A discovery failure is `{ ok: false }` — never confused with an empty list
-  (`normalizeSupportedTokens`). Tokens are matched by **chainId + address**,
-  never by symbol.
-- **The key never reaches the browser.** `lib/server/paymaster/pimlico.ts` holds
-  it; the browser talks to the same-origin proxied `app/api/aa/rpc` (bundler,
-  allowlisted methods) and `app/api/aa/paymaster` (ERC-20 paymaster data).
-  `lib/aa/endpoint.ts` returns `/api/aa/rpc` in the browser, Pimlico directly on
-  the server.
-- **Selection is deterministic** (`lib/aa/gasToken.ts`, pure): supported ∩ held ∩
-  sufficient balance ∩ quotable, ranked by USD cost with conversion-free and
-  stablecoin tie-breaks. The same rules run server-side
-  (`lib/server/paymaster/selector.ts`) and in tests.
-- **Capability is not a boolean** (`lib/aa/capability.ts`): `ERC20_PAYMASTER` /
-  `NATIVE` / `UNAVAILABLE` plus a specific `code`
-  (`provider_unavailable|provider_error|wallet_incompatible|token_unsupported|`
-  `insufficient_balance|quote_unavailable|native_required`). The UI shows "gas in
-  X" only when a token was really selected from live data.
-- **Execution is a genuinely different path** (`lib/aa/execution.ts`): the plan's
-  steps run as one atomic UserOperation through a viem `toSimple7702SmartAccount`
-  account (EntryPoint v0.8, `SIMPLE_7702_IMPLEMENTATION`), with the paymaster
-  settling gas in the chosen token during postOp. An EOA tx cannot carry a
-  paymaster, so this is not a relabelling.
-- **Bounded spend** (`lib/aa/safety.ts`): the fee is bounded by the quoted cost
-  (+20% buffer), by half the balance, and never `uint256.max`.
-- **Ownership of the protection layer is unchanged.** The AA path reuses the
-  same plan (`amountOutMinimum`/`amountInMaximum`), so an ERC-20-gas payment is
-  covered by exactly the same slippage/price-impact/freshness guards; delivery is
-  verified from the UserOperation receipt logs via `verifyDeliveryFromLogs`
-  (native delivery cannot be proven from logs alone — reported unverified).
-- The signing guard treats the gas asset as execution-relevant: changing the gas
-  token bumps the intent version (`canonicalIntent`), and `prepareSigning`'s
-  `readGasPayment` re-verifies the gas-token balance still covers the fee before
-  a signature (`insufficient_gas_token`).
-- `PIMLICO_API_KEY` / `PIMLICO_CHAIN_ID` in `.env.example`. Unconfigured ⇒ honest
-  fallback to MON gas; `/api/capabilities.gasPayment` and
-  `IntegrationStack` report configured/unreachable/tokens separately.
-- **UserOperation allow-list (`lib/aa/userOp.ts`).** viem hands the paymaster
-  capability a parameter bag mixing the UserOperation with transport-only keys
-  (`chainId`, `entryPointAddress`, `context`). Pimlico validates strictly and
-  rejects unknown keys ("Unrecognized keys … at params[0].userOp"), which fails
-  the whole ERC-20 path. Both the client (`serializeUserOperation`) and the
-  `/api/aa/paymaster` proxy run `filterUserOperation` so only real fields are
-  forwarded.
-- **Live facts (Monad mainnet 143, verified via the Pimlico prototype RPC).**
-  Paymaster `0x888888888888Ec68A58AB8094Cc1AD20Ba3D2402`; supported gas tokens
-  are **USDC** (`0x754704Bc059F8C67012fEd69BC8A327a5aafb603`) and **WMON**
-  (`0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A`) only — **USDT is not
-  supported**. `pimlico_getTokenQuotes` returns `exchangeRate`/`postOpGas`, so
-  the cost formula is real, not fabricated. `tests/aaLiveVerify.test.ts`
-  (gated on `AA_LIVE_TESTS=1` or `MONAD_LIVE_TESTS=1`) asserts this read-only.
-- **Bounded ERC-20 gas approval (`lib/aa/gasApproval.ts`).** Pimlico's ERC-20
-  paymaster recovers the fee with `transferFrom` in postOp, so the
-  UserOperation must `approve(paymaster, ≥ maxCostInToken)` *before* the payment
-  calls. `executePlanViaAa` fetches the live quote (`GET /api/aa/paymaster`),
-  prepares the op, and prepends an `approve` bounded by
-  `boundGasSpend` (≤ half the balance, ≤ a configured ceiling, never
-  `type(uint256).max`). The bound uses the exact prepared gas fields, so the
-  allowance is the **minimum** the live quote requires — never unlimited. The
-  approval only ever touches the *gas* token; the payment source asset is a
-  separate concern and is never approved.
-- **postOp reverts, it does not silently underpay.** If the allowance is below
-  the fee, `postOp` reverts and the whole UserOperation is not accepted
-  (`AA50 PostOp Reverted` / `AA33`) — a fail-closed outcome. Verified against the
-  live paymaster simulation (`tests/aaLiveVerify.test.ts`).
-- **`pimlico_getTokenQuotes` `balanceSlot` is unreliable for USDC on Monad.**
-  The real `balanceOf` slot for `0x7547…b603` is **9** (confirmed against live
-  holders via `eth_getStorageAt`), but the provider reports `10`. Slots are only
-  ever used for local simulation overrides, never for execution, so this is a
-  diagnostics caveat rather than an execution risk — do not rely on the reported
-  slot for anything that touches funds.
 
 ## Testing the flow
 

@@ -6,7 +6,6 @@ import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ERC20_ABI, SWAP_ROUTER_ABI, WNATIVE_ABI } from "./abis";
 import { encodePath } from "./path";
-import { sendCalls, waitForCalls } from "./alchemy";
 import type { PaymentPlan, PlanStep } from "./plan";
 import { UNISWAP, WMON_ADDRESS } from "@/lib/providers/constants";
 
@@ -35,15 +34,13 @@ export class ExecutionError extends Error {
    * `rejected`/`reverted` happened before any submission completed;
    * `submitted` means a transaction was sent but its outcome is unresolved or
    * unsuccessful — the caller must NOT retry it blindly;
-   * `authorization_failed` is a definite pre-submission failure preparing the
-   * EIP-7702 authorization (unsupported signer, rejection, invalid nonce);
    * `unknown` is any other definite pre-submission failure.
    */
-  code: "rejected" | "reverted" | "submitted" | "authorization_failed" | "unknown";
+  code: "rejected" | "reverted" | "submitted" | "unknown";
   stepId?: string;
   constructor(
     message: string,
-    code: "rejected" | "reverted" | "submitted" | "authorization_failed" | "unknown",
+    code: "rejected" | "reverted" | "submitted" | "unknown",
     stepId?: string,
   ) {
     super(message);
@@ -370,101 +367,6 @@ export async function executePlan(
         hash,
         error: "Confirmation timed out",
       });
-    }
-  }
-
-  return { primaryHash, results };
-}
-
-/**
- * Batched execution via the wallet's EIP-5792 `wallet_sendCalls`, optionally
- * with Alchemy gas sponsorship. All steps go out as one atomic batch, so the
- * user approves once instead of N times. The primary hash is the receipt of the
- * step that represents the payment.
- *
- * Only called when the wallet advertises the capability; the caller falls back
- * to `executePlan` otherwise.
- */
-export async function executePlanBatched(
-  plan: PaymentPlan,
-  provider: { request: (args: { method: string; params?: unknown[] | object }) => Promise<unknown> },
-  sender: Address,
-  chainId: number,
-  network: MonadNetwork,
-  opts: { paymasterServiceUrl?: string; paymasterContext?: Record<string, unknown>; erc20GasPayment?: boolean } = {},
-  callbacks: ExecuteCallbacks = {},
-): Promise<{ primaryHash?: Hash; results: StepResult[] }> {
-  if (!plan.executable) {
-    throw new ExecutionError("This payment has no executable on-chain route.", "unknown");
-  }
-  const client = getClientPublicClient(network);
-  const results: StepResult[] = [];
-  const calls = plan.steps.map((s) => ({ step: s, call: encodeStep(s) }));
-
-  plan.steps.forEach((s) => callbacks.onStep?.({ stepId: s.id, label: s.label, status: "pending" }));
-
-  let batchId: string;
-  try {
-    batchId = await sendCalls(provider, {
-      from: sender,
-      chainId,
-      calls: calls.map((c) => c.call),
-      paymasterServiceUrl: opts.paymasterServiceUrl,
-      paymasterContext: opts.paymasterContext,
-      erc20GasPayment: opts.erc20GasPayment,
-    });
-  } catch (err) {
-    plan.steps.forEach((s) =>
-      callbacks.onStep?.({
-        stepId: s.id,
-        label: s.label,
-        status: "failed",
-        error: (err as Error)?.message,
-      }),
-    );
-    const rejected = isUserRejection(err);
-    throw new ExecutionError(
-      rejected ? "You rejected the transaction." : "The batch could not be submitted.",
-      rejected ? "rejected" : "unknown",
-    );
-  }
-
-  plan.steps.forEach((s) => callbacks.onStep?.({ stepId: s.id, label: s.label, status: "submitted" }));
-
-  const status = await waitForCalls(provider, batchId);
-  const failed = status.status !== "confirmed";
-  const receiptHashes: Hash[] = (status.receipts ?? [])
-    .map((r) => r.transactionHash)
-    .filter((h): h is Hash => Boolean(h));
-
-  let primaryHash: Hash | undefined = status.hash;
-  calls.forEach((c, i) => {
-    const hash = receiptHashes[i] ?? (c.step.id === plan.primaryStepId ? status.hash : undefined);
-    results.push({
-      stepId: c.step.id,
-      label: c.step.label,
-      status: failed ? "failed" : "confirmed",
-      hash,
-      error: failed ? "Batch did not confirm" : undefined,
-    });
-    callbacks.onStep?.(results[results.length - 1]);
-    if (c.step.id === plan.primaryStepId) primaryHash = hash ?? primaryHash;
-  });
-
-  if (failed) {
-    throw new ExecutionError("The payment did not confirm on Monad.", "submitted");
-  }
-
-  // Best-effort wait for a receipt so callers can verify delivery immediately.
-  if (primaryHash) {
-    try {
-      await client.waitForTransactionReceipt({
-        hash: primaryHash,
-        confirmations: FINALITY_CONFIRMATIONS,
-        timeout: 90_000,
-      });
-    } catch {
-      /* verification handles missing receipts */
     }
   }
 

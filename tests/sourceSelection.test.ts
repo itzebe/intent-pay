@@ -28,8 +28,6 @@ function opt(symbol: string, o: Partial<SourceOption> = {}): SourceOption {
 
 const base = {
   recipientAsset: "MON",
-  gasMode: "native" as const,
-  gasAbstracted: false,
 };
 
 describe("source selection — the named asset is the recipient, not the source", () => {
@@ -126,11 +124,9 @@ describe("source selection — honest failure states", () => {
     expect(sel.blocker).toMatch(/route/i);
   });
 
-  it("never selects an asset when the network fee cannot be paid (native gas)", () => {
+  it("never selects an asset when the network fee cannot be paid (native MON gas)", () => {
     const sel = selectSource({
       recipientAsset: "MON",
-      gasMode: "native",
-      gasAbstracted: false,
       balances: [bal("USDC", "250", 250), bal("MON", "0.0001", 0.0003, true)],
       options: [opt("USDC")],
       gasRequiredMon: "0.01",
@@ -138,34 +134,10 @@ describe("source selection — honest failure states", () => {
     expect(sel.sourceAsset).toBeNull();
     expect(sel.blocker).toMatch(/MON/i);
   });
-
-  it("does not block on gas when a paymaster genuinely covers it", () => {
-    const sel = selectSource({
-      recipientAsset: "MON",
-      gasMode: "sponsored",
-      gasAbstracted: true,
-      balances: [bal("USDC", "250", 250)],
-      options: [opt("USDC")],
-      gasRequiredMon: "0.5",
-    });
-    expect(sel.sourceAsset).toBe("USDC");
-  });
 });
 
 describe("gasCovered", () => {
-  it("is true when abstracted regardless of MON", () => {
-    expect(
-      gasCovered({
-        recipientAsset: "MON",
-        gasMode: "sponsored",
-        gasAbstracted: true,
-        balances: [],
-      }),
-    ).toBe(true);
-  });
-  it("is false with no native balance under native gas", () => {
-    expect(
-      gasCovered({ recipientAsset: "MON", gasMode: "native", gasAbstracted: false, balances: [] }),
-    ).toBe(false);
+  it("is false with no native balance", () => {
+    expect(gasCovered({ recipientAsset: "MON", balances: [] })).toBe(false);
   });
 });

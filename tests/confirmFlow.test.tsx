@@ -431,4 +431,114 @@ describe("confirmation flow", () => {
     expect(screen.getByText(/Review payment/)).toBeTruthy();
     expect(screen.getByText("Refreshing price…")).toBeTruthy();
   });
+
+  it("does NOT disappear after the wrap/approval step while the swap is still pending (MON → USDT)", async () => {
+    // The reported MON→USDT symptom: the composer vanished right after the
+    // wrap/approval. Cause: a mid-execution quote re-price (the quote clears and
+    // the intent version bumps) unmounted the whole Review/executing subtree —
+    // and the composer only rendered while a quote was held. Here the payment is
+    // mid-flight and the quote clears underneath it; the composer must stay
+    // mounted showing the in-progress steps, and must never fall back to the
+    // composer's Review CTA.
+    baseFlow({ walletCaps: { atomicBatch: true, paymasterService: false, erc20GasPayment: false } });
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "swap",
+        slippageBps: 50,
+        steps: [
+          { id: "wrap", kind: "wrap", label: "Wrap MON for the route", amount: 20_520_000_000_000_000_000n },
+          {
+            id: "approve",
+            kind: "approve",
+            label: "Approve up to 20.52 MON for the route",
+            token: { address: "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A", symbol: "WMON" },
+            spender: "0xfE31F71C1b106EAc32F1A19239c9a9A72ddfb900",
+            amount: 20_520_000_000_000_000_000n,
+          },
+          {
+            id: "swap",
+            kind: "swap",
+            direction: "exact_in",
+            label: "Convert MON → USDT",
+            tokens: ["0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A", "0xe7cd86e13AC4309349F30B3435a9d337750fC82D"],
+            fees: [3000],
+            amountIn: 20_520_000_000_000_000_000n,
+            limit: 490_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "0.5" },
+      receiveToken: "USDT",
+      expectedReceive: "0.5",
+      partial: false,
+      gasMode: "native",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    // The batch is still confirming the swap when the quote re-prices underneath.
+    let resolveBatch: (v: any) => void = () => {};
+    executePlanBatched.mockImplementation(async (_p: any, _pr: any, _s: any, _c: any, _n: any, _o: any, cb: any) => {
+      // Wrap landed; approve submitted; swap still pending — the moment the
+      // reported composer-disappearance occurred.
+      cb?.onStep?.({ stepId: "wrap", label: "Wrap MON for the route", status: "confirmed", hash: "0x1" });
+      cb?.onStep?.({ stepId: "approve", label: "Approve up to 20.52 MON for the route", status: "confirmed", hash: "0x2" });
+      cb?.onStep?.({ stepId: "swap", label: "Convert MON → USDT", status: "submitted", hash: "0x3" });
+      return new Promise((resolve) => {
+        resolveBatch = resolve;
+      });
+    });
+
+    const { rerender } = renderComposer();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+
+    // In-flight: the "Waiting for confirmation…" surface is mounted.
+    expect(screen.getByText(/Waiting for confirmation/i)).toBeTruthy();
+
+    // Mid-flight the quote clears and the intent version bumps (an engine
+    // re-price). Previously this unmounted the composer entirely.
+    flow.quote = null;
+    flow.quoteVersion = 0;
+    flow.quoting = false;
+    flow.intent = reduceIntent(flow.intent, {
+      payToken: "MON",
+      receiveToken: "USDT",
+      receiveAmount: "0.5",
+    });
+    await act(async () => {
+      rerender(<PaymentComposer networkLabel="Monad" />);
+    });
+
+    // The composer did not disappear: the in-flight payment is still visible and
+    // we are NOT back at the composer's Review CTA.
+    expect(screen.getByText(/Waiting for confirmation/i)).toBeTruthy();
+    expect(screen.queryByText("Review Payment")).toBeNull();
+
+    // The swap fails after the wrap/approval (the reported moment). The catch
+    // returns to Review — but the quote has been cleared by the re-price above,
+    // so the pre-fix `stage === "review" && flow.quote` gate would render
+    // NOTHING ("the payment composer disappeared"). The retained last quote must
+    // keep Review mounted with a recoverable error.
+    const { ExecutionError } = await vi.importActual<any>("@/lib/execution/execute");
+    await act(async () => {
+      resolveBatch(Promise.reject(new ExecutionError("The payment did not confirm on Monad.", "submitted")));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Still on Review, not blank, not back at the composer CTA.
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    expect(screen.getByText(/Review payment/)).toBeTruthy();
+    expect(screen.getByText(/did not confirm/i)).toBeTruthy();
+  });
 });

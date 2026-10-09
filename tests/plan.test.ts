@@ -76,6 +76,55 @@ describe("buildPaymentPlan", () => {
       "Convert USDT → USDC",
     ]);
   });
+
+  it("builds wrap + approve + swap for a native MON → USDT payment", () => {
+    // Native MON cannot enter a pool directly: it is wrapped to WMON, the WMON
+    // is approved to the router, then the swap runs. This is the exact three-step
+    // sequence a real Monad payment performs, so a mid-sequence loss must be
+    // recoverable. The recipient is a plain address (single-sig), so the composer
+    // — which holds Review open through the whole attempt — must not disappear.
+    const MON = getToken("MON")!;
+    const USDT = getToken("USDT")!;
+    const q = quote({
+      payToken: MON,
+      receiveToken: USDT,
+      payAmount: "20.52",
+      receiveAmount: "0.5",
+      exactOutput: false,
+      route: {
+        kind: "swap",
+        hops: [
+          {
+            fromSymbol: "MON",
+            toSymbol: "USDT",
+            fee: 3000,
+            pool: "0x0000000000000000000000000000000000000002",
+          },
+        ],
+        path: ["MON", "USDT"],
+        tokens: [MON, USDT],
+      },
+    });
+    const plan = buildPaymentPlan(q, SENDER, RECIPIENT);
+    expect(plan.executable).toBe(true);
+    expect(plan.steps.map((s) => s.kind)).toEqual(["wrap", "approve", "swap"]);
+    expect(describePlan(plan)).toEqual([
+      "Wrap MON for the route",
+      "Approve 20.52 MON for the route",
+      "Convert MON → USDT",
+    ]);
+    // The approval targets WMON (never native MON) and the swap pools through
+    // the wrapped address, so the wrap really provides the swap's input.
+    const approve: any = plan.steps.find((s) => s.kind === "approve");
+    expect(approve.token.symbol).toBe("WMON");
+    const swap: any = plan.steps.find((s) => s.kind === "swap");
+    expect(swap.tokens[0]).toBe("0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A"); // WMON
+    expect(swap.tokens[1]).toBe(USDT.address);
+    // The swap delivers straight to the recipient (the output is not native).
+    expect(swap.recipient).toBe(RECIPIENT);
+    // Every swap still carries its real on-chain bound.
+    expect(planHasOutputBound(plan)).toBe(true);
+  });
 });
 
 describe("partial-balance split plan", () => {

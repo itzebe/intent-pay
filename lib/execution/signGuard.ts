@@ -6,6 +6,7 @@ import { displayKey, type CanonicalIntent } from "@/lib/domain/canonicalIntent";
 import { isQuoteStale } from "@/lib/domain/freshness";
 import { assessPriceImpact, DEFAULT_SLIPPAGE_BPS } from "@/lib/domain/protection";
 import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
+import { INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "@/lib/domain/transactionError";
 import { buildPaymentPlan, type PaymentPlan } from "./plan";
 
 /**
@@ -175,8 +176,7 @@ const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
   quote_stale: "The price moved. We refreshed it — review the new price and confirm again.",
   intent_mismatch: "The prepared transaction no longer matches your request. Please review it again.",
   insufficient_balance: "Your balance changed and no longer covers this payment. Review it again.",
-  insufficient_gas:
-    "Your wallet doesn't hold enough MON to cover the network fees. A swap payment is several on-chain transactions and needs the total fee for all of them. Add MON and try again.",
+  insufficient_gas: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
   account_changed: "Your wallet account changed. Balances and gas were rebuilt for the new account — review and confirm again.",
   price_impact:
     "This route's price impact is too high to execute safely. Slippage is never widened to force it — choose a different amount or payment asset.",

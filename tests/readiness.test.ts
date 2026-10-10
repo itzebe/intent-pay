@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeReadiness, isPaymentReady, type ReadinessInput } from "@/lib/domain/readiness";
+import { INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "@/lib/domain/transactionError";
 
 const RECIPIENT = "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4";
 
@@ -85,6 +86,34 @@ describe("payment readiness gate", () => {
     expect(
       computeReadiness(readyInput({ gasSufficiency: { status: "insufficient", requiredMon: "0.1" } })).code,
     ).toBe("insufficient_gas");
+  });
+
+  /**
+   * Every genuine fee shortfall must speak with one voice. A plan-wide gas
+   * shortfall (e.g. a multi-step swap that needs MON for several transactions)
+   * used to render a *different*, detail-bearing message than the single-step
+   * fee shortfall — exactly the drift the owner flagged. Both branches must now
+   * return the one canonical message.
+   */
+  it("uses the single canonical message for every fee-shortfall branch", () => {
+    const singleStep = computeReadiness(
+      readyInput({
+        payToken: "MON",
+        receiveToken: "MON",
+        sufficiency: { status: "insufficient", required: "0.3958", available: "0.397", cause: "fees" },
+        gasSufficiency: { status: "ok", requiredMon: "0.0025" },
+      }),
+    );
+    const planWide = computeReadiness(
+      readyInput({ gasSufficiency: { status: "insufficient", requiredMon: "0.018" } }),
+    );
+
+    expect(singleStep.code).toBe("insufficient_gas");
+    expect(planWide.code).toBe("insufficient_gas");
+    expect(singleStep.message).toBe(INSUFFICIENT_MON_FOR_FEES_MESSAGE);
+    expect(planWide.message).toBe(INSUFFICIENT_MON_FOR_FEES_MESSAGE);
+    // The old plan-wide copy leaked a specific fee figure; it must be gone.
+    expect(planWide.message).not.toMatch(/in total for gas|needs about/i);
   });
 
   it("lets a shortfall proceed only when a funded source covers it (partial split)", () => {

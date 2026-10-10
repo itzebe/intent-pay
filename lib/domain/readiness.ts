@@ -1,4 +1,5 @@
 import { isEvmAddress } from "@/lib/format";
+import { INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "./transactionError";
 
 /**
  * Deterministic payment-readiness gate.
@@ -227,7 +228,7 @@ export function computeReadiness(input: ReadinessInput): Readiness {
         ready: false,
         code: "insufficient_gas",
         cta: "Not enough MON for network fee",
-        message: `Insufficient MON for network fees. Your balance covers the transfer amount, but you also need enough MON to cover the transaction fee.`,
+        message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
         severity: "error",
       };
     }
@@ -248,7 +249,11 @@ export function computeReadiness(input: ReadinessInput): Readiness {
       ready: false,
       code: "insufficient_gas",
       cta: "Not enough MON for network fee",
-      message: `Insufficient MON for network fees. This payment is several on-chain transactions and needs about ${gasSufficiency.requiredMon ?? "some"} MON in total for gas. Add MON and try again.`,
+      // The same single approved message as every other fee shortfall. The
+      // exact required MON is still computed in `gasSufficiency.requiredMon`
+      // for diagnostics, but it is never surfaced as a second, conflicting
+      // message: one shortfall, one explanation.
+      message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
       severity: "error",
     };
   }

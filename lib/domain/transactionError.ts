@@ -55,7 +55,10 @@ export const INSUFFICIENT_MON_FOR_FEES_MESSAGE =
  * Substitute an established fee-shortfall message into a readiness result
  * *without* changing its `code`. The readiness gate (and the Confirm button it
  * drives) must keep treating this as `insufficient_gas`; only the copy the user
- * reads changes. A result that is not a fee shortfall is returned untouched.
+ * reads changes. The canonical signal is `code === "insufficient_gas"`; both
+ * readiness branches that can yield it already carry the canonical message, and
+ * `isFeeShortfall` lets a caller with the raw balance checks reach the same
+ * conclusion. A result that is not a fee shortfall is returned untouched.
  */
 export function withFeeShortfallMessage<T extends { ready: boolean; code: string; message?: string }>(
   readiness: T,

@@ -442,15 +442,22 @@ enough MON for the transfer amount but not for the amount *plus* its required
 maximum gas fee. It is deliberately distinct from a generic "Transaction error"
 and prints no fee figure (so it can never be a misleading estimate).
 
-It is reached by exactly two established paths and nothing else:
+It is reached by exactly three established paths and nothing else:
 
 - `classifyTransactionError` for a thrown `insufficient funds for gas …` — kind
   `insufficient_gas`.
 - `computeReadiness` when the composer's `sufficiency.cause === "fees"`
   (`lib/hooks/usePayment.tsx` sets it only when the native balance covers the
-  amount but not the amount + `quoteGasReserveWei`). `withFeeShortfallMessage`
-  swaps the copy onto the readiness result **without changing its `code`** — the
-  gate stays `insufficient_gas` and Confirm stays blocked.
+  amount but not the amount + `quoteGasReserveWei`).
+- `computeReadiness` when `gasSufficiency.status === "insufficient"` — the
+  plan-wide fee shortfall (a swap is several transactions).
+
+All three return `INSUFFICIENT_MON_FOR_FEES_MESSAGE` verbatim; `signGuard`'s
+`insufficient_gas` blocked message and `readiness` both import the constant, so
+the copies cannot drift. `withFeeShortfallMessage` swaps the same copy onto a
+readiness result **without changing its `code`** — the gate stays
+`insufficient_gas` and Confirm stays blocked. A `requiredMon` figure is never
+printed inside the message (one shortfall, one explanation).
 
 `sufficiency.cause === "amount"` (the balance cannot cover the transfer amount
 itself) is an ordinary `insufficient_balance` and must never show this message.

@@ -185,9 +185,10 @@ describe("balance vs gas sufficiency is classified precisely", () => {
     const r = computeReadiness(ready({ gasSufficiency: { status: "insufficient", requiredMon: "0.02" } }));
     expect(r.ready).toBe(false);
     expect(r.code).toBe("insufficient_gas");
-    expect(r.message).toMatch(/MON/);
-    expect(r.message).toMatch(/network fee/i);
-    expect(r.message).toMatch(/several on-chain transactions/i);
+    // The one canonical fee-shortfall message — not a second, detail-bearing
+    // variant that leaked the required MON figure.
+    expect(r.message).toBe(INSUFFICIENT_MON_FOR_FEES_MESSAGE);
+    expect(r.message).not.toMatch(/several on-chain transactions|needs about|in total for gas/i);
   });
 
   it("covers both the payment and the gas → ready", () => {

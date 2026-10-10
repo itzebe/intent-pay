@@ -8,6 +8,7 @@ import {
   type SigningFetchers,
 } from "@/lib/execution/signGuard";
 import { buildPaymentPlan } from "@/lib/execution/plan";
+import { INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "@/lib/domain/transactionError";
 import { createLatestGuard } from "@/lib/domain/latest";
 import { getToken } from "@/lib/config/tokens";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
@@ -217,7 +218,12 @@ describe("signing safety pipeline — the invariant", () => {
       }),
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toBe("insufficient_gas");
+    if (!result.ok) {
+      expect(result.reason).toBe("insufficient_gas");
+      // The guard must not invent its own fee-shortfall copy — the same single
+      // approved message is shown wherever a fee shortfall is reported.
+      expect(result.message).toBe(INSUFFICIENT_MON_FOR_FEES_MESSAGE);
+    }
   });
 
   it("allows signing when the wallet holds enough MON for the network fee", async () => {

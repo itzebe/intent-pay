@@ -98,6 +98,11 @@ export function ReviewSheet({
       ? { value: "Unavailable", sub: "no live MON price" }
       : { value: formatGasUsd(quote.networkCostUsd), sub: "paid in MON" };
 
+  // A swap payment is several sequential transactions; the fee shown is the
+  // total the wallet must cover for every step, so we say so when there is more
+  // than one step. A single-transaction payment keeps the plain "paid in MON".
+  const gasSub = planSteps.length > 1 ? "paid in MON · all steps" : "paid in MON";
+
   // When gas could not be priced from live data the total understates the real
   // cost, so show it as a lower bound rather than a precise figure.
   const totalSenderCost =
@@ -132,7 +137,11 @@ export function ReviewSheet({
         )}
 
         {notice && (
-          <div className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-mono/30 bg-mono/[0.08] px-3 py-2 text-xs text-mono-soft">
+          <div
+            role="status"
+            aria-live="polite"
+            className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-mono/30 bg-mono/[0.08] px-3 py-2 text-xs text-mono-soft"
+          >
             <Warning className="h-4 w-4 shrink-0" />
             <span>{notice}</span>
           </div>
@@ -175,7 +184,7 @@ export function ReviewSheet({
           <SummaryRow
             label="Estimated network cost"
             value={gasRow.value}
-            sub={gasRow.sub}
+            sub={quote.networkCostUsdAvailable === false ? gasRow.sub : gasSub}
           />
           <div className="hairline mt-1 pt-3">
             <SummaryRow label="Total sender cost" value={totalSenderCost} strong />
@@ -332,6 +341,8 @@ export function ReviewSheet({
         <AnimatePresence>
           {error && (
             <motion.div
+              role="alert"
+              aria-live="assertive"
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}

@@ -215,13 +215,15 @@ export function computeReadiness(input: ReadinessInput): Readiness {
     };
   }
 
-  // 9. The wallet must be able to cover the network fee (MON).
+  // 9. The wallet must be able to cover the network fee (MON). A swap payment
+  //    is several sequential transactions, so this is the *total* the plan
+  //    needs, not a single transaction's fee.
   if (gasSufficiency.status === "insufficient") {
     return {
       ready: false,
       code: "insufficient_gas",
       cta: "Not enough MON for network fee",
-      message: `This payment needs about ${gasSufficiency.requiredMon ?? "some"} MON for gas.`,
+      message: `Insufficient MON for network fees. This payment is several on-chain transactions and needs about ${gasSufficiency.requiredMon ?? "some"} MON in total for gas. Add MON and try again.`,
       severity: "error",
     };
   }

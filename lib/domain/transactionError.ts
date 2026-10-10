@@ -17,6 +17,7 @@ export type TxErrorKind =
   | "insufficient_funds" // not enough of the token being spent
   | "expired_quote" // the quote aged out; must be rebuilt
   | "no_route" // no executable route / unsupported token
+  | "slippage" // the swap could not meet the minimum output within tolerance
   | "reverted" // the transaction reverted on-chain
   | "rpc_unavailable" // the node could not be reached / timed out
   | "unknown_outcome" // submitted, but the outcome could not be established
@@ -72,6 +73,25 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
       mayHaveSubmitted: false,
     };
   }
+
+  // A swap that could not meet its on-chain minimum output (or maximum input)
+  // reverts. Getting here without the on-chain revert is usually a simulation-
+  // before-send failure, so we map it to a specific, actionable message rather
+  // than the generic "reverted". Checked before the generic revert below.
+  if (
+    /insufficient output amount|insufficient input amount|too little received|amountoutminimum|amountinmaximum|minimum received|slippage|price moved|transferhelper/i.test(
+      text,
+    )
+  ) {
+    return {
+      kind: "slippage",
+      message:
+        "The expected output could not be met within your slippage settings. Refresh the quote and review it before trying again.",
+      mayHaveSubmitted: false,
+      action: "Refresh quote",
+    };
+  }
+
   if (executionCode === "reverted" || /reverted|execution reverted/.test(text)) {
     return {
       kind: "reverted",
@@ -89,12 +109,14 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
     };
   }
 
-  // Gas: the wallet cannot cover the network fee in MON.
+  // Gas: the wallet cannot cover the network fee in MON. A swap payment is
+  // several sequential transactions, so the fee the wallet must cover is the
+  // total for all of them.
   if (/insufficient funds for gas|gas required exceeds|intrinsic gas too low|exceeds the balance/.test(text)) {
     return {
       kind: "insufficient_gas",
       message:
-        "Your wallet does not have enough MON to pay the network transaction fee. Add sufficient MON and try again.",
+        "Your wallet does not have enough MON to cover this payment's network fees. Add MON and try again.",
       mayHaveSubmitted: false,
     };
   }
@@ -116,7 +138,11 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
       action: "Refresh quote",
     };
   }
-  if (/route_unavailable|no route|no executable route|unsupported_token|unsupported token/.test(text)) {
+  if (
+    /route_unavailable|no route|no executable route|no supported liquidity route|liquidity route|unsupported_token|unsupported token/.test(
+      text,
+    )
+  ) {
     return {
       kind: "no_route",
       message:

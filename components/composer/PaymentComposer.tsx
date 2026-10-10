@@ -634,13 +634,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               {error && (
                 <motion.div
                   key="compose-error"
+                  role="alert"
+                  aria-live="assertive"
                   initial={{ opacity: 0, y: -4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   className="sm:col-span-2 flex items-start gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-xs text-amber-100"
                 >
                   <Warning className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{error}</span>
+                  <span className="min-w-0 break-words">{error}</span>
                 </motion.div>
               )}
             </AnimatePresence>

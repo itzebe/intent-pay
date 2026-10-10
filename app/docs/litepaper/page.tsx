@@ -393,6 +393,21 @@ export default function Litepaper() {
           that gas will be covered another way.
         </Callout>
         <P>
+          A swap payment is <em>several</em> sequential transactions — typically an ERC-20 approval,
+          the swap, and, when the output is native MON, an unwrap and a delivery transfer. Each
+          transaction charges its own fee, so the app sums the network cost across the whole plan and
+          checks the wallet covers that total before signing. Validating only one transaction&apos;s
+          fee is what previously let a small payment be approved on a green fee and then fail at the
+          next step with the node&apos;s &quot;insufficient funds for gas&quot;. This is a fee
+          affordability check, not a minimum transfer amount.
+        </P>
+        <Callout title="No minimum payment amount">
+          Neither Intent Pay nor Monad imposes a minimum transfer amount. Any amount representable in
+          the token&apos;s decimals can be sent. The only things that can stop a very small payment
+          are an insufficient MON balance for the total network fee and, for a conversion, the
+          absence of a route with enough liquidity — and the app names the actual cause in each case.
+        </Callout>
+        <P>
           The review screen separates, where each is available:
         </P>
         <UL>

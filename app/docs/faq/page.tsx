@@ -27,6 +27,14 @@ const FAQ_ITEMS: { q: string; a: ReactNode }[] = [
     a: <>Yes. Gas is always paid in native MON through your own injected wallet. There is no sponsored, ERC-20 or account-abstracted gas path. If you hold no MON, the app tells you before you start.</>,
   },
   {
+    q: "Is there a minimum payment amount?",
+    a: <>No. Intent Pay imposes no minimum transfer amount, and the Monad network does not either. Any amount that is representable in the token&apos;s decimals can be sent. Two real constraints can still stop a very small payment: your wallet must hold enough MON to pay the network fee for <em>every</em> step, and if the payment needs a conversion, a route with enough liquidity must exist. Neither is a minimum amount — the app tells you which one applies. AUSD is a small-value <em>asset</em>, not a payment minimum.</>,
+  },
+  {
+    q: "Why might a small payment fail?",
+    a: <>The usual cause is the network fee, not the amount. A swap payment is several on-chain transactions (approve, swap, and sometimes unwrap and deliver), and each charges its own fee in MON. The app adds them up and checks your MON balance covers the total before you confirm. If it does not, it says so explicitly and does not submit anything. A token-only payment within a single transaction needs less.</>,
+  },
+  {
     q: "Is Intent Pay gasless?",
     a: <>No. It is not a gasless product, and it does not claim to be.</>,
   },

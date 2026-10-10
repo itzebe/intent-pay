@@ -18,7 +18,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
-import { classifyTransactionError, INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "@/lib/domain/transactionError";
+import { classifyTransactionError, INSUFFICIENT_MON_FOR_FEES_MESSAGE, isFeeShortfall } from "@/lib/domain/transactionError";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { explorerTxUrl, type MonadNetwork } from "@/lib/config/chains";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
@@ -757,7 +757,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 >
                   <Warning className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    {flow.readiness.code === "insufficient_gas"
+                    {isFeeShortfall(flow)
                       ? INSUFFICIENT_MON_FOR_FEES_MESSAGE
                       : `Not enough ${flow.intent.payToken}. You need ${formatAmount(flow.sufficiency.required)} ${flow.intent.payToken} but hold ${formatAmount(flow.sufficiency.available)}. Short by ${formatAmount(flow.sufficiency.shortfall)} ${flow.intent.payToken}.`}
                   </span>
@@ -772,15 +772,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                     className="flex items-start gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] p-3.5 text-xs text-amber-100"
                   >
                     <Warning className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>
-                      {flow.readiness.code === "insufficient_gas"
-                        ? INSUFFICIENT_MON_FOR_FEES_MESSAGE
-                        : `Network fee needs MON. You need about ${formatAmount(
-                            flow.gasSufficiency.requiredMon,
-                          )} MON for network fees. Your wallet holds ${formatAmount(
-                            flow.gasSufficiency.availableMon,
-                          )} MON.`}
-                    </span>
+                    {/* A genuine native-MON fee shortfall always uses the one
+                        approved message — never a detail-bearing estimate. */}
+                    <span>{INSUFFICIENT_MON_FOR_FEES_MESSAGE}</span>
                   </motion.div>
                 )}
             </div>

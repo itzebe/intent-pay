@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyTransactionError,
   withFeeShortfallMessage,
+  isFeeShortfall,
   INSUFFICIENT_MON_FOR_FEES_MESSAGE,
 } from "@/lib/domain/transactionError";
 
@@ -119,6 +120,55 @@ describe("withFeeShortfallMessage", () => {
   it("leaves a ready payment untouched", () => {
     const original = { ready: true, code: "ready", message: undefined };
     expect(withFeeShortfallMessage(original)).toEqual(original);
+  });
+});
+
+/**
+ * `isFeeShortfall` is the single condition that lets the fee-shortfall copy be
+ * shown. It must fire for a genuine native-MON fee shortfall and nothing else.
+ */
+describe("isFeeShortfall", () => {
+  it("fires when the balance covers the amount but not the amount + fee", () => {
+    expect(
+      isFeeShortfall({
+        sufficiency: { status: "insufficient", cause: "fees" },
+        gasSufficiency: { status: "ok" },
+      }),
+    ).toBe(true);
+  });
+
+  it("fires when the plan's total gas exceeds the wallet's MON", () => {
+    expect(
+      isFeeShortfall({
+        sufficiency: { status: "ok" },
+        gasSufficiency: { status: "insufficient" },
+      }),
+    ).toBe(true);
+  });
+
+  it("does NOT fire for an ordinary transfer-balance shortfall", () => {
+    expect(
+      isFeeShortfall({
+        sufficiency: { status: "insufficient", cause: "amount" },
+        gasSufficiency: { status: "ok" },
+      }),
+    ).toBe(false);
+    // A shortfall with no cause is treated as an amount shortfall, not a fee one.
+    expect(
+      isFeeShortfall({
+        sufficiency: { status: "insufficient" },
+        gasSufficiency: { status: "ok" },
+      }),
+    ).toBe(false);
+  });
+
+  it("does not fire for a healthy payment or an unknown state", () => {
+    expect(
+      isFeeShortfall({ sufficiency: { status: "ok" }, gasSufficiency: { status: "ok" } }),
+    ).toBe(false);
+    expect(
+      isFeeShortfall({ sufficiency: { status: "unknown" }, gasSufficiency: { status: "unknown" } }),
+    ).toBe(false);
   });
 });
 

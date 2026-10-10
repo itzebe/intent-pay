@@ -64,6 +64,27 @@ export function withFeeShortfallMessage<T extends { ready: boolean; code: string
   return { ...readiness, message: INSUFFICIENT_MON_FOR_FEES_MESSAGE };
 }
 
+/** The two balance checks the composer runs, reduced to what a fee shortfall needs. */
+export type FeeShortfallSource = {
+  sufficiency: { status: "ok" | "insufficient" | "unknown"; cause?: "amount" | "fees" };
+  gasSufficiency: { status: "ok" | "insufficient" | "unknown" };
+};
+
+/**
+ * True when the validation result establishes a *native-MON fee* shortfall: the
+ * wallet covers the transfer amount but not the amount plus the required maximum
+ * gas fee. This is the only condition under which the fee-shortfall copy may be
+ * shown, so the primary error and the secondary composer warning cannot drift.
+ *
+ * It deliberately does not fire for an ordinary transfer-balance shortfall
+ * (`cause: "amount"`), nor for any unrelated failure — those never reach here.
+ */
+export function isFeeShortfall(source: FeeShortfallSource): boolean {
+  const { sufficiency, gasSufficiency } = source;
+  if (sufficiency.status === "insufficient" && sufficiency.cause === "fees") return true;
+  return gasSufficiency.status === "insufficient";
+}
+
 function textOf(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object") {

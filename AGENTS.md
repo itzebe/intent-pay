@@ -457,6 +457,11 @@ itself) is an ordinary `insufficient_balance` and must never show this message.
 Unrelated failures — wallet rejection, RPC timeout, unsupported asset, invalid
 recipient, no route, reverted tx — keep their own message.
 
+`isFeeShortfall` is the single predicate that decides when the copy may be
+shown (a `fees`-cause shortfall, or the plan-wide `gasSufficiency` shortfall).
+Both the primary (red) and secondary (amber) composer warnings key off it, so
+they cannot drift and neither shows a detail-bearing fee estimate.
+
 ## Error boundaries
 
 `app/error.tsx` (route segment) and `app/global-error.tsx` (root layout) join the

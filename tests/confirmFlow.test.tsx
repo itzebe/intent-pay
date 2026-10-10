@@ -258,10 +258,10 @@ describe("confirmation flow", () => {
     expect(screen.queryByText("Review Payment")).toBeNull();
   });
 
-  it("shows a MON network-fee explanation, never an ERC-20 gas offer, for a 0-MON wallet", async () => {
+  it("shows the approved MON-for-fees message in the secondary warning, never a detail-bearing estimate", async () => {
     // Gas is always paid in MON now. A wallet holding tokens but no MON must be
     // told, plainly and specifically, that it needs enough MON for the fee —
-    // there is no gas-in-token path any more, and no misleading precision.
+    // using the one approved message, with no misleading fee figure.
     baseFlow({
       readiness: { ready: false, code: "insufficient_gas", cta: "Not enough MON for network fee", severity: "error" },
       gasSufficiency: { status: "insufficient", requiredMon: "0.01212", availableMon: "0" },
@@ -270,8 +270,42 @@ describe("confirmation flow", () => {
     renderComposer();
     expect(screen.getByText(/Insufficient MON for network fees/i)).toBeTruthy();
     expect(screen.getByText(/also need enough MON to cover the transaction fee/i)).toBeTruthy();
+    expect(screen.getByText(/Reduce the transfer amount or add MON to your wallet/i)).toBeTruthy();
+    // The old detail-bearing estimate is gone.
+    expect(screen.queryByText(/Network fee needs MON/i)).toBeNull();
+    expect(screen.queryByText(/You need about/i)).toBeNull();
     // And there is no promised token-gas path.
     expect(screen.queryByText(/Sponsored/i)).toBeNull();
+  });
+
+  it("uses the approved MON-for-fees message for a native fee shortfall on the primary warning", async () => {
+    // The reported case: the balance covers the transfer amount but not the
+    // amount + fee, so `sufficiency` is short with `cause: "fees"`.
+    baseFlow({
+      sufficiency: { status: "insufficient", required: "0.3958", available: "0.397", shortfall: "0.002", cause: "fees" },
+      gasSufficiency: { status: "ok", requiredMon: "0.0025", availableMon: "0.397" },
+      readiness: { ready: false, code: "insufficient_gas", cta: "Not enough MON for network fee", severity: "error" },
+    });
+
+    renderComposer();
+    expect(screen.getByText(/Insufficient MON for network fees/i)).toBeTruthy();
+    expect(screen.getByText(/Reduce the transfer amount or add MON to your wallet/i)).toBeTruthy();
+    expect(screen.queryByText(/Short by/i)).toBeNull();
+  });
+
+  it("shows the plain insufficient-balance message for an ordinary transfer shortfall", async () => {
+    // `cause: "amount"` is NOT a fee shortfall: it must never show either the
+    // approved fee message or the secondary warning.
+    baseFlow({
+      sufficiency: { status: "insufficient", required: "5", available: "4", shortfall: "1", cause: "amount" },
+      gasSufficiency: { status: "ok", requiredMon: "0.0025", availableMon: "100" },
+      readiness: { ready: false, code: "insufficient_balance", cta: "Insufficient USDT balance", severity: "error" },
+    });
+
+    renderComposer();
+    expect(screen.getByText(/Not enough USDT/i)).toBeTruthy();
+    expect(screen.queryByText(/Insufficient MON for network fees/i)).toBeNull();
+    expect(screen.queryByText(/Network fee needs MON/i)).toBeNull();
   });
 
   it("prevents duplicate submissions while an attempt is in progress", async () => {

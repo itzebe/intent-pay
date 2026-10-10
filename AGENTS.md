@@ -445,6 +445,38 @@ the payment runs as **two protected legs**:
   is only taken when `flow.partial.covered` is true — otherwise the normal or
   insufficient path runs unchanged.
 
+## Concurrency & shared state
+
+There is **no per-user server session**. The canonical intent lives in the
+browser (`PaymentProvider` context + `canonicalIntent`); every server handler is
+a stateless function of its request body. The only process-wide state is
+provider *caching* in `lib/server/*` and `getRoutingProvider()`, and it must
+never carry a user identity.
+
+- **Caches are keyed by user-supplied identity, never by a global.** Balances
+  (`/api/balances`), tokens (`/api/tokens`), quotes (`/api/quote`) and the
+  optimizer (`/api/optimize`) compute per request; the address lives only in the
+  request URL/body. `Zerion` and the token/price `TtlCache`s key on the address
+  or pool address.
+- **In-flight de-duplication is the rule for expensive shared work.**
+  `TtlCache` and `tokenList.getCatalog()` coalesce concurrent misses; the
+  routing provider's pool-graph build and per-token price now do too
+  (`graphInflight` / `priceInflight` in `lib/providers/uniswapV3.ts`). Without
+  it, a burst of *cold* callers each rebuilt the graph / re-priced, multiplying
+  external RPC calls by the concurrency. Regression: `tests/concurrentRouting.test.ts`.
+- **Client races are version-guarded.** `createLatestGuard` + an
+  `AbortController` ensure a slow quote/optimizer result can never overwrite a
+  newer request's state (`lib/domain/latest.ts`). Regression:
+  `tests/concurrency.test.ts`.
+- **Any new cache must not be used in the signing path for mutable state.**
+  `prepareSigning` fetches *fresh* balances and a *fresh* quote immediately
+  before signing, so a short-lived cache (≤ the quote TTL) may back the
+  review UI, but never the authorization build.
+- **Concurrency do NOTs:** no module-level mutable state keyed by user identity,
+  no `localStorage`/cookie session, no per-process "current user". A cache value
+  must be a pure function of its key.
+
+
 ## Testing the flow
 
 

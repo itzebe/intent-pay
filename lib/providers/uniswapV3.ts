@@ -87,6 +87,10 @@ export class UniswapV3Provider implements RoutingProvider {
   } | null = null;
   private tokenByKey = new Map<string, TokenConfig>();
   private priceCache = new Map<string, { value: UsdPrice; at: number }>();
+  /** In-flight price computations, so concurrent cold callers share one probe. */
+  private priceInflight = new Map<string, Promise<UsdPrice>>();
+  /** In-flight graph builds, keyed by catalog version + endpoint set. */
+  private graphInflight = new Map<string, Promise<Map<string, PoolInfo[]>>>();
   private availCache = new Map<string, { value: string[]; at: number }>();
   /** Token keys with the deepest total liquidity, used to pick basis tokens. */
   private liquidityScore = new Map<string, bigint>();
@@ -178,6 +182,16 @@ export class UniswapV3Provider implements RoutingProvider {
   // Pool graph discovery (bounded)
   // -------------------------------------------------------------------------
 
+  /**
+   * The pool graph for the given endpoints, building it at most once per
+   * concurrent burst.
+   *
+   * Without coalescing, a burst of cold quotes (a fresh serverless instance, or
+   * a graph that just expired) would each rebuild the same graph independently,
+   * multiplying external RPC calls by the concurrency. Concurrent callers that
+   * need the same basis set therefore share one in-flight build; callers needing
+   * a different set get their own (keyed by catalog version + endpoints).
+   */
   private async ensureGraph(endpoints: TokenConfig[]): Promise<Map<string, PoolInfo[]>> {
     const version = catalogVersion();
     // A catalog change (e.g. a token list refresh) must not be served from a
@@ -186,6 +200,22 @@ export class UniswapV3Provider implements RoutingProvider {
     const fresh = this.graph && sameCatalog && Date.now() - this.graph.at < GRAPH_TTL_MS;
     if (fresh && this.coversEndpoints(endpoints)) return this.graph!.adjacency;
 
+    const inflightKey = `${version}:${endpoints.map(poolKey).sort().join(",")}`;
+    const existing = this.graphInflight.get(inflightKey);
+    if (existing) return existing;
+
+    const p = this.buildGraph(endpoints, version).finally(() =>
+      this.graphInflight.delete(inflightKey),
+    );
+    this.graphInflight.set(inflightKey, p);
+    return p;
+  }
+
+  private async buildGraph(
+    endpoints: TokenConfig[],
+    version: string,
+  ): Promise<Map<string, PoolInfo[]>> {
+    const sameCatalog = this.graph?.catalogVersion === version;
     const basis = this.basisTokens(endpoints);
     const basisKeys = new Set(basis.map(poolKey));
     const pairs: { a: Address; b: Address }[] = [];
@@ -781,9 +811,20 @@ export class UniswapV3Provider implements RoutingProvider {
     const key = poolKey(token);
     const cached = this.priceCache.get(key);
     if (cached && Date.now() - cached.at < PRICE_TTL_MS) return cached.value;
-    const value = await this.computePrice(token);
-    this.priceCache.set(key, { value, at: Date.now() });
-    return value;
+
+    // Share one in-flight computation per token so a concurrent cold burst does
+    // not fan out into N identical price probes (market + on-chain quoter).
+    const existing = this.priceInflight.get(key);
+    if (existing) return existing;
+
+    const p = this.computePrice(token)
+      .then((value) => {
+        this.priceCache.set(key, { value, at: Date.now() });
+        return value;
+      })
+      .finally(() => this.priceInflight.delete(key));
+    this.priceInflight.set(key, p);
+    return p;
   }
 
   /**

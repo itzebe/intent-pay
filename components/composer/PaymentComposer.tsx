@@ -18,7 +18,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
-import { classifyTransactionError } from "@/lib/domain/transactionError";
+import { classifyTransactionError, INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "@/lib/domain/transactionError";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { explorerTxUrl, type MonadNetwork } from "@/lib/config/chains";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
@@ -463,14 +463,23 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           // (a moved price, a changed balance). We surface a recoverable error and
           // refresh the quote so the user can retry the same review, rather than
           // dropping them back to a blank composer.
-          setError(prepared.message);
+          //
+          // A fee shortfall is the one reason with a dedicated, actionable
+          // message: the wallet covers the transfer amount but not the amount
+          // plus the required maximum gas fee. Every other reason keeps the
+          // guard's own specific message.
+          const message =
+            prepared.reason === "insufficient_gas"
+              ? INSUFFICIENT_MON_FOR_FEES_MESSAGE
+              : prepared.message;
+          setError(message);
           recordPaymentDiagnostic(
             buildPaymentDiagnostic({
               // `prepareSigning` refuses before any signature/submission, so the
               // failing stage is operation preparation.
               event: "payment_failed",
               code: prepared.reason,
-              message: prepared.message,
+              message,
               returnedToConfirm: true,
             }),
           );
@@ -748,7 +757,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                 >
                   <Warning className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>
-                    {`Not enough ${flow.intent.payToken}. You need ${formatAmount(flow.sufficiency.required)} ${flow.intent.payToken} but hold ${formatAmount(flow.sufficiency.available)}. Short by ${formatAmount(flow.sufficiency.shortfall)} ${flow.intent.payToken}.`}
+                    {flow.readiness.code === "insufficient_gas"
+                      ? INSUFFICIENT_MON_FOR_FEES_MESSAGE
+                      : `Not enough ${flow.intent.payToken}. You need ${formatAmount(flow.sufficiency.required)} ${flow.intent.payToken} but hold ${formatAmount(flow.sufficiency.available)}. Short by ${formatAmount(flow.sufficiency.shortfall)} ${flow.intent.payToken}.`}
                   </span>
                 </motion.div>
               )}
@@ -762,11 +773,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   >
                     <Warning className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>
-                      {`Network fee needs MON. You need about ${formatAmount(
-                        flow.gasSufficiency.requiredMon,
-                      )} MON for network fees. Your wallet holds ${formatAmount(
-                        flow.gasSufficiency.availableMon,
-                      )} MON.`}
+                      {flow.readiness.code === "insufficient_gas"
+                        ? INSUFFICIENT_MON_FOR_FEES_MESSAGE
+                        : `Network fee needs MON. You need about ${formatAmount(
+                            flow.gasSufficiency.requiredMon,
+                          )} MON for network fees. Your wallet holds ${formatAmount(
+                            flow.gasSufficiency.availableMon,
+                          )} MON.`}
                     </span>
                   </motion.div>
                 )}

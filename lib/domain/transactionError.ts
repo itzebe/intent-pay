@@ -36,6 +36,34 @@ export type TxErrorInfo = {
 /** An execution error as thrown by `lib/execution/execute.ts` (structurally). */
 export type ExecutionErrorLike = { code?: string; message?: string };
 
+/**
+ * The specific, actionable message shown when the sender has enough MON for the
+ * transfer amount but not for the amount *plus* the required maximum gas fee.
+ *
+ * This is deliberately distinct from the generic "Transaction error" the user
+ * saw: it names the real cause (the fee), states the exact condition (balance
+ * may cover the amount, but the fee also has to fit), and gives two concrete
+ * remedies. It prints no fee figure, so it cannot be a misleading estimate, and
+ * it is only ever used when a balance check established this exact shortfall —
+ * never for a wallet rejection, an RPC failure, an unsupported asset, an invalid
+ * recipient or a reverted transaction.
+ */
+export const INSUFFICIENT_MON_FOR_FEES_MESSAGE =
+  "Insufficient MON for network fees. Your balance may cover the transfer amount, but you also need enough MON to cover the transaction fee. Reduce the transfer amount or add MON to your wallet.";
+
+/**
+ * Substitute an established fee-shortfall message into a readiness result
+ * *without* changing its `code`. The readiness gate (and the Confirm button it
+ * drives) must keep treating this as `insufficient_gas`; only the copy the user
+ * reads changes. A result that is not a fee shortfall is returned untouched.
+ */
+export function withFeeShortfallMessage<T extends { ready: boolean; code: string; message?: string }>(
+  readiness: T,
+): T {
+  if (readiness.ready || readiness.code !== "insufficient_gas") return readiness;
+  return { ...readiness, message: INSUFFICIENT_MON_FOR_FEES_MESSAGE };
+}
+
 function textOf(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object") {
@@ -111,12 +139,12 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
 
   // Gas: the wallet cannot cover the network fee in MON. A swap payment is
   // several sequential transactions, so the fee the wallet must cover is the
-  // total for all of them.
+  // total for all of them. This is a real, established fee shortfall, so it gets
+  // the specific, actionable message — never a generic "Transaction error".
   if (/insufficient funds for gas|gas required exceeds|intrinsic gas too low|exceeds the balance/.test(text)) {
     return {
       kind: "insufficient_gas",
-      message:
-        "Your wallet does not have enough MON to cover this payment's network fees. Add MON and try again.",
+      message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
       mayHaveSubmitted: false,
     };
   }

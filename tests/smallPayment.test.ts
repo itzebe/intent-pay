@@ -3,7 +3,11 @@ import { parseIntent } from "@/lib/nlp/parser";
 import { parseUnits, formatUnits, usdToAmount, isPositiveDecimal } from "@/lib/domain/math";
 import { validateAmount, validateUsdAmount } from "@/lib/domain/validation";
 import { computeReadiness, type ReadinessInput } from "@/lib/domain/readiness";
-import { classifyTransactionError } from "@/lib/domain/transactionError";
+import {
+  classifyTransactionError,
+  withFeeShortfallMessage,
+  INSUFFICIENT_MON_FOR_FEES_MESSAGE,
+} from "@/lib/domain/transactionError";
 import {
   buildPaymentPlan,
   planGasUnits,
@@ -195,6 +199,49 @@ describe("balance vs gas sufficiency is classified precisely", () => {
     expect(r.code).toBe("insufficient_balance");
     expect(r.message).toMatch(/need 0.5/);
     expect(r.message).not.toMatch(/minimum/i);
+  });
+
+  /**
+   * The reported small NATIVE MON defect: the balance covers the transfer amount
+   * but not the amount + the required maximum gas fee. This must be classified
+   * as a fee shortfall (`insufficient_gas`), not as an insufficient balance, and
+   * receive the specific, actionable message.
+   */
+  it("enough for the amount but not the amount + fee → the specific MON-for-fees message", () => {
+    const r = computeReadiness(
+      ready({
+        payToken: "MON",
+        receiveToken: "MON",
+        // `cause: "fees"` is set only when the balance covers the amount itself.
+        sufficiency: { status: "insufficient", required: "0.3958", available: "0.397", cause: "fees" },
+        gasSufficiency: { status: "ok", requiredMon: "0.0025" },
+      }),
+    );
+    expect(r.ready).toBe(false);
+    expect(r.code).toBe("insufficient_gas");
+    const shown = withFeeShortfallMessage(r);
+    expect(shown.message).toBe(INSUFFICIENT_MON_FOR_FEES_MESSAGE);
+  });
+
+  it("cannot cover the amount itself → ordinary insufficient balance, not the fee message", () => {
+    const r = computeReadiness(
+      ready({
+        payToken: "MON",
+        receiveToken: "MON",
+        sufficiency: { status: "insufficient", required: "0.4", available: "0.39", cause: "amount" },
+        gasSufficiency: { status: "ok", requiredMon: "0.0025" },
+      }),
+    );
+    expect(r.code).toBe("insufficient_balance");
+    expect(withFeeShortfallMessage(r).message).not.toMatch(/Reduce the transfer amount/i);
+  });
+
+  it("an unrelated failure keeps its own message and never becomes a fee message", () => {
+    const r = computeReadiness(
+      ready({ payToken: "USDC", sufficiency: { status: "insufficient", required: "5", available: "4", cause: "amount" } }),
+    );
+    expect(r.code).toBe("insufficient_balance");
+    expect(withFeeShortfallMessage(r).message).toBe(r.message);
   });
 });
 

@@ -260,16 +260,16 @@ describe("confirmation flow", () => {
 
   it("shows a MON network-fee explanation, never an ERC-20 gas offer, for a 0-MON wallet", async () => {
     // Gas is always paid in MON now. A wallet holding tokens but no MON must be
-    // told, plainly, that the network fee needs MON — there is no gas-in-token
-    // path any more.
+    // told, plainly and specifically, that it needs enough MON for the fee —
+    // there is no gas-in-token path any more, and no misleading precision.
     baseFlow({
       readiness: { ready: false, code: "insufficient_gas", cta: "Not enough MON for network fee", severity: "error" },
       gasSufficiency: { status: "insufficient", requiredMon: "0.01212", availableMon: "0" },
     });
 
     renderComposer();
-    expect(screen.getByText(/Network fee needs MON/i)).toBeTruthy();
-    expect(screen.getByText(/holds 0 MON/i)).toBeTruthy();
+    expect(screen.getByText(/Insufficient MON for network fees/i)).toBeTruthy();
+    expect(screen.getByText(/also need enough MON to cover the transaction fee/i)).toBeTruthy();
     // And there is no promised token-gas path.
     expect(screen.queryByText(/Sponsored/i)).toBeNull();
   });
@@ -700,8 +700,10 @@ describe("confirmation flow", () => {
       await Promise.resolve();
     });
 
-    // The raw provider string never reaches the user; the MON guidance does.
-    expect(screen.getByText(/enough MON to cover this payment/i)).toBeTruthy();
+    // The raw provider string never reaches the user; the specific, actionable
+    // MON-for-fees guidance does.
+    expect(screen.getByText(/Insufficient MON for network fees/i)).toBeTruthy();
+    expect(screen.getByText(/Reduce the transfer amount or add MON to your wallet/i)).toBeTruthy();
     expect(screen.queryByText(/gas \* price/i)).toBeNull();
   });
 

@@ -7,7 +7,7 @@ import { usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { useTokenCatalog } from "@/lib/hooks/useTokenCatalog";
 import { describePlan, buildPaymentPlan, buildPartialPlan } from "@/lib/execution/plan";
-import { executePlan, ExecutionError, type StepResult } from "@/lib/execution/execute";
+import { executePlan, type StepResult } from "@/lib/execution/execute";
 import { prepareSigning, type FreshPlan } from "@/lib/execution/signGuard";
 import { displayKey } from "@/lib/domain/canonicalIntent";
 import {
@@ -18,8 +18,9 @@ import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
+import { classifyTransactionError } from "@/lib/domain/transactionError";
 import { getClientPublicClient } from "@/lib/wallet/clients";
-import type { MonadNetwork } from "@/lib/config/chains";
+import { explorerTxUrl, type MonadNetwork } from "@/lib/config/chains";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
 import { Modal } from "@/components/ui/Modal";
 import { TokenList } from "@/components/ui/TokenList";
@@ -34,10 +35,17 @@ import { FlowDiagram } from "@/components/flow/FlowDiagram";
 import { ReviewSheet } from "./ReviewSheet";
 import { SuccessScreen } from "@/components/success/SuccessScreen";
 import { BalanceOverview } from "@/components/wallet/WalletBar";
-import { Check, ChevronDown, Lock, Spinner, Warning } from "@/components/ui/Icons";
+import { Check, ChevronDown, ExternalLink, Lock, Spinner, Warning } from "@/components/ui/Icons";
 import { TokenBadge } from "@/components/ui/TokenBadge";
 
 type Stage = "compose" | "review" | "executing" | "success";
+
+/**
+ * A submitted transaction whose outcome could not be established within the
+ * confirmation window. It may still confirm, so it is neither success nor
+ * failure: the user keeps the hash and can re-check the real on-chain status.
+ */
+type Unresolved = { hashes: `0x${string}`[]; error?: string };
 
 /** Every confirmed/submitted hash a plan produced, in execution order. */
 function hashOf(results: StepResult[]): `0x${string}`[] {
@@ -58,6 +66,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const [delivery, setDelivery] = useState<
     { verified: boolean; delivered: string; expected: string; reason?: string } | null
   >(null);
+  // Set when a broadcast transaction's receipt could not be observed in time.
+  const [unresolved, setUnresolved] = useState<Unresolved | null>(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
+  const [statusNote, setStatusNote] = useState<string | null>(null);
   // Anchor the collected intent steps so a natural-language prefill can scroll
   // the user down to the fields it just filled.
   const composeRef = useRef<HTMLDivElement>(null);
@@ -232,21 +244,84 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     if (!flow.readiness.ready || !flow.quote) return;
     setError(null);
     setReviewNotice(null);
+    setStatusNote(null);
     reviewVersionRef.current = flow.intent.version;
     setStage("review");
   }, [flow.readiness.ready, flow.quote, flow.intent.version]);
 
   const reset = useCallback(() => {
     setStage("compose");
-    reviewVersionRef.current = null;
     setSteps([]);
     setError(null);
     setReviewNotice(null);
     setTxHash(undefined);
     setDelivery(null);
+    setUnresolved(null);
+    setStatusNote(null);
     lastQuoteRef.current = null;
     flow.refreshQuote();
   }, [flow]);
+
+  /**
+   * Re-check the real on-chain status of a submitted-but-unconfirmed
+   * transaction. Read-only: it never resubmits. A confirmed receipt proceeds to
+   * the normal delivery verification; a reverted one is reported honestly; a
+   * still-absent receipt keeps the outcome unknown.
+   */
+  const checkUnresolvedStatus = useCallback(async () => {
+    if (!unresolved || unresolved.hashes.length === 0 || checkingStatus) return;
+    setCheckingStatus(true);
+    setStatusNote(null);
+    try {
+      const client = getClientPublicClient(flow.intent.network);
+      const receipts = await Promise.all(
+        unresolved.hashes.map((hash) =>
+          client.getTransactionReceipt({ hash }).catch(() => null),
+        ),
+      );
+      const confirmed = receipts.filter((r) => r?.status === "success");
+      if (confirmed.length === unresolved.hashes.length) {
+        const hashes = unresolved.hashes;
+        setUnresolved(null);
+        setTxHash(hashes[hashes.length - 1]);
+        try {
+          const check = await verifyDelivery(
+            client,
+            hashes,
+            flow.receiveTokenConfig,
+            flow.intent.recipient,
+            reviewQuote?.receiveAmount ?? "",
+            BigInt(displayPlan.slippageBps || 50),
+          );
+          setDelivery(check);
+        } catch {
+          setDelivery(null);
+        }
+        setStage("success");
+        return;
+      }
+      const reverted = receipts.some((r) => r?.status === "reverted");
+      if (reverted) {
+        setStatusNote(
+          "The transaction reverted on-chain. Nothing was delivered — review the payment before trying again.",
+        );
+        return;
+      }
+      setStatusNote(
+        "The transaction is still not confirmed on Monad. It may be pending or dropped — check the explorer, and do not submit a duplicate payment until you are sure.",
+      );
+    } finally {
+      setCheckingStatus(false);
+    }
+  }, [
+    unresolved,
+    checkingStatus,
+    flow.intent.network,
+    flow.intent.recipient,
+    flow.receiveTokenConfig,
+    reviewQuote?.receiveAmount,
+    displayPlan.slippageBps,
+  ]);
 
   /**
    * Signing safety pipeline. Immediately before the wallet is asked to sign we
@@ -266,6 +341,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     setReviewNotice(null);
     setSteps([]);
     setDelivery(null);
+    setUnresolved(null);
 
     // Structured, secret-free trail: every failure records the exact stage so
     // the "returns to Confirm and Send with no explanation" symptom can be
@@ -423,6 +499,30 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           }),
         );
 
+        // A broadcast transaction whose receipt was not observed within the
+        // window is neither success nor failure. Never report it as delivered:
+        // preserve the hash(es), tell the user the outcome is unknown, and let
+        // them re-check the real on-chain status. Do not resubmit.
+        if (!result.confirmed) {
+          const pending = hashOf(result.results);
+          setUnresolved({
+            hashes: pending.length ? pending : primaryHash ? [primaryHash] : [],
+            error: "Confirmation not observed within the window",
+          });
+          recordPaymentDiagnostic(
+            buildPaymentDiagnostic({
+              event: "payment_failed",
+              code: "confirmation_timeout",
+              message: "Confirmation not observed within the window",
+              hasTransactionHash: pending.length > 0 || Boolean(primaryHash),
+              mayHaveSubmitted: true,
+              returnedToConfirm: true,
+            }),
+          );
+          setStage("review");
+          return;
+        }
+
         const hashes = stepHashes.length ? stepHashes : primaryHash ? [primaryHash] : [];
         if (hashes.length) {
           try {
@@ -452,21 +552,21 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         );
         setStage("success");
       } catch (err) {
-        const message =
-          err instanceof ExecutionError ? err.message : "The payment could not be completed.";
-        const code = err instanceof ExecutionError ? err.code : "unknown";
-        setError(message);
+        // Map any thrown value (a raw provider/RPC error or an ExecutionError)
+        // to an accurate, actionable, user-safe message. Never a stack trace.
+        const info = classifyTransactionError(err);
+        setError(info.message);
         // A definite pre-submission outcome (rejection/revert) or an ambiguous
         // post-submission one both return to Review — never silently to compose.
         // The recipient, amount and selected asset are preserved in the intent.
         recordPaymentDiagnostic(
           buildPaymentDiagnostic({
             event: "payment_failed",
-            code,
-            message,
-            // `submitted` is the only code that means the operation may already
-            // be on-chain and must not be blindly retried.
-            mayHaveSubmitted: code === "submitted" || sawSubmission,
+            code: info.kind,
+            message: info.message,
+            // A may-have-submitted failure means the operation could already be
+            // on-chain and must not be blindly retried.
+            mayHaveSubmitted: info.mayHaveSubmitted || sawSubmission,
             returnedToConfirm: true,
           }),
         );
@@ -533,6 +633,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             <AnimatePresence>
               {error && (
                 <motion.div
+                  key="compose-error"
                   initial={{ opacity: 0, y: -4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
@@ -727,6 +828,21 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             exit={{ opacity: 0 }}
             className="max-h-[80vh] overflow-hidden"
           >
+            {unresolved ? (
+              <UnresolvedPanel
+                hashes={unresolved.hashes}
+                network={flow.intent.network}
+                onCheckStatus={checkUnresolvedStatus}
+                checking={checkingStatus}
+                statusNote={statusNote}
+                onRetry={onConfirm}
+                onBack={() => {
+                  setStage("compose");
+                  reviewVersionRef.current = null;
+                  setUnresolved(null);
+                }}
+              />
+            ) : (
             <ReviewSheet
               quote={reviewQuote}
               payToken={flow.payTokenConfig}
@@ -760,6 +876,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                   : null
               }
             />
+            )}
           </motion.div>
         )}
 
@@ -849,6 +966,92 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           }}
         />
       </Modal>
+    </div>
+  );
+}
+
+/**
+ * The honest "we don't know yet" screen for a broadcast transaction whose
+ * receipt was not observed. It is deliberately not a success screen: it keeps
+ * the hash(es), explains the ambiguity, and offers a read-only status check. The
+ * user can still retry (guarded against a duplicate broadcast by the signing
+ * guard's re-quote) or return to edit the payment.
+ */
+function UnresolvedPanel({
+  hashes,
+  network,
+  onCheckStatus,
+  checking,
+  statusNote,
+  onRetry,
+  onBack,
+}: {
+  hashes: `0x${string}`[];
+  network: MonadNetwork;
+  onCheckStatus: () => void;
+  checking: boolean;
+  statusNote: string | null;
+  onRetry: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-y-auto px-5 pb-4 pt-6 sm:px-6">
+        <div className="flex flex-col items-center text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-amber-400/15 ring-1 ring-amber-400/40">
+            <Warning className="h-7 w-7 text-amber-200" />
+          </div>
+          <h2 className="text-lg font-semibold text-white">Transaction status unknown</h2>
+          <p className="mt-2 max-w-sm text-sm text-white/55">
+            The transaction was submitted, but we could not confirm its outcome within the
+            confirmation window. It may still be processing on Monad. Nothing else has been sent —
+            do not submit a duplicate payment until you are sure.
+          </p>
+        </div>
+
+        {hashes.length > 0 && (
+          <div className="mt-5 space-y-2">
+            {hashes.map((h) => (
+              <a
+                key={h}
+                href={explorerTxUrl(network, h)}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-ink-900/60 px-3 py-2.5 transition hover:border-white/20"
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-white/70">{h}</span>
+                <ExternalLink className="h-4 w-4 shrink-0 text-white/45" />
+              </a>
+            ))}
+          </div>
+        )}
+
+        {statusNote && (
+          <div className="mt-4 rounded-2xl border border-amber-400/25 bg-amber-400/[0.06] px-4 py-3 text-xs text-amber-100/90">
+            {statusNote}
+          </div>
+        )}
+
+        <button
+          onClick={onCheckStatus}
+          disabled={checking || hashes.length === 0}
+          className="btn-primary mt-5 w-full"
+        >
+          {checking ? (
+            <>
+              <Spinner className="h-4 w-4 animate-spin" /> Checking status…
+            </>
+          ) : (
+            "Check transaction status"
+          )}
+        </button>
+        <button onClick={onRetry} disabled={checking} className="btn-ghost mt-3 w-full">
+          Retry payment
+        </button>
+        <button onClick={onBack} disabled={checking} className="btn-ghost mt-3 w-full">
+          Back to edit
+        </button>
+      </div>
     </div>
   );
 }

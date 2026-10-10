@@ -76,13 +76,19 @@ export function BalanceOverview({
   loading,
   connected = true,
 }: {
-  balances: { token: { symbol: string; tint: string }; amount: string; usd: number }[];
+  balances: { token: { symbol: string; tint: string; address?: string }; amount: string; usd: number }[];
   loading?: boolean;
   /** False when no wallet is connected — balances are *unknown*, not zero. */
   connected?: boolean;
 }) {
-  const total = balances.reduce((s, b) => s + b.usd, 0);
-  const funded = balances.filter((b) => b.usd > 0);
+  // External balance data is untrusted: a missing token, symbol, tint or a
+  // non-numeric usd must degrade, never throw (a throw here unmounts the tree).
+  const safe = (Array.isArray(balances) ? balances : []).filter(
+    (b) => b && typeof b === "object" && b.token && typeof b.token === "object",
+  );
+  const usdOf = (b: (typeof safe)[number]) => (Number.isFinite(b.usd) ? b.usd : 0);
+  const total = safe.reduce((s, b) => s + usdOf(b), 0);
+  const funded = safe.filter((b) => usdOf(b) > 0);
 
   return (
     <div className="rounded-2xl border border-white/[0.07] bg-ink-800/40 p-4">
@@ -105,13 +111,14 @@ export function BalanceOverview({
         ) : funded.length === 0 ? (
           <span className="text-xs text-white/40">No supported balances</span>
         ) : (
-          funded.map((b) => (
-            <span key={b.token.symbol} className="flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: b.token.tint }} />
-              <span className="text-xs text-white/55">{b.token.symbol}</span>
-              <span className="num text-xs font-medium text-white/85">
-                ${b.usd.toFixed(2)}
-              </span>
+          funded.map((b, i) => (
+            <span key={b.token.symbol || b.token.address || i} className="flex items-center gap-2">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: typeof b.token.tint === "string" && b.token.tint ? b.token.tint : "#8A92B2" }}
+              />
+              <span className="text-xs text-white/55">{b.token.symbol || "Unknown"}</span>
+              <span className="num text-xs font-medium text-white/85">${usdOf(b).toFixed(2)}</span>
             </span>
           ))
         )}

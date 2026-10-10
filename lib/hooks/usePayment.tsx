@@ -16,6 +16,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
 import { isQuoteStale, QUOTE_REFRESH_AFTER_MS, QUOTE_RETRY_AFTER_MS } from "@/lib/domain/freshness";
 import { applyQuoteFailure, applyQuoteSuccess } from "@/lib/domain/quoteState";
+import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
 import {
   initialIntent,
   isQuotable,
@@ -671,7 +672,9 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const required = parseUnits(q.payAmount, payTokenConfig.decimals);
-      const reserve = payTokenConfig.native ? 10_000_000_000_000_000n : 0n;
+      // A native MON source must keep its own network fee aside — the reserve is
+      // the quote's gasLimit × maxFeePerGas, not a flat 0.01 MON.
+      const reserve = payTokenConfig.native ? quoteGasReserveWei(q) : 0n;
       const available = parseUnits(bal.amount, payTokenConfig.decimals);
       if (available >= required + reserve) {
         return { status: "ok" as const, required: q.payAmount, available: bal.amount, shortfall: "0" };

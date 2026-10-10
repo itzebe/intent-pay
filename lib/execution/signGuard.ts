@@ -5,6 +5,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { displayKey, type CanonicalIntent } from "@/lib/domain/canonicalIntent";
 import { isQuoteStale } from "@/lib/domain/freshness";
 import { assessPriceImpact, DEFAULT_SLIPPAGE_BPS } from "@/lib/domain/protection";
+import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
 import { buildPaymentPlan, type PaymentPlan } from "./plan";
 
 /**
@@ -351,17 +352,20 @@ export async function prepareSigning(
 }
 
 /**
- * True when the fresh balances still cover the fresh quote's pay amount (with a
- * small native reserve for gas). A missing balance entry is treated as unknown
- * rather than insufficient, so a wallet we couldn't read does not spuriously
- * block — the execution layer will surface a real shortfall.
+ * True when the fresh balances still cover the fresh quote's pay amount. A
+ * native MON source must also keep its own network fee aside — the reserve is
+ * the quote's `gasLimit × maxFeePerGas`, not a flat amount, so a small native
+ * payment is only blocked when it genuinely cannot cover its fee. A missing
+ * balance entry is treated as unknown rather than insufficient, so a wallet we
+ * couldn't read does not spuriously block — the execution layer will surface a
+ * real shortfall.
  */
 export function coversBalance(balances: Balance[], quote: Quote): boolean {
   const pay = balances.find((b) => b.token.symbol === quote.payToken.symbol);
   if (!pay) return true;
   try {
     const required = parseUnits(quote.payAmount, quote.payToken.decimals);
-    const reserve = quote.payToken.native ? 10_000_000_000_000_000n : 0n;
+    const reserve = quote.payToken.native ? quoteGasReserveWei(quote) : 0n;
     const available = parseUnits(pay.amount, quote.payToken.decimals);
     return available >= required + reserve;
   } catch {

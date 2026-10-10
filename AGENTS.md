@@ -284,6 +284,24 @@ failed with the node's `insufficient funds for gas`. The fix is plan-wide:
 - `computeReadiness` (`insufficient_gas`) and `prepareSigning` (`coversGas`) then
   compare the wallet's MON against the plan total. `coversGas` keeps a 20% buffer.
 
+### The native gas reserve is derived, not a flat 0.01 MON
+
+A *native* MON payment also has to keep its own fee aside. That reserve was a
+flat `0.01 MON` in three places (`lib/server/optimizer.ts`, `lib/hooks/usePayment.tsx`,
+`lib/execution/signGuard.ts`), so a small native transfer needed
+`amount + 0.01 MON` and was rejected when the balance sat between `amount + real
+gas` and `amount + 0.01 MON` — the reported "small native MON transfer fails".
+On Monad a native transfer is exactly 21,000 gas, so at the ~100 gwei floor the
+real fee is ~0.0021 MON (docs.monad.xyz/developer-essentials/gas-pricing); the
+flat reserve was ~4–5× that.
+
+`lib/domain/gasReserve.ts` is now the single rule: the reserve is
+`gasLimit × maxFeePerGas`, where `maxFeePerGas` is the higher of 1.2× the live
+gas price and the Monad base-fee floor (100 gwei) + headroom. All three sites use
+`quoteGasReserveWei(quote)`. `STEP_GAS_UNITS.transferNative` is the
+protocol-exact `21_000n` (it was an inflated 30,000). A native payment is now
+blocked only when it genuinely cannot cover `amount + real gas`.
+
 **There is no minimum transfer amount.** Neither the product nor Monad imposes
 one; a tiny amount is valid. The two real constraints — insufficient MON for the
 total fee, and no route/liquidity for a conversion — are named honestly and must

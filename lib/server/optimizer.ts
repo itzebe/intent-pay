@@ -4,6 +4,7 @@ import { parseUnits } from "@/lib/domain/math";
 import type { TokenConfig } from "@/lib/config/tokens";
 
 import { buildQuote } from "./quote";
+import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
 
 /**
  * Payment optimizer.
@@ -39,15 +40,24 @@ export type OptimizeResult = {
 
 /** Only evaluate the most valuable holdings — enough to find the best route. */
 const MAX_CANDIDATES = 6;
-/** Native MON kept aside for gas when paying with MON itself. */
-const NATIVE_GAS_RESERVE = 10_000_000_000_000_000n;
 
-function heldEnough(token: TokenConfig, balance: Balance | undefined, payAmount: string): boolean {
+/**
+ * Whether the wallet holds enough of the source asset to pay, keeping a
+ * *gas-derived* reserve aside when the source is native MON itself. The reserve
+ * is the quote's own `gasLimit × maxFeePerGas`, not a flat amount, so a small
+ * native payment is only rejected when it genuinely cannot cover its fee.
+ */
+function heldEnough(
+  token: TokenConfig,
+  balance: Balance | undefined,
+  payAmount: string,
+  reserveWei: bigint,
+): boolean {
   if (!balance) return false;
   try {
     const required = parseUnits(payAmount, token.decimals);
     const available = parseUnits(balance.amount, token.decimals);
-    const reserve = token.native ? NATIVE_GAS_RESERVE : 0n;
+    const reserve = token.native ? reserveWei : 0n;
     return available >= required + reserve;
   } catch {
     return false;
@@ -99,7 +109,9 @@ export async function optimizePayment(
           routePath: q.route.path,
           networkCostUsd: q.networkCostUsd,
           totalSenderCostUsd: q.totalSenderCostUsd,
-          sufficient: heldEnough(b.token, bySymbol.get(b.token.symbol), q.payAmount),
+          // A native MON source must keep its own gas fee aside; the reserve is
+          // this quote's gasLimit × maxFeePerGas, not a flat amount.
+          sufficient: heldEnough(b.token, bySymbol.get(b.token.symbol), q.payAmount, quoteGasReserveWei(q)),
         };
       } catch {
         return {

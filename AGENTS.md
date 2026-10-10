@@ -284,6 +284,24 @@ failed with the node's `insufficient funds for gas`. The fix is plan-wide:
 - `computeReadiness` (`insufficient_gas`) and `prepareSigning` (`coversGas`) then
   compare the wallet's MON against the plan total. `coversGas` keeps a 20% buffer.
 
+### The native gas reserve is derived, not a flat 0.01 MON
+
+A *native* MON payment also has to keep its own fee aside. That reserve was a
+flat `0.01 MON` in three places (`lib/server/optimizer.ts`, `lib/hooks/usePayment.tsx`,
+`lib/execution/signGuard.ts`), so a small native transfer needed
+`amount + 0.01 MON` and was rejected when the balance sat between `amount + real
+gas` and `amount + 0.01 MON` — the reported "small native MON transfer fails".
+On Monad a native transfer is exactly 21,000 gas, so at the ~100 gwei floor the
+real fee is ~0.0021 MON (docs.monad.xyz/developer-essentials/gas-pricing); the
+flat reserve was ~4–5× that.
+
+`lib/domain/gasReserve.ts` is now the single rule: the reserve is
+`gasLimit × maxFeePerGas`, where `maxFeePerGas` is the higher of 1.2× the live
+gas price and the Monad base-fee floor (100 gwei) + headroom. All three sites use
+`quoteGasReserveWei(quote)`. `STEP_GAS_UNITS.transferNative` is the
+protocol-exact `21_000n` (it was an inflated 30,000). A native payment is now
+blocked only when it genuinely cannot cover `amount + real gas`.
+
 **There is no minimum transfer amount.** Neither the product nor Monad imposes
 one; a tiny amount is valid. The two real constraints — insufficient MON for the
 total fee, and no route/liquidity for a conversion — are named honestly and must
@@ -416,6 +434,40 @@ The raw provider string is never shown. `mayHaveSubmitted` (submitted, RPC
 failure) means the tx may already be on-chain and must not be retried blindly;
 it is fed into the payment diagnostic. Add new provider phrasings here, not in
 the component.
+
+### The fee shortfall has its own message
+
+`INSUFFICIENT_MON_FOR_FEES_MESSAGE` is the one copy shown when the sender has
+enough MON for the transfer amount but not for the amount *plus* its required
+maximum gas fee. It is deliberately distinct from a generic "Transaction error"
+and prints no fee figure (so it can never be a misleading estimate).
+
+It is reached by exactly three established paths and nothing else:
+
+- `classifyTransactionError` for a thrown `insufficient funds for gas …` — kind
+  `insufficient_gas`.
+- `computeReadiness` when the composer's `sufficiency.cause === "fees"`
+  (`lib/hooks/usePayment.tsx` sets it only when the native balance covers the
+  amount but not the amount + `quoteGasReserveWei`).
+- `computeReadiness` when `gasSufficiency.status === "insufficient"` — the
+  plan-wide fee shortfall (a swap is several transactions).
+
+All three return `INSUFFICIENT_MON_FOR_FEES_MESSAGE` verbatim; `signGuard`'s
+`insufficient_gas` blocked message and `readiness` both import the constant, so
+the copies cannot drift. `withFeeShortfallMessage` swaps the same copy onto a
+readiness result **without changing its `code`** — the gate stays
+`insufficient_gas` and Confirm stays blocked. A `requiredMon` figure is never
+printed inside the message (one shortfall, one explanation).
+
+`sufficiency.cause === "amount"` (the balance cannot cover the transfer amount
+itself) is an ordinary `insufficient_balance` and must never show this message.
+Unrelated failures — wallet rejection, RPC timeout, unsupported asset, invalid
+recipient, no route, reverted tx — keep their own message.
+
+`isFeeShortfall` is the single predicate that decides when the copy may be
+shown (a `fees`-cause shortfall, or the plan-wide `gasSufficiency` shortfall).
+Both the primary (red) and secondary (amber) composer warnings key off it, so
+they cannot drift and neither shows a detail-bearing fee estimate.
 
 ## Error boundaries
 

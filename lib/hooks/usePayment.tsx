@@ -16,6 +16,8 @@ import { parseUnits } from "@/lib/domain/math";
 import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
 import { isQuoteStale, QUOTE_REFRESH_AFTER_MS, QUOTE_RETRY_AFTER_MS } from "@/lib/domain/freshness";
 import { applyQuoteFailure, applyQuoteSuccess } from "@/lib/domain/quoteState";
+import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
+import { withFeeShortfallMessage } from "@/lib/domain/transactionError";
 import {
   initialIntent,
   isQuotable,
@@ -148,6 +150,13 @@ type FlowContextValue = FlowState & {
     required: string;
     available: string;
     shortfall: string;
+    /**
+     * Why a native payment is short. `"amount"` — the balance cannot cover the
+     * transfer amount itself. `"fees"` — the balance covers the transfer amount
+     * but not the amount plus the required maximum gas fee. Only the latter is
+     * a fee shortfall, and only it gets the dedicated MON-for-fees message.
+     */
+    cause?: "amount" | "fees";
   };
   gasSufficiency: {
     status: "ok" | "insufficient" | "unknown";
@@ -671,18 +680,25 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const required = parseUnits(q.payAmount, payTokenConfig.decimals);
-      const reserve = payTokenConfig.native ? 10_000_000_000_000_000n : 0n;
+      // A native MON source must keep its own network fee aside — the reserve is
+      // the quote's gasLimit × maxFeePerGas, not a flat 0.01 MON.
+      const reserve = payTokenConfig.native ? quoteGasReserveWei(q) : 0n;
       const available = parseUnits(bal.amount, payTokenConfig.decimals);
       if (available >= required + reserve) {
         return { status: "ok" as const, required: q.payAmount, available: bal.amount, shortfall: "0" };
       }
       const short = required + reserve - available;
       const shortfall = Number(short) / 10 ** payTokenConfig.decimals;
+      // Distinguish "cannot cover the amount itself" from "covers the amount but
+      // not the amount + fee". The reported small-native-transfer case is the
+      // latter, and it is the only one that is a *fee* shortfall.
+      const coversAmount = available >= required;
       return {
         status: "insufficient" as const,
         required: q.payAmount,
         available: bal.amount,
         shortfall: shortfall.toFixed(6),
+        cause: coversAmount && reserve > 0n ? ("fees" as const) : ("amount" as const),
       };
     } catch {
       return {
@@ -786,30 +802,35 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
   const payTokenIsSet = Boolean(state.intent.payToken);
   const readiness = useMemo(
     () =>
-      computeReadiness({
-        recipient: state.intent.recipient,
-        recipientConfirmed,
-        payTokenIsSet,
-        sourceBlocked:
-          state.balances.length === 0 || sourceSelection.pending
-            ? null
-            : sourceSelection.sourceAsset === null
-              ? sourceSelection.blocker ?? sourceSelection.reason
-              : sourceSelection.code === "explicit_unusable"
-                ? sourceSelection.reason
-                : null,
-        payToken: state.intent.payToken,
-        receiveToken: state.intent.receiveToken,
-        quoting: state.quoting,
-        // A quote from a previous intent version must never satisfy the gate.
-        quote: state.quoteVersion === state.intent.version ? state.quote : null,
-        quoteError: state.quoteError,
-        quoteStale,
-        sufficiency,
-        gasSufficiency,
-        mismatchActive: Boolean(mismatch?.active),
-        partialCovered: Boolean(partial?.covered),
-      }),
+      // A fee shortfall gets the dedicated, actionable message. The `code`
+      // stays `insufficient_gas`, so the gate still blocks Confirm — only the
+      // copy the user reads changes.
+      withFeeShortfallMessage(
+        computeReadiness({
+          recipient: state.intent.recipient,
+          recipientConfirmed,
+          payTokenIsSet,
+          sourceBlocked:
+            state.balances.length === 0 || sourceSelection.pending
+              ? null
+              : sourceSelection.sourceAsset === null
+                ? sourceSelection.blocker ?? sourceSelection.reason
+                : sourceSelection.code === "explicit_unusable"
+                  ? sourceSelection.reason
+                  : null,
+          payToken: state.intent.payToken,
+          receiveToken: state.intent.receiveToken,
+          quoting: state.quoting,
+          // A quote from a previous intent version must never satisfy the gate.
+          quote: state.quoteVersion === state.intent.version ? state.quote : null,
+          quoteError: state.quoteError,
+          quoteStale,
+          sufficiency,
+          gasSufficiency,
+          mismatchActive: Boolean(mismatch?.active),
+          partialCovered: Boolean(partial?.covered),
+        }),
+      ),
     [
       state.intent.recipient,
       state.intent.payToken,

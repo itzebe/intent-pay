@@ -36,6 +36,58 @@ export type TxErrorInfo = {
 /** An execution error as thrown by `lib/execution/execute.ts` (structurally). */
 export type ExecutionErrorLike = { code?: string; message?: string };
 
+/**
+ * The specific, actionable message shown when the sender has enough MON for the
+ * transfer amount but not for the amount *plus* the required maximum gas fee.
+ *
+ * This is deliberately distinct from the generic "Transaction error" the user
+ * saw: it names the real cause (the fee), states the exact condition (balance
+ * may cover the amount, but the fee also has to fit), and gives two concrete
+ * remedies. It prints no fee figure, so it cannot be a misleading estimate, and
+ * it is only ever used when a balance check established this exact shortfall —
+ * never for a wallet rejection, an RPC failure, an unsupported asset, an invalid
+ * recipient or a reverted transaction.
+ */
+export const INSUFFICIENT_MON_FOR_FEES_MESSAGE =
+  "Insufficient MON for network fees. Your balance may cover the transfer amount, but you also need enough MON to cover the transaction fee. Reduce the transfer amount or add MON to your wallet.";
+
+/**
+ * Substitute an established fee-shortfall message into a readiness result
+ * *without* changing its `code`. The readiness gate (and the Confirm button it
+ * drives) must keep treating this as `insufficient_gas`; only the copy the user
+ * reads changes. The canonical signal is `code === "insufficient_gas"`; both
+ * readiness branches that can yield it already carry the canonical message, and
+ * `isFeeShortfall` lets a caller with the raw balance checks reach the same
+ * conclusion. A result that is not a fee shortfall is returned untouched.
+ */
+export function withFeeShortfallMessage<T extends { ready: boolean; code: string; message?: string }>(
+  readiness: T,
+): T {
+  if (readiness.ready || readiness.code !== "insufficient_gas") return readiness;
+  return { ...readiness, message: INSUFFICIENT_MON_FOR_FEES_MESSAGE };
+}
+
+/** The two balance checks the composer runs, reduced to what a fee shortfall needs. */
+export type FeeShortfallSource = {
+  sufficiency: { status: "ok" | "insufficient" | "unknown"; cause?: "amount" | "fees" };
+  gasSufficiency: { status: "ok" | "insufficient" | "unknown" };
+};
+
+/**
+ * True when the validation result establishes a *native-MON fee* shortfall: the
+ * wallet covers the transfer amount but not the amount plus the required maximum
+ * gas fee. This is the only condition under which the fee-shortfall copy may be
+ * shown, so the primary error and the secondary composer warning cannot drift.
+ *
+ * It deliberately does not fire for an ordinary transfer-balance shortfall
+ * (`cause: "amount"`), nor for any unrelated failure — those never reach here.
+ */
+export function isFeeShortfall(source: FeeShortfallSource): boolean {
+  const { sufficiency, gasSufficiency } = source;
+  if (sufficiency.status === "insufficient" && sufficiency.cause === "fees") return true;
+  return gasSufficiency.status === "insufficient";
+}
+
 function textOf(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object") {
@@ -111,12 +163,12 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
 
   // Gas: the wallet cannot cover the network fee in MON. A swap payment is
   // several sequential transactions, so the fee the wallet must cover is the
-  // total for all of them.
+  // total for all of them. This is a real, established fee shortfall, so it gets
+  // the specific, actionable message — never a generic "Transaction error".
   if (/insufficient funds for gas|gas required exceeds|intrinsic gas too low|exceeds the balance/.test(text)) {
     return {
       kind: "insufficient_gas",
-      message:
-        "Your wallet does not have enough MON to cover this payment's network fees. Add MON and try again.",
+      message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
       mayHaveSubmitted: false,
     };
   }

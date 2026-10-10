@@ -233,8 +233,13 @@ export const STEP_GAS_UNITS = {
   wrap: 60_000n,
   /** WMON → native MON withdraw. */
   unwrap: 60_000n,
-  /** Native MON value transfer. */
-  transferNative: 30_000n,
+  /**
+   * Native MON value transfer. Monad charges the gas *limit* you set, and a
+   * native transfer always uses exactly 21,000 gas (Monad docs:
+   * docs.monad.xyz/developer-essentials/gas-pricing). The protocol-appropriate
+   * constant is used so a small native payment is never over-reserved for gas.
+   */
+  transferNative: 21_000n,
   /** ERC-20 `transfer`. */
   transferToken: 65_000n,
   /** Swap base cost, plus a per-hop increment. */

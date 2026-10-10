@@ -1,4 +1,5 @@
 import { isEvmAddress } from "@/lib/format";
+import { INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "./transactionError";
 
 /**
  * Deterministic payment-readiness gate.
@@ -62,7 +63,18 @@ export type ReadinessInput = {
   } | null;
   quoteError: { code: string; message?: string } | null;
   quoteStale: boolean;
-  sufficiency: { status: "ok" | "insufficient" | "unknown"; required?: string; available?: string };
+  sufficiency: {
+    status: "ok" | "insufficient" | "unknown";
+    required?: string;
+    available?: string;
+    /**
+     * Why a native payment is short. `"fees"` means the balance covers the
+     * transfer amount but not the amount plus the required maximum gas fee —
+     * a fee shortfall, reported as `insufficient_gas`. `"amount"` (or absent)
+     * means the balance cannot cover the transfer amount itself.
+     */
+    cause?: "amount" | "fees";
+  };
   gasSufficiency: { status: "ok" | "insufficient" | "unknown"; requiredMon?: string };
   mismatchActive: boolean;
   /**
@@ -205,7 +217,21 @@ export function computeReadiness(input: ReadinessInput): Readiness {
   // 8. The sender must hold enough of the payment asset — unless a shortfall
   //    can be covered by converting another funded asset (partial split). The
   //    split itself is still gated by the signing guard's balance check.
+  //
+  //    A *fee* shortfall is different: the balance covers the transfer amount,
+  //    but not the amount plus the required maximum gas fee. That is not an
+  //    "insufficient balance" problem and is reported as `insufficient_gas`,
+  //    with the specific MON-for-fees message.
   if (sufficiency.status === "insufficient" && !partialCovered) {
+    if (sufficiency.cause === "fees") {
+      return {
+        ready: false,
+        code: "insufficient_gas",
+        cta: "Not enough MON for network fee",
+        message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
+        severity: "error",
+      };
+    }
     return {
       ready: false,
       code: "insufficient_balance",
@@ -223,7 +249,11 @@ export function computeReadiness(input: ReadinessInput): Readiness {
       ready: false,
       code: "insufficient_gas",
       cta: "Not enough MON for network fee",
-      message: `Insufficient MON for network fees. This payment is several on-chain transactions and needs about ${gasSufficiency.requiredMon ?? "some"} MON in total for gas. Add MON and try again.`,
+      // The same single approved message as every other fee shortfall. The
+      // exact required MON is still computed in `gasSufficiency.requiredMon`
+      // for diagnostics, but it is never surfaced as a second, conflicting
+      // message: one shortfall, one explanation.
+      message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
       severity: "error",
     };
   }

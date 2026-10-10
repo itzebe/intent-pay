@@ -4,7 +4,16 @@ import { getToken, type TokenConfig } from "@/lib/config/tokens";
 import type { Quote, QuoteResult, QuoteRequest } from "@/lib/domain/intent";
 import { validateRecipient, validateUsdAmount } from "@/lib/domain/validation";
 import { isQuoteStale } from "@/lib/domain/freshness";
+import { buildPaymentPlan, planGasUnits } from "@/lib/execution/plan";
 import { estimateNetworkCost } from "./gas";
+
+/**
+ * A positional placeholder for the plan-shape gas estimate. The step list a
+ * quote produces does not depend on the sender/recipient identity (only which
+ * address receives a native-output swap differs), so the total gas is identical
+ * for any address. No transaction is ever built or sent with this value.
+ */
+const PLACEHOLDER_ADDRESS = "0x0000000000000000000000000000000000000001" as const;
 
 /**
  * Intent layer -> quote layer orchestration.
@@ -77,8 +86,8 @@ export async function buildQuote(
 
   const monToken = getToken("MON")!;
   const monPrice = await provider.priceUsd(monToken, network);
-  const networkCost = await estimateNetworkCost(network, monPrice, routeResult.gasEstimate);
 
+  // Assemble the quote once, then derive the plan's *total* gas from it.
   const quote: Quote = {
     intent,
     network,
@@ -91,11 +100,11 @@ export async function buildQuote(
     rate: routeResult.rate,
     priceImpact: routeResult.priceImpact ?? null,
     route: routeResult.route,
-    totalSenderCostUsd: payUsd + networkCost.usd,
-    networkCostUsd: networkCost.usd,
-    networkCostUsdAvailable: networkCost.usdAvailable,
-    gasLimit: networkCost.gasLimit,
-    gasPriceWei: networkCost.gasPriceWei,
+    totalSenderCostUsd: payUsd,
+    networkCostUsd: 0,
+    networkCostUsdAvailable: false,
+    gasLimit: routeResult.gasEstimate,
+    gasPriceWei: undefined,
     quotedAt: Date.now(),
     exactOutput: routeResult.exactOutput,
     payPriceSource: payPrice.source,
@@ -107,6 +116,28 @@ export async function buildQuote(
       rpc: process.env.ALCHEMY_API_KEY ? "alchemy" : "public",
     },
   };
+
+  // A swap payment is several sequential transactions (approve → swap → unwrap →
+  // deliver) and each one charges its own network fee. The wallet must be able
+  // to pay the fee of *every* step, so the network cost we display and validate
+  // is the plan's total, not a single transaction's. The step composition does
+  // not depend on the sender/recipient identity (only the native-output recipient
+  // differs), so placeholder addresses are safe for this estimate. A failure to
+  // shape the plan must never break the quote — we fall back to the provider's
+  // single-transaction estimate.
+  let planGas = routeResult.gasEstimate;
+  try {
+    planGas = planGasUnits(buildPaymentPlan(quote, PLACEHOLDER_ADDRESS, PLACEHOLDER_ADDRESS));
+  } catch {
+    /* keep the provider's estimate */
+  }
+  const networkCost = await estimateNetworkCost(network, monPrice, planGas);
+
+  quote.gasLimit = networkCost.gasLimit;
+  quote.gasPriceWei = networkCost.gasPriceWei;
+  quote.networkCostUsd = networkCost.usd;
+  quote.networkCostUsdAvailable = networkCost.usdAvailable;
+  quote.totalSenderCostUsd = payUsd + networkCost.usd;
 
   return { ok: true, quote };
 }

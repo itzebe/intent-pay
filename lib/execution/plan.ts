@@ -213,6 +213,65 @@ export function describePlan(plan: PaymentPlan): string[] {
   return plan.steps.map((s) => s.label);
 }
 
+/**
+ * Per-step gas-unit estimates for a plan on Monad.
+ *
+ * A payment is only *one* transaction for a direct transfer. A swap payment is
+ * several sequential transactions (approve → swap → unwrap → deliver), and each
+ * one charges its own network fee in MON. The wallet must be able to pay the fee
+ * of **every** step, not just the first — validating only one step's fee is what
+ * made a small swap payment fail at the second transaction with the node's
+ * "insufficient funds for gas" even though the review had shown a green fee.
+ *
+ * These are deliberately generous upper bounds; they only ever gate a payment
+ * that genuinely cannot pay its fees, never fabricate a cost for one that can.
+ */
+export const STEP_GAS_UNITS = {
+  /** ERC-20 `approve`. */
+  approve: 55_000n,
+  /** Native MON → WMON deposit. */
+  wrap: 60_000n,
+  /** WMON → native MON withdraw. */
+  unwrap: 60_000n,
+  /** Native MON value transfer. */
+  transferNative: 30_000n,
+  /** ERC-20 `transfer`. */
+  transferToken: 65_000n,
+  /** Swap base cost, plus a per-hop increment. */
+  swapBase: 130_000n,
+  swapPerHop: 90_000n,
+} as const;
+
+/** The gas units a single plan step is expected to consume. */
+export function stepGasUnits(step: PlanStep): bigint {
+  switch (step.kind) {
+    case "approve":
+      return STEP_GAS_UNITS.approve;
+    case "wrap":
+      return STEP_GAS_UNITS.wrap;
+    case "unwrap":
+      return STEP_GAS_UNITS.unwrap;
+    case "swap":
+      return (
+        STEP_GAS_UNITS.swapBase +
+        BigInt(Math.max(1, step.tokens.length - 1)) * STEP_GAS_UNITS.swapPerHop
+      );
+    case "transfer":
+      return step.token ? STEP_GAS_UNITS.transferToken : STEP_GAS_UNITS.transferNative;
+  }
+}
+
+/**
+ * The total gas units the whole plan will consume — the sum over every step
+ * that is a real transaction. `fallback` is used only for a plan with no steps
+ * (a direct quote that never produced one), so a caller always has a figure.
+ */
+export function planGasUnits(plan: PaymentPlan, fallback = 350_000n): bigint {
+  let total = 0n;
+  for (const step of plan.steps) total += stepGasUnits(step);
+  return total > 0n ? total : fallback;
+}
+
 // ---------------------------------------------------------------------------
 // Partial-balance plan ("send 100 NEWCOIN" while holding only 40)
 //

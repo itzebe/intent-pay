@@ -701,7 +701,7 @@ describe("confirmation flow", () => {
     });
 
     // The raw provider string never reaches the user; the MON guidance does.
-    expect(screen.getByText(/enough MON to pay the network/i)).toBeTruthy();
+    expect(screen.getByText(/enough MON to cover this payment/i)).toBeTruthy();
     expect(screen.queryByText(/gas \* price/i)).toBeNull();
   });
 

@@ -266,6 +266,32 @@ exist. `GasMode` is the single member `"native"`.
 Do not reintroduce a "gasless" claim or a sponsorship badge. If a wallet holds
 no MON, say so plainly and name the real blocker.
 
+### The gas checked is the WHOLE plan, not one transaction
+
+A swap payment is **several** sequential transactions (approve → swap → unwrap →
+deliver), and each charges its own fee. Validating only a single transaction's
+fee is what produced the reported "small MON payment fails with a generic
+transaction error": the review showed a green fee, then the *second* transaction
+failed with the node's `insufficient funds for gas`. The fix is plan-wide:
+
+- `lib/execution/plan.ts` — `stepGasUnits(step)` and `planGasUnits(plan)` sum a
+  per-step gas estimate across the whole plan (approve/wrap/unwrap/swap/transfer).
+- `lib/server/quote.ts` — builds the plan (with placeholder addresses; the step
+  list does not depend on sender/recipient identity) and prices the quote's
+  `gasLimit` from `planGasUnits`, so the displayed network cost and the readiness
+  gate both use the **total**. A plan-shape failure falls back to the provider's
+  single-transaction estimate rather than breaking the quote.
+- `computeReadiness` (`insufficient_gas`) and `prepareSigning` (`coversGas`) then
+  compare the wallet's MON against the plan total. `coversGas` keeps a 20% buffer.
+
+**There is no minimum transfer amount.** Neither the product nor Monad imposes
+one; a tiny amount is valid. The two real constraints — insufficient MON for the
+total fee, and no route/liquidity for a conversion — are named honestly and must
+never be described as a "minimum". `MIN_EXECUTABLE_LIQUIDITY_USD`
+(`lib/domain/tokenRisk.ts`) is a per-token *swap-liquidity* floor, not a payment
+minimum, and `Amount is too small to send` (`validateAmount`) only fires when an
+amount rounds below one base unit at the token's decimals.
+
 ## Execution protection (MEV / sandwich)
 
 The product goal — an attacker cannot make the recipient receive drastically

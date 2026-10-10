@@ -112,4 +112,55 @@ describe("executePlan — transaction rejection handling", () => {
       spy.mockRestore();
     }
   });
+
+  // O. A broadcast transaction whose receipt was never observed is NOT a
+  //    success: the plan is unconfirmed, the hash is preserved, and the
+  //    remaining steps are not run.
+  it("reports an unobserved receipt as unconfirmed and stops the plan", async () => {
+    const hash = "0xpending" as `0x${string}`;
+    const sent: string[] = [];
+    const wallet = {
+      account: { address: SENDER },
+      writeContract: async () => {
+        sent.push("writeContract");
+        return hash;
+      },
+      sendTransaction: async () => {
+        sent.push("sendTransaction");
+        return hash;
+      },
+    } as unknown as WalletClient;
+
+    // Two steps: a second step must never be submitted once the first is
+    // unconfirmed (it was built to follow a confirmed predecessor).
+    const twoStep = { ...directTransferPlan() };
+    twoStep.steps = [
+      { ...twoStep.steps[0], id: "s1", kind: "transfer" } as any,
+      { ...twoStep.steps[0], id: "s2", kind: "transfer" } as any,
+    ];
+    twoStep.primaryStepId = "s1";
+
+    const client = getClientPublicClient("mainnet");
+    const spy = vi
+      .spyOn(client, "waitForTransactionReceipt")
+      .mockRejectedValue(new Error("Timed out while waiting for transaction receipt"));
+
+    try {
+      const seen: { status: string; unconfirmed?: boolean; hash?: string }[] = [];
+      const result = await executePlan(twoStep as any, wallet, "mainnet", {
+        onStep: (r) => seen.push(r),
+      });
+
+      expect(result.confirmed).toBe(false);
+      expect(result.primaryHash).toBe(hash);
+      // The unconfirmed step keeps its hash and is flagged.
+      const step = seen.find((s) => s.status === "submitted" && s.unconfirmed);
+      expect(step?.hash).toBe(hash);
+      // The second step was never submitted.
+      expect(sent.length).toBe(1);
+      expect(seen.some((s) => s.status === "confirmed")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

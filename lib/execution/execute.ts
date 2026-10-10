@@ -13,6 +13,12 @@ export type StepResult = {
   stepId: string;
   label: string;
   status: "pending" | "submitted" | "confirmed" | "failed";
+  /**
+   * The transaction was broadcast but its receipt was not observed within the
+   * confirmation window. It may still confirm — the hash must be preserved and
+   * its status checked, and the payment must not be treated as delivered.
+   */
+  unconfirmed?: boolean;
   hash?: Hash;
   error?: string;
 };
@@ -315,13 +321,17 @@ export async function executePlan(
   walletClient: WalletClient,
   network: MonadNetwork,
   callbacks: ExecuteCallbacks = {},
-): Promise<{ primaryHash?: Hash; results: StepResult[] }> {
+): Promise<{ primaryHash?: Hash; results: StepResult[]; confirmed: boolean }> {
   if (!plan.executable) {
     throw new ExecutionError("This payment has no executable on-chain route.", "unknown");
   }
   const client = getClientPublicClient(network);
   const results: StepResult[] = [];
   let primaryHash: Hash | undefined;
+  // Every step must reach a successful receipt for the plan to count as
+  // confirmed. A step whose receipt was not observed within the window leaves
+  // this false so the caller reports an *unknown* outcome, never success.
+  let confirmed = true;
 
   const report = (r: StepResult) => {
     const idx = results.findIndex((x) => x.stepId === r.stepId);
@@ -360,15 +370,23 @@ export async function executePlan(
       report({ stepId: step.id, label: step.label, status: "confirmed", hash });
     } catch (err) {
       if (err instanceof ExecutionError) throw err;
+      // The transaction was broadcast (we hold its hash) but its receipt was not
+      // observed within the window. This is an *unknown* outcome, not a failure:
+      // it may still confirm. Stop here — do not run the remaining steps, which
+      // were built to follow a confirmed predecessor — and let the caller report
+      // the ambiguity honestly and offer a safe status check. The hash is kept.
+      confirmed = false;
       report({
         stepId: step.id,
         label: step.label,
         status: "submitted",
+        unconfirmed: true,
         hash,
-        error: "Confirmation timed out",
+        error: "Confirmation not observed within the window",
       });
+      break;
     }
   }
 
-  return { primaryHash, results };
+  return { primaryHash, results, confirmed };
 }

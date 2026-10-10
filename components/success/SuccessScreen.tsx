@@ -72,6 +72,10 @@ export function SuccessScreen({
     "",
   ][phase];
 
+  // Only a proven on-chain delivery may read "delivered". An unverified one is
+  // reported as a broadcast, never as a completed payment.
+  const deliveryUnverified = Boolean(delivery && !delivery.verified);
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 py-10 text-center">
       <div className="relative mb-4 flex h-24 w-24 items-center justify-center">
@@ -117,10 +121,10 @@ export function SuccessScreen({
         className="num text-3xl font-semibold tracking-tight text-white sm:text-4xl"
       >
         {usdTokenLabel(receiveUsd, receiveToken.symbol)}
-        {delivery && !delivery.verified ? " sent" : " delivered"}
+        {deliveryUnverified ? " sent" : " delivered"}
       </motion.h2>
       <p className="mt-2 text-sm text-white/50">
-        {delivery && !delivery.verified
+        {deliveryUnverified
           ? "Broadcast to Monad · delivery not yet proven · to "
           : "Confirmed on Monad · to "}
         <span className="font-mono text-white/75">{shortAddress(recipient, 6)}</span>

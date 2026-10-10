@@ -441,7 +441,9 @@ describe("confirmation flow", () => {
 
     expect(screen.queryByText("Review Payment")).toBeNull();
     expect(screen.getByText(/Review payment/)).toBeTruthy();
-    expect(screen.getByText(/did not confirm/i)).toBeTruthy();
+    // The ambiguous post-submission failure is surfaced as an honest,
+    // actionable message (never the raw provider string).
+    expect(screen.getByText(/could not confirm whether the transaction/i)).toBeTruthy();
   });
 
   it("submits through the standard EOA path with gas paid in MON", async () => {
@@ -604,5 +606,160 @@ describe("confirmation flow", () => {
 
     // Exactly one submission and no double-spend.
     expect(executePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("never reports success for an unconfirmed (unobserved-receipt) submission", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" },
+            amount: 300_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "5" },
+      receiveToken: "USDC",
+      expectedReceive: "5",
+      partial: false,
+      gasMode: "native",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    // A broadcast transaction whose receipt was not observed in time.
+    executePlan.mockResolvedValue({
+      primaryHash: "0xpending",
+      confirmed: false,
+      results: [
+        { stepId: "transfer", label: "Send USDC", status: "submitted", unconfirmed: true, hash: "0xpending" },
+      ],
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The honest unknown-outcome screen is shown — not a success screen.
+    expect(screen.getByText(/Transaction status unknown/i)).toBeTruthy();
+    expect(screen.queryByText(/Waiting for confirmation/i)).toBeNull();
+    // Exactly one submission and no automatic resubmission.
+    expect(executePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a raw provider error to an actionable message on Review", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" },
+            amount: 300_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "5" },
+      receiveToken: "USDC",
+      expectedReceive: "5",
+      partial: false,
+      gasMode: "native",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    executePlan.mockRejectedValue(new Error("insufficient funds for gas * price + value"));
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The raw provider string never reaches the user; the MON guidance does.
+    expect(screen.getByText(/enough MON to pay the network/i)).toBeTruthy();
+    expect(screen.queryByText(/gas \* price/i)).toBeNull();
+  });
+
+  it("lets the user recover from the unknown-outcome screen (no dead-end)", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" },
+            amount: 300_000n,
+            recipient: flow.intent.recipient,
+          },
+        ],
+      },
+      quote: { receiveAmount: "5" },
+      receiveToken: "USDC",
+      expectedReceive: "5",
+      partial: false,
+      gasMode: "native",
+      version: flow.intent.version,
+      key: flow.intent.key,
+    });
+    executePlan.mockResolvedValue({
+      primaryHash: "0xpending",
+      confirmed: false,
+      results: [
+        { stepId: "transfer", label: "Send USDC", status: "submitted", unconfirmed: true, hash: "0xpending" },
+      ],
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      const [confirm] = screen.getAllByText(/Confirm & Send/);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/Transaction status unknown/i)).toBeTruthy();
+
+    // "Back to edit" returns the user to a working composer — not a blank or
+    // trapped state — and preserves the payment they were making.
+    fireEvent.click(screen.getByText("Back to edit"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/Transaction status unknown/i)).toBeNull();
+    expect(flow.intent.receiveAmount).toBe("5");
+    expect(flow.intent.receiveToken).toBe("USDC");
   });
 });

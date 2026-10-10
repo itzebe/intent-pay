@@ -365,6 +365,38 @@ on-chain transfer from the confirmed receipt, against the minimum the
 transaction enforced (the plan's `slippageBps`). A reverted tx is failed;
 an unprovable delivery is shown as unverified — never as success.
 
+## Confirmation outcomes (a broadcast is not a success)
+
+`executePlan` (`lib/execution/execute.ts`) returns `{ primaryHash, results,
+confirmed }`. `confirmed` is true only when **every** step reached a successful
+receipt. A step whose receipt was not observed within the confirmation window
+(90s, 2 confirmations) is reported with `unconfirmed: true` and its hash kept,
+`confirmed` becomes false, and the remaining steps are **not** run (they were
+built to follow a confirmed predecessor). The composer then shows the
+`UnresolvedPanel` ("Transaction status unknown") — never the success screen —
+with the hash(es), a read-only "Check transaction status" action
+(`checkUnresolvedStatus` re-reads the real receipt; a confirmed one proceeds to
+`verifyDelivery`, a reverted one is reported, a still-absent one stays unknown),
+and Retry / Back-to-edit. Nothing is ever resubmitted automatically.
+`SuccessScreen` only reads "delivered" when `delivery.verified` is true; an
+unverified delivery reads "sent / broadcast, delivery not yet proven".
+
+## Actionable transaction errors
+
+`lib/domain/transactionError.ts` (`classifyTransactionError`, pure) maps any
+thrown value — a viem `ExecutionError`, an EIP-1193 code, or a raw provider/RPC
+string — to a fixed, user-safe `{ kind, message, mayHaveSubmitted, action? }`.
+The raw provider string is never shown. `mayHaveSubmitted` (submitted, RPC
+failure) means the tx may already be on-chain and must not be retried blindly;
+it is fed into the payment diagnostic. Add new provider phrasings here, not in
+the component.
+
+## Error boundaries
+
+`app/error.tsx` (route segment) and `app/global-error.tsx` (root layout) join the
+`ErrorBoundary` in `components/ErrorBoundary.tsx` (scope="app" and
+scope="composer") so no thrown render error can blank a page.
+
 ## Partial-balance split ("send what you hold + convert the rest")
 
 A token-quantity intent (`receiveTokenAmount`, set only from a genuine

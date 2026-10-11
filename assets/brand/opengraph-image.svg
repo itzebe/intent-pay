@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="og-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0E1013" />
+      <stop offset="1" stop-color="#08090B" />
+    </linearGradient>
+    <radialGradient id="og-glow" cx="0.12" cy="-0.08" r="0.9">
+      <stop offset="0" stop-color="#836ef9" stop-opacity="0.30" />
+      <stop offset="0.6" stop-color="#836ef9" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="og-glow2" cx="0.96" cy="0.04" r="0.7">
+      <stop offset="0" stop-color="#5EEAD4" stop-opacity="0.14" />
+      <stop offset="0.55" stop-color="#5EEAD4" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="og-mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#927ffb" />
+      <stop offset="1" stop-color="#6f5aef" />
+    </linearGradient>
+    <linearGradient id="og-text" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A78BFA" />
+      <stop offset="0.5" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#5EEAD4" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#og-bg)" />
+  <rect width="1200" height="630" fill="url(#og-glow)" />
+  <rect width="1200" height="630" fill="url(#og-glow2)" />
+  <rect x="0.5" y="0.5" width="1199" height="629" fill="none" stroke="#ffffff" stroke-opacity="0.06" />
+
+  <g transform="translate(96 84)">
+    <rect width="64" height="64" rx="18" fill="url(#og-mark)" />
+    <g transform="translate(32 32) scale(1.9) translate(-12 -12)">
+      <path d="M13 2 4.5 13.2c-.3.4 0 .8.4.8H11l-1 8 8.5-11.2c.3-.4 0-.8-.4-.8H12l1-8Z" fill="#ffffff" />
+    </g>
+    <text x="84" y="30" font-family="DejaVu Sans" font-size="26" font-weight="bold" fill="#ffffff">Intent Pay</text>
+    <text x="84" y="54" font-family="DejaVu Sans" font-size="15" fill="#ffffff" fill-opacity="0.45" letter-spacing="2">INTENT-BASED PAYMENTS · MONAD</text>
+  </g>
+
+  <text x="96" y="300" font-family="DejaVu Sans" font-size="60" font-weight="bold" fill="#ffffff">Tell Intent Pay what</text>
+  <text x="96" y="372" font-family="DejaVu Sans" font-size="60" font-weight="bold" fill="#ffffff">you want to pay.</text>
+  <text x="96" y="452" font-family="DejaVu Sans" font-size="44" font-weight="bold" fill="url(#og-text)">Review the route. Send on Monad.</text>
+
+  <text x="96" y="552" font-family="DejaVu Sans" font-size="21" fill="#ffffff" fill-opacity="0.5">One reviewable onchain transaction · your wallet authorizes · Monad mainnet</text>
+</svg>

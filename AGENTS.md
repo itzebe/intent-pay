@@ -591,3 +591,38 @@ curl -s -X POST http://localhost:3000/api/quote -H 'Content-Type: application/js
   to the last 2 chars (`…su`).
 - Regression tests: `tests/security.test.ts` (sanitiser) and
   `tests/securityHeaders.test.ts` (header/CSP shape, dev vs prod).
+
+
+## Site metadata, icons and crawl resources
+
+- **`lib/config/site.ts` is the single source for the canonical origin** and the
+  list of public routes. `app/layout.tsx` metadata (`metadataBase`, canonical,
+  Open Graph, Twitter), `app/robots.ts` and `app/sitemap.ts` all read it, so the
+  three cannot drift. `NEXT_PUBLIC_SITE_URL` overrides the default
+  (`https://intent-pay-roan.vercel.app`) for a self-hosted deploy.
+- **Icons and social images are static files in `app/`** (Next file conventions):
+  `favicon.ico` (multi-size PNG-compressed), `icon.svg`, `apple-icon.png`,
+  `opengraph-image.png`, `twitter-image.png`. They are rasterised from the vector
+  sources `app/icon.svg` and `assets/brand/opengraph-image.svg` by
+  `node scripts/generate-brand-assets.mjs` (uses the `sharp` that ships with
+  Next). **Never add an `opengraph-image.svg`/`twitter-image.svg` under `app/`** —
+  a same-named file convention conflicts with the explicit PNG and the route
+  fails to build; the source SVG lives in `assets/brand/`.
+- **`robots.txt` disallows `/api/`** (per-user wallet data) and advertises the
+  absolute sitemap; `sitemap.xml` lists only real pages. Regression:
+  `tests/metadata.test.ts` also asserts every advertised route resolves to an
+  on-disk `page.tsx`.
+- The CSP's `img-src` already allows `'self'` and `data:`, so these same-origin
+  icons/PNGs need no CSP change. `manifest-src 'self'` is present if a web
+  manifest is added later.
+
+
+## Dependency override (postcss)
+
+- `package.json` pins `overrides.postcss` (and the direct devDependency) to
+  `^8.5.23`, the first release fixing GHSA-qx2v-qp2m-jg93 / GHSA-6g55-p6wh-862q /
+  GHSA-fxqj-rqcc-2cmp / GHSA-r28c-9q8g-f849. Next 15.5.27 pins `postcss@8.4.31`
+  exactly (nested); the override dedupes it to a patched 8.5.x. **This is a
+  documented override, not a Next major upgrade** — keep it until Next ships a
+  15.x patch that bumps postcss itself. Re-run `npm audit --omit=dev` after any
+  Next bump to confirm the override is still needed.

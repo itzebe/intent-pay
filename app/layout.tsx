@@ -1,11 +1,35 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import {
+  SITE_URL,
+  SITE_NAME,
+  SITE_TITLE as TITLE,
+  SITE_DESCRIPTION as DESCRIPTION,
+} from "@/lib/config/site";
 
 export const metadata: Metadata = {
-  title: "Intent Pay — Review the route. Send on Monad.",
-  description:
-    "Intent-based payments on Monad. Tell Intent Pay what you want to pay, review the route, and confirm your payment from one simple interface.",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: TITLE,
+    template: "%s",
+  },
+  description: DESCRIPTION,
   applicationName: "Intent Pay",
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    siteName: SITE_NAME,
+    title: TITLE,
+    description: DESCRIPTION,
+    url: "/",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+    site: "@IntentPayApp",
+    creator: "@IntentPayApp",
+  },
 };
 
 export const viewport: Viewport = {

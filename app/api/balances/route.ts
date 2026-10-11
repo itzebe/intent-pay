@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sanitizeUpstreamError } from "@/lib/server/http";
 import { discoverWalletBalances, ensureCatalog } from "@/lib/server/discovery";
 import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -83,7 +84,7 @@ export async function GET(req: Request) {
     });
   } catch (err) {
     return NextResponse.json(
-      { ok: false, message: (err as Error)?.message ?? "Failed to read balances." },
+      { ok: false, message: sanitizeUpstreamError(err, "Failed to read balances.") },
       { status: 502 },
     );
   }

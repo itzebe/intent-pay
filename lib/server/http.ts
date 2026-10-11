@@ -47,6 +47,33 @@ export class TtlCache<K, V> {
   }
 }
 
+/**
+ * Reduce an upstream error (RPC, indexer, provider) to a short, client-safe
+ * message.
+ *
+ * A raw provider message can embed the full request URL — and a viem
+ * `HttpRequestError` includes it verbatim (`URL: https://…/v2/<key>`). Returning
+ * that straight to the browser would disclose the configured RPC key inside an
+ * API error body (and any proxy/analytics log of it). This strips every URL down
+ * to its origin before truncating, and never returns a stack trace.
+ */
+export function sanitizeUpstreamError(err: unknown, fallback: string): string {
+  const raw = (err as { message?: unknown })?.message;
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
+  const scrubbed = raw.replace(
+    // Keep the origin (host) — useful for diagnosis, discloses no path/query.
+    /https?:\/\/[^\s"'<>)\]]+/gi,
+    (url) => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return "[url]";
+      }
+    },
+  );
+  return scrubbed.length > 200 ? `${scrubbed.slice(0, 200)}…` : scrubbed;
+}
+
 /** fetch with a hard timeout so a hung provider can never stall a quote. */
 export async function fetchWithTimeout(
   url: string,

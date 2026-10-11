@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sanitizeUpstreamError } from "@/lib/server/http";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { optimizePayment } from "@/lib/server/optimizer";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, network, ...result });
   } catch (err) {
     return NextResponse.json(
-      { ok: false, message: (err as Error)?.message ?? "Could not evaluate payment options." },
+      { ok: false, message: sanitizeUpstreamError(err, "Could not evaluate payment options.") },
       { status: 502 },
     );
   }

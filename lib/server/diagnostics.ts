@@ -1,5 +1,5 @@
 import type { MonadNetwork } from "@/lib/config/chains";
-import { fetchWithTimeout, TtlCache } from "@/lib/server/http";
+import { fetchWithTimeout, TtlCache, sanitizeUpstreamError } from "@/lib/server/http";
 import { marketProviders } from "@/lib/server/pricing/market";
 import { getToken } from "@/lib/config/tokens";
 import { alchemyRpcUrl } from "@/lib/config/chains";
@@ -27,7 +27,8 @@ export type IntegrationStatus = {
   reachable: boolean;
   /** Provider disabled on purpose (e.g. ZERION_ENABLED=0). */
   disabled?: boolean;
-  /** Last 4 characters of the key, so an operator can match it to Vercel. */
+  /** Masked tail of the key (e.g. "…su") so an operator can still match a
+   * deploy to a Vercel variable, without publishing a usable index of the key. */
   keySuffix?: string;
   /** Non-sensitive reason when not reachable. */
   error?: string;
@@ -35,10 +36,10 @@ export type IntegrationStatus = {
   at: number;
 };
 
-/** Last 4 characters of a secret — enough to identify, never enough to use. */
+/** Masked tail of a secret — enough to identify, never enough to use. */
 function suffix(secret: string | undefined): string | undefined {
   if (!secret || secret.length < 4) return undefined;
-  return secret.slice(-4);
+  return `…${secret.slice(-2)}`;
 }
 
 function hostOf(url: string): string {
@@ -53,8 +54,9 @@ function hostOf(url: string): string {
 function reason(err: unknown): string {
   const e = err as { name?: string; message?: string };
   if (e?.name === "AbortError") return "Request timed out";
-  const msg = e?.message ?? "Request failed";
-  return msg.length > 140 ? msg.slice(0, 140) : msg;
+  // Scrub any embedded URL (viem embeds the request URL, key included) before
+  // this ever reaches a response body.
+  return sanitizeUpstreamError(err, "Request failed").slice(0, 140);
 }
 
 async function rpcCall(

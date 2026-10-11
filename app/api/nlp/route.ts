@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sanitizeUpstreamError } from "@/lib/server/http";
 import type { MonadNetwork } from "@/lib/config/chains";
 import {
   allTokens,
@@ -182,7 +183,7 @@ export async function POST(req: Request) {
       {
         ok: false,
         code: "provider_error",
-        message: (err as Error)?.message ?? "The intent engine is unavailable.",
+        message: sanitizeUpstreamError(err, "The intent engine is unavailable."),
       },
       { status: 200 },
     );

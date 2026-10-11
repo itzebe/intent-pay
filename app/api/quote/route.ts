@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sanitizeUpstreamError } from "@/lib/server/http";
 import { buildQuote } from "@/lib/server/quote";
 import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -151,7 +152,7 @@ export async function POST(req: Request) {
       {
         ok: false,
         code: "provider_error",
-        message: (err as Error)?.message ?? "Could not build a quote.",
+        message: sanitizeUpstreamError(err, "Could not build a quote."),
       },
       { status: 502 },
     );

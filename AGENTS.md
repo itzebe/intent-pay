@@ -564,3 +564,30 @@ without a wallet:
 curl -s -X POST http://localhost:3000/api/quote -H 'Content-Type: application/json' \
   -d '{"recipient":"0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4","receiveToken":"USDC","receiveAmount":"5","amountMode":"recipient_receives","payToken":"USDT","mode":"live","network":"mainnet"}'
 ```
+
+
+## Security hardening (headers, CSP, error disclosure)
+
+- **Security headers ship from `next.config.mjs` `headers()`.** Every route gets
+  `Content-Security-Policy`, `Strict-Transport-Security`,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`,
+  `Permissions-Policy` and `Cross-Origin-Opener-Policy: same-origin-allow-popups`
+  (popups allowed for wallet flows, window object never shared). `/api/*`
+  additionally sets `Cache-Control: no-store` — balances/quotes are per-user and
+  must never be stored by a shared cache.
+- **The CSP is scoped, not generic.** No third-party script origins. `connect-src`
+  is `'self'` + the browser RPC origins derived from `NEXT_PUBLIC_MONAD_RPC_URL` /
+  `NEXT_PUBLIC_ALCHEMY_API_KEY` (+ `chrome-extension:`/`moz-extension:` for the
+  injected provider). `img-src` allows `raw.githubusercontent.com` for the
+  official Monad token-list logos. `script-src` keeps `'unsafe-inline'` (Next's
+  inline bootstrap) and adds `'unsafe-eval'` **only in development**. If you add
+  a provider/logo origin, add it to the matching directive or it will be blocked.
+- **Never return a raw upstream error message to the client.** A viem
+  `HttpRequestError` embeds the full request URL — including an API-key-in-path —
+  and these messages land in API error bodies. Every route that echoes a caught
+  error uses `sanitizeUpstreamError(err, fallback)` (`lib/server/http.ts`): it
+  collapses URLs to their origin, truncates to 200 chars and never returns a
+  stack. `lib/server/diagnostics.ts` scrubs the same way and masks key suffixes
+  to the last 2 chars (`…su`).
+- Regression tests: `tests/security.test.ts` (sanitiser) and
+  `tests/securityHeaders.test.ts` (header/CSP shape, dev vs prod).

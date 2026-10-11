@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { sanitizeUpstreamError } from "@/lib/server/http";
 import type { Address } from "viem";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
@@ -110,7 +111,7 @@ export async function POST(req: Request) {
       {
         ok: false,
         code: "provider_error",
-        message: (err as Error)?.message ?? "Could not plan the split payment.",
+        message: sanitizeUpstreamError(err, "Could not plan the split payment."),
       },
       { status: 502 },
     );

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WalletClient } from "viem";
 import { executePlan, ExecutionError } from "@/lib/execution/execute";
+import { classifyTransactionError } from "@/lib/domain/transactionError";
 import { buildPaymentPlan } from "@/lib/execution/plan";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { getToken } from "@/lib/config/tokens";
@@ -161,6 +162,36 @@ describe("executePlan — transaction rejection handling", () => {
       expect(seen.some((s) => s.status === "confirmed")).toBe(false);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  // P. The real wallet/RPC failure is preserved on the thrown ExecutionError so
+  //    the UI can name the actual cause instead of a generic fallback. This is
+  //    the regression for the "returns to Confirm and Send with no explanation"
+  //    report: the cause was being discarded.
+  it("preserves the underlying provider error on `cause` (P)", async () => {
+    const underlying = Object.assign(new Error("insufficient funds for gas * price + value"), {
+      code: -32000,
+    });
+    const wallet = {
+      account: { address: SENDER },
+      writeContract: async () => {
+        throw underlying;
+      },
+      sendTransaction: async () => {
+        throw underlying;
+      },
+    } as unknown as WalletClient;
+
+    try {
+      await executePlan(directTransferPlan(), wallet, "mainnet");
+      throw new Error("expected executePlan to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExecutionError);
+      expect((err as ExecutionError).cause).toBe(underlying);
+      // And the classifier now reads the real reason straight off the wrapper.
+      const info = classifyTransactionError(err);
+      expect(info.kind).toBe("insufficient_gas");
     }
   });
 });

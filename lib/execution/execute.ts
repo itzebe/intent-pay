@@ -44,14 +44,24 @@ export class ExecutionError extends Error {
    */
   code: "rejected" | "reverted" | "submitted" | "unknown";
   stepId?: string;
+  /**
+   * The underlying value thrown by the wallet/RPC (a viem `BaseError`, an
+   * EIP-1193 provider error, …). Preserved so `classifyTransactionError` can
+   * read the *real* cause — e.g. a gas shortfall or a simulation revert — instead
+   * of only our fixed wrapper sentence. Without it a genuine cause is lost and
+   * a small payment can only ever surface as the generic fallback.
+   */
+  cause?: unknown;
   constructor(
     message: string,
     code: "rejected" | "reverted" | "submitted" | "unknown",
     stepId?: string,
+    cause?: unknown,
   ) {
     super(message);
     this.code = code;
     this.stepId = stepId;
+    this.cause = cause;
   }
 }
 
@@ -354,6 +364,7 @@ export async function executePlan(
         rejected ? "You rejected the transaction." : "The transaction could not be sent.",
         rejected ? "rejected" : "unknown",
         step.id,
+        err,
       );
     }
 

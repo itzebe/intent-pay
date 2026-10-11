@@ -88,25 +88,43 @@ export function isFeeShortfall(source: FeeShortfallSource): boolean {
   return gasSufficiency.status === "insufficient";
 }
 
+/**
+ * Collect every human-readable fragment from an error *and its `cause` chain*.
+ *
+ * The execution layer wraps a wallet/RPC failure in its own `ExecutionError`
+ * and preserves the original value on `.cause`. Reading only the wrapper's
+ * fixed sentence would discard the real reason (a gas shortfall, a simulation
+ * revert, a user rejection) and force the generic fallback — exactly the
+ * "Transaction error" a small payment used to show. viem nests its own causes
+ * several levels deep (`BaseError.cause` → provider error → …), so we walk the
+ * chain a bounded number of levels.
+ */
 function textOf(err: unknown): string {
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object") {
-    const e = err as Record<string, unknown>;
-    const parts = [e.shortMessage, e.message, e.details, e.cause].filter(
-      (p): p is string => typeof p === "string",
-    );
-    return parts.join(" ");
+  const parts: string[] = [];
+  let node: unknown = err;
+  for (let depth = 0; depth < 6 && node != null; depth++) {
+    if (typeof node === "string") {
+      parts.push(node);
+      break;
+    }
+    if (typeof node !== "object") break;
+    const e = node as Record<string, unknown>;
+    for (const key of ["shortMessage", "message", "details", "reason"]) {
+      const v = e[key];
+      if (typeof v === "string" && v) parts.push(v);
+    }
+    node = e.cause;
   }
-  return "";
+  return parts.join(" ");
 }
 
+/** The first numeric JSON-RPC / EIP-1193 code found along the `cause` chain. */
 function numericCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") return undefined;
-  const c = (err as { code?: unknown }).code;
-  if (typeof c === "number") return c;
-  const nested = (err as { cause?: unknown }).cause;
-  if (nested && typeof nested === "object" && typeof (nested as { code?: unknown }).code === "number") {
-    return (nested as { code: number }).code;
+  let node: unknown = err;
+  for (let depth = 0; depth < 6 && node && typeof node === "object"; depth++) {
+    const c = (node as { code?: unknown }).code;
+    if (typeof c === "number") return c;
+    node = (node as { cause?: unknown }).cause;
   }
   return undefined;
 }
@@ -165,7 +183,15 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
   // several sequential transactions, so the fee the wallet must cover is the
   // total for all of them. This is a real, established fee shortfall, so it gets
   // the specific, actionable message — never a generic "Transaction error".
-  if (/insufficient funds for gas|gas required exceeds|intrinsic gas too low|exceeds the balance/.test(text)) {
+  // Checked *before* the generic "insufficient funds" branch below, because
+  // wallets phrase the fee shortfall as an "insufficient funds for …" message
+  // too, and misreading it as a token shortfall would send the user to the
+  // wrong remedy.
+  if (
+    /insufficient funds for gas|insufficient funds for intrinsic|gas required exceeds|intrinsic gas too low|exceeds the balance|out of gas|gas \* price \+ value/.test(
+      text,
+    )
+  ) {
     return {
       kind: "insufficient_gas",
       message: INSUFFICIENT_MON_FOR_FEES_MESSAGE,

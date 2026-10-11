@@ -240,6 +240,31 @@ intent + not stale + readiness) gates the Confirm button, and `onRefresh` gives
 an explicit retry on a stale quote. Do not send a recoverable preparation error,
 or an engine-driven version bump, back to a blank composer.
 
+## Never lose the cause of a failed transaction
+
+A payment that fails must say **why**, with the specific cause the wallet/RPC
+gave — never only the generic "The payment could not be completed. Review the
+details and try again." That fallback is the last resort, not the outcome for a
+real provider failure.
+
+Two rules keep it specific:
+
+- `executePlan` must attach the original thrown value to the `ExecutionError`
+  it raises (`new ExecutionError(msg, code, stepId, err)`). Dropping it was the
+  "returns to Confirm and Send with no explanation" report: the wrapper kept only
+  its own fixed sentence, so `classifyTransactionError` saw a bare
+  `ExecutionError` and could only fall through to the generic message.
+- `classifyTransactionError` must read the **whole `cause` chain** — viem nests
+  its errors several levels deep (`BaseError.cause` → provider error → …), and
+  `cause` may itself be an object, not just a string. Walk it (bounded) for both
+  the message text and the numeric JSON-RPC/EIP-1193 code.
+
+The gas shortfall is checked *before* the generic "insufficient funds" branch,
+because wallets phrase the fee failure as `insufficient funds for gas * price +
+value`; reading it as a token shortfall would send the user to the wrong remedy.
+Both `insufficient_gas` variants surface the one canonical
+`INSUFFICIENT_MON_FOR_FEES_MESSAGE`.
+
 ## Token names resolve internally (never ask for an address)
 
 The user must never enter a contract address. `resolveToken`

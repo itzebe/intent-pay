@@ -86,6 +86,46 @@ describe("classifyTransactionError", () => {
     expect(info.mayHaveSubmitted).toBe(false);
     expect(info.message).not.toMatch(/internal|stack|unexpected/i);
   });
+
+  // Regression: the execution layer wraps the wallet/RPC failure in its own
+  // ExecutionError. The real cause lives on `.cause` (and, for viem, on a nested
+  // cause chain). The classifier must read through it, otherwise a specific
+  // cause is lost and the user only sees the generic fallback — the "returns to
+  // Confirm and Send with no explanation" report.
+  it("reads the real cause through a wrapper with a preserved `cause`", () => {
+    const wrapper = Object.assign(new Error("The transaction could not be sent."), {
+      code: "unknown",
+      cause: Object.assign(new Error("insufficient funds for gas * price + value"), { code: -32000 }),
+    });
+    const info = classifyTransactionError(wrapper);
+    expect(info.kind).toBe("insufficient_gas");
+    expect(info.message).toBe(INSUFFICIENT_MON_FOR_FEES_MESSAGE);
+  });
+
+  it("reads a nested viem-style cause chain", () => {
+    const providerError = Object.assign(new Error("execution reverted: STF"), {
+      code: 3,
+      data: "0x08c379a0",
+    });
+    const viemError = Object.assign(new Error("The contract function ... reverted."), {
+      shortMessage: "execution reverted: STF",
+      cause: providerError,
+    });
+    const wrapper = Object.assign(new Error("The transaction could not be sent."), {
+      cause: viemError,
+    });
+    const info = classifyTransactionError(wrapper);
+    // STF (Safe Transfer Failed) is a token/allowance failure, not the generic
+    // fallback; either way it must NOT be the unknown fallback.
+    expect(info.kind).not.toBe("unknown");
+  });
+
+  it("prefers the gas-shortfall reading of an 'insufficient funds' fee error", () => {
+    const info = classifyTransactionError(
+      new Error("insufficient funds for gas * price + value: address 0x… have 0 want 1"),
+    );
+    expect(info.kind).toBe("insufficient_gas");
+  });
 });
 
 /**

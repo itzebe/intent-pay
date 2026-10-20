@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { PaymentProvider, usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet } from "@/lib/hooks/useWallet";
 import { Hero, HowItWorks } from "@/components/landing/Hero";
@@ -10,12 +10,20 @@ import { SiteFooter } from "@/components/landing/SiteFooter";
 import { PaymentComposer } from "@/components/composer/PaymentComposer";
 import { ConnectButton } from "@/components/wallet/WalletBar";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { ReferralPanel } from "@/components/referral/ReferralPanel";
+import { captureReferralFromUrl } from "@/lib/referral/useReferral";
 import { Bolt, Shield } from "@/components/ui/Icons";
 
 function Shell() {
   const flow = usePaymentFlow();
   const wallet = useWallet(flow.intent.network);
   const composerRef = useRef<HTMLDivElement>(null);
+
+  // Capture `?ref=` once, as early as possible, so the referral survives the
+  // connect step and any reload. Never blocks the payment flow.
+  useEffect(() => {
+    captureReferralFromUrl(window.location.search);
+  }, []);
 
   return (
     <div className="min-h-dvh">
@@ -63,6 +71,8 @@ function Shell() {
         </div>
 
         <HowItWorks />
+
+        <ReferralPanel address={wallet.address} walletClient={wallet.walletClient} />
 
         <section className="mx-auto mt-14 max-w-5xl px-5">
           <div className="card-flat flex flex-col gap-3 p-4 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">

@@ -14,6 +14,7 @@ import {
   buildPaymentDiagnostic,
   recordPaymentDiagnostic,
 } from "@/lib/domain/paymentDiagnostics";
+import { beginAttempt, reportAttempt, attemptIntentKey, attemptIdempotencyKey } from "@/lib/payments/attempts";
 import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
@@ -90,6 +91,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   // from this instead of blanking the screen — the "interface disappeared"
   // symptom. It is only ever used for display; signing always re-quotes fresh.
   const lastQuoteRef = useRef<Quote | null>(null);
+  // The server-side correlation id for the in-flight payment attempt. Best-effort
+  // telemetry only: it never gates signing or submission.
+  const attemptIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (flow.quote) lastQuoteRef.current = flow.quote;
   }, [flow.quote]);
@@ -363,6 +367,18 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       }
       recordPaymentDiagnostic(buildPaymentDiagnostic({ event: "wallet_connection_checked" }));
 
+      // Correlation handle for this attempt (best-effort, never blocks).
+      attemptIdRef.current = await beginAttempt({
+        account: wallet.address,
+        intentKey: attemptIntentKey(flow.intent),
+        // Reusing the key on retry makes the server return the same attempt
+        // rather than creating a duplicate one for the same payment.
+        idempotencyKey: attemptIdempotencyKey(wallet.address, flow.intent),
+        receiveToken: flow.receiveTokenConfig.symbol,
+        payToken: flow.payTokenConfig?.symbol ?? null,
+        gasMode: flow.gasInfo.mode,
+      });
+
       const onChain = await wallet.ensureMonad();
       if (!onChain.ok) {
         // Show the wallet's REAL reason (rejection vs unsupported vs transient)
@@ -384,7 +400,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
       setStage("executing");
 
-      // The freshness/approval gate evaluates the CURRENT intent only.
+      // The approval gate evaluates the CURRENT intent only.
       if (!flow.readiness.ready) {
         flow.refreshQuote();
         setError("This payment changed. Review it again before confirming.");
@@ -490,6 +506,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 
         const plan = prepared.plan;
 
+        // The operation is prepared from fresh data; the wallet signature has not
+        // been requested yet. Record the stage for correlation only.
+        void reportAttempt(attemptIdRef.current, "prepared");
+
         let primaryHash: `0x${string}` | undefined;
         let stepHashes: `0x${string}`[] = [];
 
@@ -500,6 +520,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         stepHashes = hashOf(result.results);
 
         setTxHash(primaryHash);
+        void reportAttempt(attemptIdRef.current, "submitted", { txHash: primaryHash });
 
         recordPaymentDiagnostic(
           buildPaymentDiagnostic({
@@ -559,6 +580,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             hasTransactionHash: hashes.length > 0,
           }),
         );
+        void reportAttempt(attemptIdRef.current, "confirmed", { txHash: primaryHash });
         setStage("success");
       } catch (err) {
         // Map any thrown value (a raw provider/RPC error or an ExecutionError)
@@ -578,6 +600,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
             mayHaveSubmitted: info.mayHaveSubmitted || sawSubmission,
             returnedToConfirm: true,
           }),
+        );
+        void reportAttempt(
+          attemptIdRef.current,
+          info.kind === "rejected"
+            ? "rejected"
+            : info.mayHaveSubmitted || sawSubmission
+              ? "unknown"
+              : "failed",
+          { code: info.kind, diagnostic: info.message },
         );
         setStage("review");
       }

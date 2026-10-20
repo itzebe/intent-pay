@@ -798,4 +798,78 @@ describe("confirmation flow", () => {
     expect(flow.intent.receiveAmount).toBe("5");
     expect(flow.intent.receiveToken).toBe("USDC");
   });
+  it("still prepares the payment when /api/payments/attempts fails", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: false,
+      reason: "quote_stale",
+      message: "The price moved. We refreshed it — review the new price and confirm again.",
+      expectedVersion: flow.intent.version,
+      actualVersion: flow.intent.version,
+    });
+
+    // Correlation is telemetry. When the attempt endpoint is unavailable (or its
+    // bounded timeout aborts the request) the fetch rejects — the payment must
+    // still proceed to operation preparation and stay on Review.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        if (String(url).includes("/api/payments/attempts")) throw new Error("network down");
+        return new Response(JSON.stringify({ ok: true, balances: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+
+    expect(prepareSigning).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Review Payment")).toBeNull();
+    expect(screen.getByText("Retry payment")).toBeTruthy();
+  });
+
+  it("sends a stable idempotency key so a retry reuses the same attempt", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: false,
+      reason: "quote_stale",
+      message: "The price moved. We refreshed it — review the new price and confirm again.",
+      expectedVersion: flow.intent.version,
+      actualVersion: flow.intent.version,
+    });
+
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init?: { body?: string }) => {
+        if (String(url).includes("/api/payments/attempts")) {
+          if (init?.body) bodies.push(JSON.parse(init.body));
+          return new Response(JSON.stringify({ ok: true, id: "attempt-1" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true, balances: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+
+    expect(bodies.length).toBeGreaterThanOrEqual(1);
+    const key = bodies[0]?.idempotencyKey;
+    expect(typeof key).toBe("string");
+    expect(String(key)).toContain(flow.intent.recipient.toLowerCase());
+  });
 });

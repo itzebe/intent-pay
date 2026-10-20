@@ -14,7 +14,7 @@ import {
   buildPaymentDiagnostic,
   recordPaymentDiagnostic,
 } from "@/lib/domain/paymentDiagnostics";
-import { beginAttempt, reportAttempt, attemptIntentKey } from "@/lib/payments/attempts";
+import { beginAttempt, reportAttempt, attemptIntentKey, attemptIdempotencyKey } from "@/lib/payments/attempts";
 import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
@@ -371,6 +371,9 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       attemptIdRef.current = await beginAttempt({
         account: wallet.address,
         intentKey: attemptIntentKey(flow.intent),
+        // Reusing the key on retry makes the server return the same attempt
+        // rather than creating a duplicate one for the same payment.
+        idempotencyKey: attemptIdempotencyKey(wallet.address, flow.intent),
         receiveToken: flow.receiveTokenConfig.symbol,
         payToken: flow.payTokenConfig?.symbol ?? null,
         gasMode: flow.gasInfo.mode,

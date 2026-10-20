@@ -183,6 +183,18 @@ describe("payment attempt correlation", () => {
     const attempt = createAttempt({ account: ALICE, intentKey: "key3", diagnostic: "key=sk-live-abc123" });
     expect(attempt.diagnostic).not.toContain("sk-live-abc123");
   });
+
+  it("reuses one attempt for a repeated idempotency key (retry never duplicates)", () => {
+    const first = createAttempt({ account: ALICE, intentKey: "key4", idempotencyKey: "alice:3|mainnet|..." });
+    const second = createAttempt({ account: ALICE, intentKey: "key4", idempotencyKey: "alice:3|mainnet|..." });
+    expect(second.id).toBe(first.id);
+  });
+
+  it("creates distinct attempts when no idempotency key is supplied", () => {
+    const a = createAttempt({ account: ALICE, intentKey: "key5" });
+    const b = createAttempt({ account: ALICE, intentKey: "key5" });
+    expect(a.id).not.toBe(b.id);
+  });
 });
 
 describe("ops events", () => {

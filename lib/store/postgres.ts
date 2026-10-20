@@ -82,9 +82,17 @@ export class PostgresStore implements Store {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const applied = await client.query(`SELECT ${qi("id")} FROM ${qi("_migrations")} WHERE ${qi("id")} = $1`, [
-          migration.id,
-        ]).catch(() => ({ rows: [] as Record<string, unknown>[], rowCount: 0 }));
+        // Probe the ledger WITHOUT issuing a query that fails. On a brand-new
+        // database `_migrations` does not exist yet; a `SELECT ... FROM
+        // "_migrations"` raises 42P01, and although the rejection is caught,
+        // PostgreSQL has already aborted the transaction (25P02), so every later
+        // statement in it is rejected and the schema is never created.
+        // `to_regclass` returns NULL for a missing relation instead of erroring, so
+        // the first migration can proceed.
+        const ledger = await client.query("SELECT to_regclass($1) AS t", [qi("_migrations")]);
+        const applied = ledger.rows[0]?.t
+          ? await client.query(`SELECT ${qi("id")} FROM ${qi("_migrations")} WHERE ${qi("id")} = $1`, [migration.id])
+          : { rows: [] as Record<string, unknown>[], rowCount: 0 };
         if (applied.rows.length === 0) {
           for (const statement of migration.statements) {
             await client.query(statement);

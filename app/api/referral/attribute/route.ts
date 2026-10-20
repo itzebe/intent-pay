@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { attribute, markActivated, markRegistered, referralForReferred } from "@/lib/server/referral";
 import { rateLimit, clientFingerprint, tooManyResponse } from "@/lib/server/rateLimit";
+import { requireDurableStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,10 @@ export const dynamic = "force-dynamic";
  * A successful attribution also advances the lifecycle to `registered` (the
  * user has a wallet and an app session), which is a real, server-observed event
  * — not a claim.
+ *
+ * Durability: attribution is meaningless if it cannot be remembered. When the
+ * store is not durable the request is refused (503) with an explicit reason
+ * rather than reporting a success that would vanish on the next cold start.
  */
 export async function POST(req: Request) {
   const session = sessionFromRequest(req);
@@ -23,6 +28,13 @@ export async function POST(req: Request) {
     return NextResponse.json(
       { ok: false, code: "unauthenticated", message: "Sign in with your wallet first." },
       { status: 401 },
+    );
+  }
+  const durable = requireDurableStore();
+  if (!durable.ok) {
+    return NextResponse.json(
+      { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
+      { status: 503 },
     );
   }
   let body: any;

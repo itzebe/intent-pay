@@ -19,6 +19,11 @@ import { ensureSession, hasSession } from "@/lib/referral/session";
  * It never decides a referral is "qualified" — that is a server-side decision
  * from on-chain evidence. It never blocks or alters the payment flow: every
  * failure is non-fatal and the composer keeps working.
+ *
+ * Signing: connecting a wallet does NOT request a signature. A free,
+ * human-readable message is signed only when the user explicitly asks for
+ * referral access (`authenticate`, driven by the ReferralPanel button). An
+ * already-valid session is adopted silently.
  */
 
 const STORAGE_KEY = "intent-pay.ref";
@@ -97,6 +102,7 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
   const [pendingCode, setPendingCode] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<ReferralDashboard | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
+  const [durable, setDurable] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const attributedRef = useRef<string | null>(null);
@@ -106,6 +112,24 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
     if (typeof window === "undefined") return;
     const code = captureReferralFromUrl(window.location.search);
     setPendingCode(code);
+  }, []);
+
+  // Probe durable-storage availability on mount so the UI can explain that
+  // referrals are unavailable BEFORE asking for a signature. Non-fatal.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let cancelled = false;
+    void fetch("/api/referral/availability", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (!cancelled) setDurable(json?.durable === true);
+      })
+      .catch(() => {
+        /* leave durability unknown; the authenticated call is the authority */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const loadDashboard = useCallback(async () => {
@@ -126,6 +150,7 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
         counts: json.counts,
         referrals: json.referrals,
       });
+      setDurable(json.durable === true);
       setAuthenticated(true);
     } catch (err) {
       setError((err as Error).message);
@@ -134,7 +159,11 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
     }
   }, []);
 
-  // When a wallet connects: establish a session, then attribute once.
+  // When a wallet connects: adopt an EXISTING session and attribute once. This
+  // deliberately does not prompt for a signature — connecting a wallet must not
+  // raise a signature request the user did not ask for. The signature is only
+  // requested when the user explicitly opens referral functionality
+  // (`ensureSession` from the ReferralPanel button or `authenticate` below).
   useEffect(() => {
     const address = wallet.address;
     if (!address) {
@@ -145,12 +174,13 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
     }
     let cancelled = false;
     (async () => {
-      const client = wallet.walletClient;
-      if (client && !(await hasSession(address))) {
-        const ok = await ensureSession(address, client);
-        if (!ok || cancelled) return;
-      }
+      const session = await hasSession(address);
       if (cancelled) return;
+      if (!session) {
+        // No session yet — do NOT sign. Referral sign-in is user-initiated.
+        setAuthenticated(false);
+        return;
+      }
       setAuthenticated(true);
       await loadDashboard();
       if (cancelled) return;
@@ -177,6 +207,50 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
     return () => {
       cancelled = true;
     };
+  }, [wallet.address, wallet.walletClient, loadDashboard]);
+
+  /**
+   * Explicitly authenticate for referral access: sign a free, human-readable
+   * message (no gas, no transaction), then load the dashboard and apply any
+   * pending attribution. Called only from a user action — never on connect.
+   */
+  const authenticate = useCallback(async (): Promise<boolean> => {
+    const address = wallet.address;
+    const client = wallet.walletClient;
+    if (!address || !client) return false;
+    setLoading(true);
+    setError(null);
+    try {
+      const ok = await ensureSession(address, client);
+      if (!ok) return false;
+      setAuthenticated(true);
+      await loadDashboard();
+      const code = readStoredCode();
+      if (code && attributedRef.current !== code) {
+        attributedRef.current = code;
+        try {
+          const res = await fetch("/api/referral/attribute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          });
+          const json = await res.json();
+          if (json?.ok) {
+            clearStoredCode();
+            setPendingCode(null);
+            await loadDashboard();
+          }
+        } catch {
+          /* non-fatal */
+        }
+      }
+      return true;
+    } catch (err) {
+      setError((err as Error).message);
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }, [wallet.address, wallet.walletClient, loadDashboard]);
 
   /** Share the referral link, preferring the native share sheet. */
@@ -212,9 +286,11 @@ export function useReferral(wallet: { address?: Address; walletClient?: WalletCl
     pendingCode,
     dashboard,
     authenticated,
+    durable,
     loading,
     error,
     refresh: loadDashboard,
+    authenticate,
     share,
     copyLink,
   };

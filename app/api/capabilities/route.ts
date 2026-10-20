@@ -3,6 +3,7 @@ import { alchemyStatus, zerionStatus } from "@/lib/server/diagnostics";
 import { zerionEnabled } from "@/lib/server/zerion";
 import { resolveMevProtection } from "@/lib/domain/protection";
 import { NETWORKS, type MonadNetwork } from "@/lib/config/chains";
+import { storeStatus } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -20,17 +21,35 @@ export const dynamic = "force-dynamic";
  * `reachable` says the provider answered a real request on Monad. The two are
  * reported separately so a misconfigured key reads as "configured but
  * unreachable" instead of the misleading "add an API key".
+ *
+ * Storage is reported as `kind` + `durability` only — never a path or a
+ * credential. Referral attribution requires `durable: true`; when it is false the
+ * referral endpoints refuse rather than reporting an ephemeral success.
  */
 export async function GET() {
   const network: MonadNetwork = "mainnet";
   const mev = resolveMevProtection();
   const [alchemy, zerion] = await Promise.all([alchemyStatus(network), zerionStatus()]);
+  const storage = storeStatus();
 
   return NextResponse.json({
     ok: true,
     network,
     chainId: NETWORKS[network].chainId,
     routing: { provider: "uniswap-v3", chain: "monad", live: true },
+    /**
+     * Storage capability. `kind` is the active adapter and `durability` is the
+     * honest answer about persistence: "memory" (nothing survives a restart),
+     * "ephemeral" (a temp-dir SQLite file that a serverless cold start erases) or
+     * "persistent" (an explicitly configured DB path). Referral attribution is
+     * only offered when `durable` is true.
+     */
+    storage: {
+      kind: storage.kind,
+      durability: storage.durability,
+      durable: storage.durable,
+      referralAttribution: storage.durable ? "available" : "unavailable",
+    },
     // Honest MEV / private-order-flow capability. `active` is true only when a
     // private submission endpoint is actually configured; otherwise the app
     // relies on on-chain slippage bounds, the price-impact guard and delivery

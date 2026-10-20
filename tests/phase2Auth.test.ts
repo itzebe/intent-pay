@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { MemoryStore, setStore } from "@/lib/store";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MemoryStore, SqliteStore, setStore } from "@/lib/store";
 import { SESSION_COOKIE, issueSession } from "@/lib/server/auth";
 import { createAttempt } from "@/lib/server/paymentAttempts";
 
@@ -25,7 +25,17 @@ function cookieFor(address: string): string {
   return `${SESSION_COOKIE}=${issueSession(address)}`;
 }
 
+// Referral endpoints require durable storage (see tests/storageDurability.test.ts
+// for the ephemeral-refusal path). These tests exercise the authorization rules,
+// so they configure an explicitly durable store; the in-memory adapter is only
+// for the tests that do not touch durable referral state.
 beforeEach(() => {
+  process.env.INTENT_PAY_DB_PATH = "/data/intent-pay.sqlite";
+  setStore(new SqliteStore(":memory:"));
+});
+
+afterEach(() => {
+  delete process.env.INTENT_PAY_DB_PATH;
   setStore(new MemoryStore());
 });
 

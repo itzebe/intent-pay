@@ -3,6 +3,7 @@ import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { getOrCreateCode, dashboardFor } from "@/lib/server/referral";
 import { referralOrigin } from "@/lib/config/referral";
 import { referralUrl } from "@/lib/domain/referralCode";
+import { requireDurableStore, storeStatus } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,11 @@ export const dynamic = "force-dynamic";
  * `address` query parameter, so one user cannot read another's dashboard by
  * changing a value. Creating a code is idempotent — the same code is returned
  * across sessions.
+ *
+ * Durability: when the store is not durable this endpoint refuses (503) rather
+ * than issuing a code that will not be remembered, and never reports a
+ * persistent referral link it cannot honour. The `durable` flag is included on
+ * every response so the UI can be explicit about persistence.
  */
 export async function GET(req: Request) {
   const session = sessionFromRequest(req);
@@ -20,6 +26,13 @@ export async function GET(req: Request) {
     return NextResponse.json(
       { ok: false, code: "unauthenticated", message: "Sign in with your wallet to view referrals." },
       { status: 401 },
+    );
+  }
+  const durable = requireDurableStore();
+  if (!durable.ok) {
+    return NextResponse.json(
+      { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
+      { status: 503 },
     );
   }
   const created = getOrCreateCode(session.address);
@@ -33,6 +46,7 @@ export async function GET(req: Request) {
   }
   return NextResponse.json({
     ok: true,
+    durable: storeStatus().durable,
     address: session.address,
     code: dash.value.code,
     url: dash.value.url,

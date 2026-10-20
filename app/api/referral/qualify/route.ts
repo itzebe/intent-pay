@@ -4,6 +4,7 @@ import { qualify } from "@/lib/server/referral";
 import { verifyQualifyingTransaction, isValidTxHash } from "@/lib/server/referral/verify";
 import { rateLimit, tooManyResponse } from "@/lib/server/rateLimit";
 import { recordOpsEvent } from "@/lib/server/ops";
+import { requireDurableStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -20,11 +21,21 @@ export const dynamic = "force-dynamic";
  *
  * Repeated calls are idempotent; the same transaction cannot qualify two
  * referrals (enforced by a unique database constraint).
+ *
+ * Durability: a qualification that cannot be remembered is refused (503) rather
+ * than reported as success.
  */
 export async function POST(req: Request) {
   const session = sessionFromRequest(req);
   if (!session) {
     return NextResponse.json({ ok: false, code: "unauthenticated", message: "Sign in with your wallet first." }, { status: 401 });
+  }
+  const durable = requireDurableStore();
+  if (!durable.ok) {
+    return NextResponse.json(
+      { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
+      { status: 503 },
+    );
   }
   const limited = rateLimit({ bucket: "referral_qualify", subject: session.address, limit: 10, windowMs: 60_000 });
   if (!limited.ok) {

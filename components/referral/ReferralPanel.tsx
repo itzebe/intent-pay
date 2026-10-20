@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { Address, WalletClient } from "viem";
 import { useReferral } from "@/lib/referral/useReferral";
-import { ensureSession } from "@/lib/referral/session";
 import { shortAddress } from "@/lib/format";
 import { Copy, Check, Spinner, ExternalLink } from "@/components/ui/Icons";
 
@@ -14,8 +13,13 @@ import { Copy, Check, Spinner, ExternalLink } from "@/components/ui/Icons";
  * counts. A click is never shown as a successful referral: the list
  * distinguishes attributed, pending and qualified states, and the copy says so.
  *
- * When the wallet is not signed in, a single explicit action (a free message
- * signature) establishes the session. Nothing here touches the payment flow.
+ * Signing in is an explicit, user-initiated action: a single free message
+ * signature (no gas, no transaction) establishes the session. Connecting a
+ * wallet on its own never raises a signature prompt.
+ *
+ * Durability: referral attribution is only shown as usable when the deployment
+ * has durable storage. When it does not, the panel says so instead of presenting
+ * an ephemeral link as if it would persist.
  */
 export function ReferralPanel({
   address,
@@ -51,8 +55,7 @@ export function ReferralPanel({
     if (!walletClient) return;
     setSigningIn(true);
     try {
-      const ok = await ensureSession(address, walletClient);
-      if (ok) await ref.refresh();
+      await ref.authenticate();
     } finally {
       setSigningIn(false);
     }
@@ -71,20 +74,28 @@ export function ReferralPanel({
         </div>
 
         {!ref.authenticated ? (
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs text-white/50">
-              Sign a free message to create your referral link. No gas, no transaction.
+          ref.durable === false ? (
+            <p className="mt-4 text-xs text-amber-200/80">
+              Referrals need durable storage, which this deployment does not have yet. A referral
+              link created now would not be remembered, so sign-in is disabled rather than
+              pretending it works.
             </p>
-            <button onClick={signIn} disabled={signingIn || !walletClient} className="btn-primary shrink-0">
-              {signingIn ? (
-                <span className="flex items-center gap-2">
-                  <Spinner className="h-3.5 w-3.5 animate-spin" /> Waiting for signature…
-                </span>
-              ) : (
-                "Create my referral link"
-              )}
-            </button>
-          </div>
+          ) : (
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-white/50">
+                Sign a free message to create your referral link. No gas, no transaction.
+              </p>
+              <button onClick={signIn} disabled={signingIn || !walletClient} className="btn-primary shrink-0">
+                {signingIn ? (
+                  <span className="flex items-center gap-2">
+                    <Spinner className="h-3.5 w-3.5 animate-spin" /> Waiting for signature…
+                  </span>
+                ) : (
+                  "Create my referral link"
+                )}
+              </button>
+            </div>
+          )
         ) : ref.dashboard ? (
           <>
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">

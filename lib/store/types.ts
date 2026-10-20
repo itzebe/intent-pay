@@ -1,11 +1,10 @@
 /**
  * The persistence contract shared by every store adapter.
  *
- * Intent Pay has no user accounts and no database today: identity is a
- * connected wallet, and all payment state lives in the browser. The capabilities
- * that need durable, *shared*, server-side state (referral attribution, payment
- * attempt correlation, operational error visibility, AI cost accounting) require
- * a real store with real constraints.
+ * Intent Pay has no user accounts: identity is a connected wallet, and payment
+ * state lives in the browser. The capabilities that need durable, *shared*,
+ * server-side state (referral attribution, payment attempt correlation,
+ * operational error visibility, AI cost accounting) use this small store.
  *
  * Rather than pretend, this module defines the minimum the application needs and
  * provides two adapters:
@@ -13,6 +12,10 @@
  *   - `SqliteStore`  — Node's built-in `node:sqlite`, which gives us genuine
  *                      UNIQUE / CHECK / FOREIGN KEY constraints and transactions
  *                      with no new dependency.
+ *
+ * Durability is a property of the *configuration*, not the adapter: a temp-dir
+ * SQLite file is ephemeral. `storeStatus()` reports the honest state and callers
+ * that require durability (`requireDurableStore`) refuse rather than pretend.
  *
  * A record is deliberately plain JSON: it can carry no private keys, signatures
  * or auth tokens (the callers never put them there), and it stays portable if the

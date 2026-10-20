@@ -98,3 +98,59 @@ describe("attemptIdempotencyKey", () => {
     expect(a).not.toBe(b);
   });
 });
+
+describe("default correlation timeouts remain enforced", () => {
+  it("beginAttempt aborts by its built-in bound without an explicit timeout", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: unknown, init?: { signal?: AbortSignal }) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (signal?.aborted) return reject(new Error("aborted"));
+            signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      ),
+    );
+    vi.useFakeTimers();
+    try {
+      const promise = beginAttempt({ intentKey: "k" });
+      await vi.advanceTimersByTimeAsync(2_900);
+      let settled = false;
+      promise.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(promise).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reportAttempt aborts by its built-in bound without an explicit timeout", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: unknown, init?: { signal?: AbortSignal }) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (signal?.aborted) return reject(new Error("aborted"));
+            signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      ),
+    );
+    vi.useFakeTimers();
+    try {
+      const promise = reportAttempt("id", "submitted");
+      await vi.advanceTimersByTimeAsync(3_900);
+      let settled = false;
+      promise.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(promise).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

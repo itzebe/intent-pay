@@ -626,3 +626,34 @@ curl -s -X POST http://localhost:3000/api/quote -H 'Content-Type: application/js
   documented override, not a Next major upgrade** — keep it until Next ships a
   15.x patch that bumps postcss itself. Re-run `npm audit --omit=dev` after any
   Next bump to confirm the override is still needed.
+
+
+## Store durability is a configuration fact, not an adapter property
+
+`lib/store/*` is the single server-side persistence contract (referral
+attribution, payment-attempt correlation, ops events, AI cost accounting). Two
+adapters share the same schema and integrity rules: `MemoryStore` (tests /
+honest fallback) and `SqliteStore` (`node:sqlite`). A record is plain JSON and
+must never carry a key, signature or auth token.
+
+Durability is about the *configuration*, not the adapter:
+
+- `storeStatus()` returns `{ kind, durability, durable }` with `durability` one
+  of `memory` (nothing survives a restart), `ephemeral` (a temp-dir SQLite file
+  erased on a serverless cold start) or `persistent` (an explicitly configured
+  `INTENT_PAY_DB_PATH`). Only `persistent` is `durable`.
+- `requireDurableStore()` is the guard for operations that are meaningless if
+  forgotten. Referral endpoints (`/api/referral/{attribute,me,qualify}`) call it
+  and **refuse with 503 `storage_unavailable`** when the store is not durable —
+  never report an ephemeral success. `/api/referral/availability` is the public,
+  non-sensitive probe the UI reads before asking for a signature.
+- `/api/capabilities.storage` reports `{ kind, durability, durable,
+  referralAttribution }` and **never a path or credential**. Payment execution
+  never depends on the store, so a store outage cannot block a payment.
+- Connecting a wallet must **not** raise a `personal_sign` prompt. The referral
+  session signature is only requested from an explicit user action
+  (`useReferral().authenticate`, driven by the ReferralPanel button); an existing
+  session is adopted silently.
+
+Regression coverage: `tests/storageDurability.test.ts`,
+`tests/referralPanel.test.tsx`, `tests/phase2Auth.test.ts`.

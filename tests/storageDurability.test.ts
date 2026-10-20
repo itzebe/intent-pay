@@ -202,4 +202,16 @@ describe("capability reporting reflects the implementation", () => {
     expect(text).not.toContain("/secret");
     expect(text).not.toContain("db.sqlite");
   });
+
+  it("advertises native-MON gas only, never an ERC-20 / account-abstraction path", async () => {
+    setStore(new MemoryStore());
+    const json = await (await capabilitiesGET()).json();
+    // The execution path is a plain EOA that pays the fee in MON. A paymaster /
+    // AA capability must not be advertised while that path cannot use one — a
+    // responding quote endpoint is not proof of usability.
+    expect(json.gas.mode).toBe("native");
+    expect(json.walletAbstraction).toBeUndefined();
+    expect(json.gasPayment).toBeUndefined();
+    expect(json.mevProtection.active).toBe(false);
+  });
 });

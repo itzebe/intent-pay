@@ -78,4 +78,12 @@ describe("referral sign-in is user-initiated", () => {
     expect(screen.queryByText(/Create my referral link/)).toBeNull();
     expect(ensureSession).not.toHaveBeenCalled();
   });
+
+  it("does not claim a reward is paid when no reward mechanism exists", async () => {
+    render(<ReferralPanel address={SENDER} walletClient={{ account: { address: SENDER } } as never} />);
+    await waitFor(() => expect(screen.getByText(/Refer a friend/)).toBeTruthy());
+    // A "Rewards apply…" promise with no implemented payout would mislead users.
+    expect(screen.queryByText(/Rewards apply/i)).toBeNull();
+    expect(screen.getByText(/does not pay a reward/i)).toBeTruthy();
+  });
 });

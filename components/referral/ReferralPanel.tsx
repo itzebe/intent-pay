@@ -68,7 +68,7 @@ export function ReferralPanel({
           <div>
             <h3 className="text-sm font-semibold text-white">Refer a friend</h3>
             <p className="mt-0.5 text-xs text-white/45">
-              Share Intent Pay. Rewards apply only once a referred wallet makes a verified on-chain payment.
+              Share Intent Pay. A referral is only marked qualified once a referred wallet makes a verified on-chain payment. This dashboard tracks referrals — it does not pay a reward.
             </p>
           </div>
         </div>

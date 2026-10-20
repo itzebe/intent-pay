@@ -3,7 +3,7 @@ import { alchemyStatus, zerionStatus } from "@/lib/server/diagnostics";
 import { zerionEnabled } from "@/lib/server/zerion";
 import { resolveMevProtection } from "@/lib/domain/protection";
 import { NETWORKS, type MonadNetwork } from "@/lib/config/chains";
-import { storeStatus } from "@/lib/store";
+import { storeCapability } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,7 @@ export async function GET() {
   const network: MonadNetwork = "mainnet";
   const mev = resolveMevProtection();
   const [alchemy, zerion] = await Promise.all([alchemyStatus(network), zerionStatus()]);
-  const storage = storeStatus();
+  const storage = await storeCapability();
 
   return NextResponse.json({
     ok: true,
@@ -48,7 +48,13 @@ export async function GET() {
       kind: storage.kind,
       durability: storage.durability,
       durable: storage.durable,
+      // A reachable connection is not enough: the schema must be migrated.
+      reachable: storage.reachable,
+      schemaReady: storage.schemaReady,
+      schemaVersion: storage.schemaVersion,
+      requiredSchemaVersion: storage.requiredSchemaVersion,
       referralAttribution: storage.durable ? "available" : "unavailable",
+      reason: storage.reason,
     },
     // Honest MEV / private-order-flow capability. `active` is true only when a
     // private submission endpoint is actually configured; otherwise the app

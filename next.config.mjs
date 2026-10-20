@@ -78,7 +78,7 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   eslint: { ignoreDuringBuilds: true },
-  serverExternalPackages: ["viem"],
+  serverExternalPackages: ["viem", "@neondatabase/serverless"],
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },

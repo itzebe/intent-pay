@@ -50,7 +50,7 @@ export function llmEnabled(): boolean {
 export async function extractIntentHint(
   text: string,
   symbols: string[],
-  onUsage?: (usage: { model: string; inputTokens: number; outputTokens: number }) => void,
+  onUsage?: (usage: { model: string; inputTokens: number; outputTokens: number }) => void | Promise<void>,
 ): Promise<ParseHint | null> {
   const cfg = llmConfig();
   if (!cfg) return null;

@@ -27,11 +27,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
 
-  const session = sessionFromRequest(req);
+  const session = await sessionFromRequest(req);
   const bodyAccount = typeof body?.account === "string" && isEvmAddress(body.account) ? body.account : null;
   const account = session?.address ?? bodyAccount;
 
-  const limited = rateLimit({ bucket: "payment_attempt", subject: session?.address ?? clientIp(req), limit: 60, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "payment_attempt", subject: session?.address ?? clientIp(req), limit: 60, windowMs: 60_000 });
   if (!limited.ok) {
     const { body: b, headers } = tooManyResponse(limited.resetAt);
     return NextResponse.json(b, { status: 429, headers });
@@ -42,7 +42,7 @@ export async function POST(req: Request) {
       ? body.idempotencyKey.trim().slice(0, 120)
       : null;
 
-  const attempt = createAttempt({
+  const attempt = await createAttempt({
     account,
     intentKey: typeof body?.intentKey === "string" ? body.intentKey.slice(0, 200) : null,
     receiveToken: typeof body?.receiveToken === "string" ? body.receiveToken.slice(0, 20) : null,

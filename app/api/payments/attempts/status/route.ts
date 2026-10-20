@@ -57,19 +57,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, message: "A valid attempt id and event are required." }, { status: 400 });
   }
 
-  const attempt = getAttempt(id);
+  const attempt = await getAttempt(id);
   if (!attempt) {
     return NextResponse.json({ ok: false, message: "Unknown attempt." }, { status: 404 });
   }
 
-  const session = sessionFromRequest(req);
+  const session = await sessionFromRequest(req);
   if (attempt.account) {
     if (!session || session.address !== attempt.account) {
       return NextResponse.json({ ok: false, message: "Not authorized for this attempt." }, { status: 403 });
     }
   }
 
-  const limited = rateLimit({ bucket: "attempt_status", subject: session?.address ?? clientIp(req), limit: 120, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "attempt_status", subject: session?.address ?? clientIp(req), limit: 120, windowMs: 60_000 });
   if (!limited.ok) {
     const { body: b, headers } = tooManyResponse(limited.resetAt);
     return NextResponse.json(b, { status: 429, headers });
@@ -79,15 +79,15 @@ export async function POST(req: Request) {
   const userOpHash = typeof body?.userOpHash === "string" && /^0x[a-fA-F0-9]{64}$/.test(body.userOpHash) ? body.userOpHash : undefined;
 
   if (event === "reverted" || event === "failed" || event === "unknown" || event === "rejected") {
-    const { category, mayHaveSubmitted } = recordFailure(
+    const { category, mayHaveSubmitted } = await recordFailure(
       id,
       typeof body?.code === "string" ? body.code : event,
       FAILURE_SOURCE[event] ?? "generic",
       typeof body?.diagnostic === "string" ? body.diagnostic : undefined,
     );
-    if (txHash) updateAttempt(id, { txHash });
-    if (userOpHash) updateAttempt(id, { userOpHash });
-    return NextResponse.json({ ok: true, status: getAttempt(id)?.status, category, mayHaveSubmitted });
+    if (txHash) await updateAttempt(id, { txHash });
+    if (userOpHash) await updateAttempt(id, { userOpHash });
+    return NextResponse.json({ ok: true, status: (await getAttempt(id))?.status, category, mayHaveSubmitted });
   }
 
   const status = EVENT_TO_STATUS[event];
@@ -98,6 +98,6 @@ export async function POST(req: Request) {
     patch.receiptStatus = "success";
     patch.lastVerifiedAt = Date.now();
   }
-  const updated = updateAttempt(id, patch);
+  const updated = await updateAttempt(id, patch);
   return NextResponse.json({ ok: true, status: updated?.status ?? status });
 }

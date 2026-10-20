@@ -1,8 +1,8 @@
 import { createRequire } from "node:module";
 import { schemaFor, encodeValue, decodeValue } from "./schema";
 import { SCHEMA } from "./schema";
-import type { TableName, Store, StoreTables } from "./types";
-import { StoreConflictError } from "./types";
+import type { TableName, Store, StoreTables, StoreHealth } from "./types";
+import { StoreConflictError, SCHEMA_VERSION } from "./types";
 
 export type { TableName, Store, StoreTables };
 
@@ -68,6 +68,8 @@ function wrapError(err: unknown): never {
 export class SqliteStore implements Store {
   readonly kind = "sqlite" as const;
   private db: InstanceType<DatabaseSyncCtor>;
+  /** Serializes transactions (see transaction()). */
+  private txChain: Promise<void> = Promise.resolve();
 
   constructor(path = ":memory:") {
     const DatabaseSync = loadDatabaseSync();
@@ -77,8 +79,14 @@ export class SqliteStore implements Store {
     this.migrate();
   }
 
-  /** Create every table if it does not already exist (idempotent migration). */
+  /**
+   * Create every table if it does not already exist (idempotent migration).
+   *
+   * The applied version is recorded in a `_migrations` ledger so `health()` can
+   * prove the schema is present, not merely that a file opened.
+   */
   private migrate(): void {
+    this.db.exec("CREATE TABLE IF NOT EXISTS _migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);");
     for (const schema of SCHEMA) {
       const cols = schema.columns
         .map((c) => `${c.column} ${c.type === "int" ? "INTEGER" : c.type === "bool" ? "INTEGER" : "TEXT"}${c.nullable ? "" : " NOT NULL"}`)
@@ -93,9 +101,10 @@ export class SqliteStore implements Store {
       const table = snake(schema.name);
       this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (${cols}, ${extras});`);
     }
+    this.db.exec(`INSERT OR IGNORE INTO _migrations (id, applied_at) VALUES (${SCHEMA_VERSION}, ${Date.now()});`);
   }
 
-  insert<T extends TableName>(table: T, row: StoreTables[T]): void {
+  async insert<T extends TableName>(table: T, row: StoreTables[T]): Promise<void> {
     const schema = schemaFor(table);
     const fields = schema.columns.map((c) => c.field).filter((f) => (row as Record<string, unknown>)[f] !== undefined);
     const cols = fields.map((f) => schema.columns.find((c) => c.field === f)!.column);
@@ -113,7 +122,7 @@ export class SqliteStore implements Store {
     }
   }
 
-  upsert<T extends TableName>(table: T, row: StoreTables[T]): void {
+  async upsert<T extends TableName>(table: T, row: StoreTables[T]): Promise<void> {
     const schema = schemaFor(table);
     const fields = schema.columns.map((c) => c.field).filter((f) => (row as Record<string, unknown>)[f] !== undefined);
     const cols = fields.map((f) => schema.columns.find((c) => c.field === f)!.column);
@@ -159,7 +168,7 @@ export class SqliteStore implements Store {
     return out as StoreTables[T];
   }
 
-  findOne<T extends TableName>(table: T, where: Partial<StoreTables[T]>): StoreTables[T] | undefined {
+  async findOne<T extends TableName>(table: T, where: Partial<StoreTables[T]>): Promise<StoreTables[T] | undefined> {
     const schema = schemaFor(table);
     const { sql, values } = this.whereClause(schema, where);
     const row = this.db
@@ -168,11 +177,11 @@ export class SqliteStore implements Store {
     return row ? this.decodeRow<T>(schema, row) : undefined;
   }
 
-  findMany<T extends TableName>(
+  async findMany<T extends TableName>(
     table: T,
     where?: Partial<StoreTables[T]>,
     opts?: { limit?: number; orderBy?: keyof StoreTables[T]; dir?: "asc" | "desc" },
-  ): StoreTables[T][] {
+  ): Promise<StoreTables[T][]> {
     const schema = schemaFor(table);
     const { sql, values } = this.whereClause(schema, where);
     let order = "";
@@ -187,11 +196,11 @@ export class SqliteStore implements Store {
     return rows.map((r) => this.decodeRow<T>(schema, r));
   }
 
-  update<T extends TableName>(
+  async update<T extends TableName>(
     table: T,
     where: Partial<StoreTables[T]>,
     patch: Partial<StoreTables[T]>,
-  ): number {
+  ): Promise<number> {
     const schema = schemaFor(table);
     const setParts: string[] = [];
     const setValues: (string | number | null)[] = [];
@@ -213,7 +222,7 @@ export class SqliteStore implements Store {
     }
   }
 
-  remove<T extends TableName>(table: T, where: Partial<StoreTables[T]>): number {
+  async remove<T extends TableName>(table: T, where: Partial<StoreTables[T]>): Promise<number> {
     const schema = schemaFor(table);
     const { sql, values } = this.whereClause(schema, where);
     const info = this.db
@@ -222,7 +231,7 @@ export class SqliteStore implements Store {
     return Number(info.changes ?? 0);
   }
 
-  count<T extends TableName>(table: T, where?: Partial<StoreTables[T]>): number {
+  async count<T extends TableName>(table: T, where?: Partial<StoreTables[T]>): Promise<number> {
     const schema = schemaFor(table);
     const { sql, values } = this.whereClause(schema, where);
     const row = this.db
@@ -231,25 +240,53 @@ export class SqliteStore implements Store {
     return Number(row?.c ?? 0);
   }
 
-  transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN");
-    try {
-      const result = fn();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
+  /**
+   * Run `fn` inside a transaction. Transactions are serialized on a promise
+   * chain: `node:sqlite` uses a single connection, and because an async
+   * transaction body yields the event loop, two concurrent transactions would
+   * otherwise both issue `BEGIN` on the same connection ("cannot start a
+   * transaction within a transaction"). Queueing preserves SQLite's single-writer
+   * semantics and gives each transaction the isolation a database-backed one has.
+   */
+  transaction<T>(fn: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      this.db.exec("BEGIN");
       try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* already rolled back */
+        const result = await fn();
+        this.db.exec("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          /* already rolled back */
+        }
+        throw err;
       }
-      throw err;
+    };
+    const result = this.txChain.then(run, run);
+    // Keep the chain alive without leaking a rejection into it.
+    this.txChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async reset(): Promise<void> {
+    for (const schema of SCHEMA) {
+      this.db.exec(`DELETE FROM ${snake(schema.name)};`);
     }
   }
 
-  reset(): void {
-    for (const schema of SCHEMA) {
-      this.db.exec(`DELETE FROM ${snake(schema.name)};`);
+  /** The file opened and every table exists — reachable and ready at the current version. */
+  async health(): Promise<StoreHealth> {
+    try {
+      const row = this.db.prepare("SELECT MAX(id) AS v FROM _migrations").get() as { v: number | null } | undefined;
+      const version = row?.v ?? null;
+      return { reachable: true, ready: version !== null && version >= SCHEMA_VERSION, schemaVersion: version };
+    } catch (err) {
+      return { reachable: false, ready: false, schemaVersion: null, error: (err as Error)?.message?.slice(0, 200) };
     }
   }
 }

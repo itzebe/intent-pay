@@ -1,27 +1,46 @@
-import type { Store } from "./types";
+import type { Store, StoreHealth } from "./types";
+import { SCHEMA_VERSION } from "./types";
 import { MemoryStore } from "./memory";
 import { SqliteStore } from "./sqlite";
+import { PostgresStore } from "./postgres";
 
-export type { Store, TableName, StoreTables } from "./types";
+export type { Store, TableName, StoreTables, StoreHealth } from "./types";
+export { SCHEMA_VERSION } from "./types";
 export { MemoryStore, StoreConflictError } from "./memory";
 export { SqliteStore } from "./sqlite";
+export { PostgresStore } from "./postgres";
 
 /**
  * The process-wide store.
  *
- * Production uses the SQLite adapter (real constraints, real transactions) at
- * `INTENT_PAY_DB_PATH`. Tests and runtimes without `node:sqlite` fall back to the
- * pure in-memory adapter, which enforces the identical uniqueness rules.
+ * Backend selection, in priority order:
+ *   1. `DATABASE_URL` / `INTENT_PAY_DATABASE_URL` set → managed Postgres (Neon).
+ *      This is the only backend that is genuinely durable on Vercel.
+ *   2. `INTENT_PAY_DB_PATH` set (and not forced to memory) → on-disk SQLite.
+ *   3. otherwise → a temp-dir SQLite file, or in-memory when `node:sqlite` is
+ *      unavailable. Both are ephemeral and are reported as such.
  *
- * Durability is NOT the same as "a database file exists". On an ephemeral
- * serverless filesystem the default SQLite file (in the OS temp dir) does not
- * survive a cold start, and the in-memory fallback does not survive anything.
- * `storeStatus()` reports this honestly and the referral feature refuses to
- * claim durable attribution it cannot deliver; the store kind is also surfaced
- * through `/api/capabilities`. The store never fabricates a record and never
- * silently reports ephemeral storage as persistent.
+ * Durability is NOT the same as "a database is configured". A Postgres URL can be
+ * present while the database is unreachable or un-migrated; `storeCapability()`
+ * probes the backend (a real query plus a schema-version check) and only reports
+ * `durable` when the data can actually be persisted and read back. The referral
+ * feature refuses to claim durable attribution it cannot deliver, and the store
+ * kind is surfaced through `/api/capabilities`. The store never fabricates a
+ * record and never silently reports ephemeral storage as persistent.
+ *
+ * IMPORTANT: durable access is asynchronous (a remote database is). `getStore()`
+ * returns the adapter synchronously (construction never touches the network), but
+ * `storeCapability()` and `requireDurableStore()` are async because they verify.
  */
+
 let singleton: Store | null = null;
+let overrideStore: Store | null = null;
+
+/** The Postgres connection string, if one is configured. */
+export function postgresUrl(): string | null {
+  const url = process.env.INTENT_PAY_DATABASE_URL || process.env.DATABASE_URL;
+  return url && url.trim() ? url.trim() : null;
+}
 
 /** The default on-disk database path. */
 export function defaultDbPath(): string {
@@ -32,6 +51,8 @@ export function defaultDbPath(): string {
 }
 
 function createStore(): Store {
+  const pg = postgresUrl();
+  if (pg && process.env.INTENT_PAY_STORE !== "memory") return new PostgresStore(pg);
   if (process.env.INTENT_PAY_STORE === "memory") return new MemoryStore();
   try {
     return new SqliteStore(defaultDbPath());
@@ -42,62 +63,161 @@ function createStore(): Store {
 }
 
 export function getStore(): Store {
+  if (overrideStore) return overrideStore;
   if (!singleton) singleton = createStore();
   return singleton;
 }
 
 /** Replace the process store — tests only. */
 export function setStore(store: Store | null): void {
-  singleton = store;
+  overrideStore = store;
 }
 
 /** The store kind actually in use (for honest capability reporting). */
-export function storeKind(): "sqlite" | "memory" {
+export function storeKind(): Store["kind"] {
   return getStore().kind;
 }
 
-/**
- * How durable the store actually is — the honest answer, not the hopeful one.
- *
- *   - "memory"      — in-memory only; nothing survives a process restart.
- *   - "ephemeral"   — an on-disk SQLite file in an ephemeral location (the
- *                     default OS temp dir). Real constraints, but the file does
- *                     not survive a serverless cold start or a redeploy.
- *   - "persistent"  — an on-disk SQLite file at an explicitly configured path.
- *                     This is the only configuration the app will describe as
- *                     durable; whether the underlying volume is truly durable is
- *                     the operator's responsibility (a managed database behind
- *                     the same `Store` interface is a drop-in replacement).
- *
- * Nothing sensitive (no path, no credential) is returned here.
- */
-export function storeDurability(): "memory" | "ephemeral" | "persistent" {
-  if (getStore().kind === "memory") return "memory";
-  return process.env.INTENT_PAY_DB_PATH ? "persistent" : "ephemeral";
-}
-
-/** A safe, non-sensitive summary of the store for the capabilities surface. */
-export function storeStatus(): {
-  kind: "sqlite" | "memory";
+export type StoreCapability = {
+  kind: Store["kind"];
+  /**
+   *   - "memory"     — in-memory only; nothing survives a process restart.
+   *   - "ephemeral"  — an on-disk SQLite file in an ephemeral location (the
+   *                    default OS temp dir), or an unreachable/un-migrated
+   *                    remote database. Real constraints, but not durable.
+   *   - "persistent" — a verified, reachable, migrated database (Postgres, or an
+   *                    on-disk SQLite file at an explicitly configured path).
+   */
   durability: "memory" | "ephemeral" | "persistent";
   durable: boolean;
-} {
-  const durability = storeDurability();
-  return { kind: storeKind(), durability, durable: durability === "persistent" };
+  /** The database really answered a query. */
+  reachable: boolean;
+  /** The required schema is present at the expected version. */
+  schemaReady: boolean;
+  schemaVersion: number | null;
+  requiredSchemaVersion: number;
+  /** A short, non-sensitive reason when not durable (never a credential/path). */
+  reason: string | null;
+};
+
+function probeReason(kind: Store["kind"], health: StoreHealth): string {
+  if (!health.reachable) {
+    return kind === "postgres"
+      ? "The configured database could not be reached, so referral data cannot be saved."
+      : "The storage backend is not reachable.";
+  }
+  if (!health.ready) {
+    return kind === "postgres"
+      ? "The configured database is reachable but its schema is not migrated, so referral data cannot be saved. Run the database migration."
+      : "The storage schema is not at the required version.";
+  }
+  return "Storage is not durable.";
+}
+
+/**
+ * Probe the store and report exactly how durable it is. This performs a real
+ * round-trip for the remote backend, so a configured-but-unreachable or
+ * un-migrated database reports `durable: false` with a reason — never a false
+ * success. Nothing sensitive (no path, no credential) is returned.
+ */
+export async function storeCapability(): Promise<StoreCapability> {
+  const store = getStore();
+  const base = { kind: store.kind, requiredSchemaVersion: SCHEMA_VERSION } as const;
+
+  if (store.kind === "memory") {
+    return {
+      ...base,
+      durability: "memory",
+      durable: false,
+      reachable: true,
+      schemaReady: true,
+      schemaVersion: SCHEMA_VERSION,
+      reason:
+        "Referral attribution needs durable storage, but this deployment is running with an in-memory store. No referral data will be saved.",
+    };
+  }
+
+  if (store.kind === "sqlite") {
+    const health = await store.health();
+    // An on-disk SQLite file is only "persistent" when its path is explicitly
+    // configured; a temp-dir file is erased on a serverless cold start.
+    const configured = Boolean(process.env.INTENT_PAY_DB_PATH);
+    if (configured && health.reachable && health.ready) {
+      return {
+        ...base,
+        durability: "persistent",
+        durable: true,
+        reachable: true,
+        schemaReady: true,
+        schemaVersion: health.schemaVersion,
+        reason: null,
+      };
+    }
+    return {
+      ...base,
+      durability: "ephemeral",
+      durable: false,
+      reachable: health.reachable,
+      schemaReady: health.ready,
+      schemaVersion: health.schemaVersion,
+      reason:
+        health.reachable && health.ready
+          ? "Referral attribution needs durable storage, but this deployment stores data in an ephemeral filesystem that is erased on restart. Configure a managed Postgres database (DATABASE_URL) to enable durable referrals."
+          : probeReason(store.kind, health),
+    };
+  }
+
+  // Postgres: durable only when it is actually reachable and migrated. Apply
+  // pending migrations first (idempotent) so a fresh database self-heals on the
+  // first probe; if the database is unreachable the migration throws and the
+  // health check below reports it honestly.
+  try {
+    await migrateStore();
+  } catch {
+    /* unreachable — health() below reports the real state */
+  }
+  const health = await store.health();
+  const durable = health.reachable && health.ready;
+  return {
+    ...base,
+    durability: durable ? "persistent" : "ephemeral",
+    durable,
+    reachable: health.reachable,
+    schemaReady: health.ready,
+    schemaVersion: health.schemaVersion,
+    reason: durable ? null : probeReason(store.kind, health),
+  };
+}
+
+/** A minimal, non-sensitive store summary for callers that only need kind. */
+export async function storeStatus(): Promise<Pick<StoreCapability, "kind" | "durability" | "durable">> {
+  const cap = await storeCapability();
+  return { kind: cap.kind, durability: cap.durability, durable: cap.durable };
 }
 
 /**
  * Guard for operations that genuinely require durable storage (referral
  * attribution). It returns a precise, honest refusal when the configured store
  * cannot persist across restarts, instead of silently writing to memory and
- * reporting a success that will vanish.
+ * reporting a success that will vanish. Verifies the backend, so a URL alone is
+ * never enough.
  */
-export function requireDurableStore(): { ok: true } | { ok: false; reason: string } {
-  const status = storeStatus();
-  if (status.durable) return { ok: true };
-  const reason =
-    status.durability === "memory"
-      ? "Referral attribution needs durable storage, but this deployment is running with an in-memory store. No referral data will be saved."
-      : "Referral attribution needs durable storage, but this deployment stores data in an ephemeral filesystem that is erased on restart. Set INTENT_PAY_DB_PATH to a persistent volume to enable durable referrals.";
-  return { ok: false, reason };
+export async function requireDurableStore(): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const cap = await storeCapability();
+  if (cap.durable) return { ok: true };
+  return { ok: false, reason: cap.reason ?? "Durable storage is unavailable." };
+}
+
+/**
+ * Apply pending migrations to the configured backend. Safe to call on every boot
+ * (idempotent). Returns the resulting schema version, or null when the backend
+ * needs no explicit migration (memory/sqlite migrate on construction).
+ */
+export async function migrateStore(): Promise<number | null> {
+  const store = getStore();
+  if (store.kind === "postgres" && typeof (store as PostgresStore).migrate === "function") {
+    await (store as PostgresStore).migrate();
+    return SCHEMA_VERSION;
+  }
+  return null;
 }

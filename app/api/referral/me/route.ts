@@ -3,7 +3,7 @@ import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { getOrCreateCode, dashboardFor } from "@/lib/server/referral";
 import { referralOrigin } from "@/lib/config/referral";
 import { referralUrl } from "@/lib/domain/referralCode";
-import { requireDurableStore, storeStatus } from "@/lib/store";
+import { requireDurableStore, storeCapability } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -21,32 +21,32 @@ export const dynamic = "force-dynamic";
  * every response so the UI can be explicit about persistence.
  */
 export async function GET(req: Request) {
-  const session = sessionFromRequest(req);
+  const session = await sessionFromRequest(req);
   if (!session) {
     return NextResponse.json(
       { ok: false, code: "unauthenticated", message: "Sign in with your wallet to view referrals." },
       { status: 401 },
     );
   }
-  const durable = requireDurableStore();
+  const durable = await requireDurableStore();
   if (!durable.ok) {
     return NextResponse.json(
       { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
       { status: 503 },
     );
   }
-  const created = getOrCreateCode(session.address);
+  const created = await getOrCreateCode(session.address);
   if (!created.ok) {
     return NextResponse.json({ ok: false, code: created.code, message: created.message }, { status: 400 });
   }
   const origin = referralOrigin();
-  const dash = dashboardFor(session.address, (code) => referralUrl(origin, code));
+  const dash = await dashboardFor(session.address, (code) => referralUrl(origin, code));
   if (!dash.ok) {
     return NextResponse.json({ ok: false, code: dash.code, message: dash.message }, { status: 400 });
   }
   return NextResponse.json({
     ok: true,
-    durable: storeStatus().durable,
+    durable: (await storeCapability()).durable,
     address: session.address,
     code: dash.value.code,
     url: dash.value.url,

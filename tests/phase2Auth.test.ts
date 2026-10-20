@@ -21,8 +21,8 @@ function req(url: string, opts: { method?: string; cookie?: string; body?: unkno
   });
 }
 
-function cookieFor(address: string): string {
-  return `${SESSION_COOKIE}=${issueSession(address)}`;
+async function cookieFor(address: string): Promise<string> {
+  return `${SESSION_COOKIE}=${await issueSession(address)}`;
 }
 
 // Referral endpoints require durable storage (see tests/storageDurability.test.ts
@@ -47,7 +47,7 @@ describe("session route", () => {
   });
 
   it("reports the address for a valid session", async () => {
-    const res = await sessionGET(req("http://x/api/auth/session", { cookie: cookieFor(ALICE) }));
+    const res = await sessionGET(req("http://x/api/auth/session", { cookie: await cookieFor(ALICE) }));
     const json = await res.json();
     expect(json.authenticated).toBe(true);
     expect(json.address).toBe(ALICE.toLowerCase());
@@ -61,8 +61,8 @@ describe("referral authorization", () => {
   });
 
   it("GET /api/referral/me returns only the caller's own dashboard", async () => {
-    const alice = await meGET(req("http://x/api/referral/me", { cookie: cookieFor(ALICE) }));
-    const bob = await meGET(req("http://x/api/referral/me", { cookie: cookieFor(BOB) }));
+    const alice = await meGET(req("http://x/api/referral/me", { cookie: await cookieFor(ALICE) }));
+    const bob = await meGET(req("http://x/api/referral/me", { cookie: await cookieFor(BOB) }));
     const a = await alice.json();
     const b = await bob.json();
     expect(a.ok && b.ok).toBe(true);
@@ -81,7 +81,7 @@ describe("referral authorization", () => {
 
   it("POST /api/referral/qualify rejects a malformed hash for a signed-in wallet", async () => {
     const res = await qualifyPOST(
-      req("http://x/api/referral/qualify", { method: "POST", cookie: cookieFor(ALICE), body: { txHash: "nope" } }),
+      req("http://x/api/referral/qualify", { method: "POST", cookie: await cookieFor(ALICE), body: { txHash: "nope" } }),
     );
     expect(res.status).toBe(400);
   });
@@ -89,11 +89,11 @@ describe("referral authorization", () => {
 
 describe("payment attempt isolation", () => {
   it("forbids a different wallet from advancing another wallet's attempt", async () => {
-    const attempt = createAttempt({ account: ALICE, intentKey: "k" });
+    const attempt = await createAttempt({ account: ALICE, intentKey: "k" });
     const res = await attemptStatusPOST(
       req("http://x/api/payments/attempts/status", {
         method: "POST",
-        cookie: cookieFor(BOB),
+        cookie: await cookieFor(BOB),
         body: { id: attempt.id, event: "submitted" },
       }),
     );
@@ -101,11 +101,11 @@ describe("payment attempt isolation", () => {
   });
 
   it("allows the owning wallet to advance its own attempt", async () => {
-    const attempt = createAttempt({ account: ALICE, intentKey: "k" });
+    const attempt = await createAttempt({ account: ALICE, intentKey: "k" });
     const res = await attemptStatusPOST(
       req("http://x/api/payments/attempts/status", {
         method: "POST",
-        cookie: cookieFor(ALICE),
+        cookie: await cookieFor(ALICE),
         body: { id: attempt.id, event: "submitted", txHash: "0x" + "b".repeat(64) },
       }),
     );
@@ -119,7 +119,7 @@ describe("payment attempt isolation", () => {
     const res = await attemptStatusPOST(
       req("http://x/api/payments/attempts/status", {
         method: "POST",
-        cookie: cookieFor(ALICE),
+        cookie: await cookieFor(ALICE),
         body: { id: "does-not-exist", event: "submitted" },
       }),
     );

@@ -30,9 +30,9 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const hours = clamp(Number(url.searchParams.get("hours") ?? 24), 1, 24 * 30);
-  const summary = recentOps(Date.now() - hours * 3_600_000);
+  const summary = await recentOps(Date.now() - hours * 3_600_000);
 
-  const attempts = listAttempts(200);
+  const attempts = await listAttempts(200);
   const unresolvedAttempts = attempts
     .filter((a) => a.status === "unknown" || a.status === "submitted" || a.status === "prepared" || a.status === "signing")
     .map((a) => ({

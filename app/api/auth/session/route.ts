@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: Request) {
   const token = readSessionCookie(req);
-  const session = verifySession(token);
+  const session = await verifySession(token);
   if (!session) return NextResponse.json({ ok: true, authenticated: false });
   return NextResponse.json({ ok: true, authenticated: true, address: session.address });
 }
@@ -45,14 +45,14 @@ export async function POST(req: Request) {
 
   // Challenge request.
   if (!body?.signature) {
-    const limited = rateLimit({ bucket: "auth_challenge", subject: clientIp(req), limit: 30, windowMs: 60_000 });
+    const limited = await rateLimit({ bucket: "auth_challenge", subject: clientIp(req), limit: 30, windowMs: 60_000 });
     if (!limited.ok) return tooMany(limited.resetAt);
-    const challenge = createChallenge(address);
+    const challenge = await createChallenge(address);
     return NextResponse.json({ ok: true, ...challenge });
   }
 
   // Verification request.
-  const limited = rateLimit({ bucket: "auth_verify", subject: clientIp(req), limit: 30, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "auth_verify", subject: clientIp(req), limit: 30, windowMs: 60_000 });
   if (!limited.ok) return tooMany(limited.resetAt);
 
   const verified = await verifyChallenge({
@@ -70,7 +70,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const token = issueSession(address);
+  const token = await issueSession(address);
   const res = NextResponse.json({ ok: true, authenticated: true, address: address.toLowerCase() });
   res.cookies.set(SESSION_COOKIE, token, {
     httpOnly: true,

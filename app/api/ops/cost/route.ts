@@ -19,9 +19,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, message: "Not authorized." }, { status: 401 });
   }
 
-  const summary = costSummary();
-  const budget = budgetState();
-  const forecast = buildForecast();
+  const summary = await costSummary();
+  const budget = await budgetState();
+  const forecast = await buildForecast();
 
   return NextResponse.json({
     ok: true,
@@ -63,6 +63,6 @@ export async function POST(req: Request) {
   if (!Number.isFinite(value)) {
     return NextResponse.json({ ok: false, message: "A numeric budgetUsd is required." }, { status: 400 });
   }
-  setMonthlyBudgetUsd(value);
-  return NextResponse.json({ ok: true, budgetUsd: monthlyBudgetUsd() });
+  await setMonthlyBudgetUsd(value);
+  return NextResponse.json({ ok: true, budgetUsd: await monthlyBudgetUsd() });
 }

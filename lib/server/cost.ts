@@ -70,15 +70,15 @@ export type RecordUsageInput = {
 };
 
 /** Accumulate one usage event into the daily rollup (atomic upsert). */
-export function recordUsage(input: RecordUsageInput): void {
+export async function recordUsage(input: RecordUsageInput): Promise<void> {
   const store = getStore();
   const day = utcDay(input.at ?? Date.now());
   const cost =
     input.estimatedCostUsd ??
     estimateCostUsd(input.model ?? "default", input.inputTokens ?? 0, input.outputTokens ?? 0);
-  const existing = store.findOne("costs", { day, provider: input.provider, kind: input.kind });
+  const existing = await store.findOne("costs", { day, provider: input.provider, kind: input.kind });
   if (existing) {
-    store.update(
+    await store.update(
       "costs",
       { day, provider: input.provider, kind: input.kind },
       {
@@ -91,7 +91,7 @@ export function recordUsage(input: RecordUsageInput): void {
       },
     );
   } else {
-    store.insert("costs", {
+    await store.insert("costs", {
       day,
       provider: input.provider,
       kind: input.kind,
@@ -118,11 +118,10 @@ function emptyTotals(): CostTotals {
   return { requests: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, errors: 0, retries: 0 };
 }
 
-export function costsInRange(fromDay: string, toDay: string): CostRecord[] {
+export async function costsInRange(fromDay: string, toDay: string): Promise<CostRecord[]> {
   // Lexicographic comparison is valid for ISO "YYYY-MM-DD" day keys.
-  return getStore()
-    .findMany("costs", undefined, { orderBy: "day", dir: "asc" })
-    .filter((r) => r.day >= fromDay && r.day <= toDay);
+  const rows = await getStore().findMany("costs", undefined, { orderBy: "day", dir: "asc" });
+  return rows.filter((r) => r.day >= fromDay && r.day <= toDay);
 }
 
 export function totalsFor(records: CostRecord[]): CostTotals {
@@ -139,14 +138,14 @@ export function totalsFor(records: CostRecord[]): CostTotals {
 }
 
 /** The month-to-date totals, plus today's. */
-export function costSummary(now = Date.now()): {
+export async function costSummary(now = Date.now()): Promise<{
   today: CostTotals;
   monthToDate: CostTotals;
   byProvider: Record<string, CostTotals>;
-} {
+}> {
   const day = utcDay(now);
   const monthStart = `${day.slice(0, 7)}-01`;
-  const month = costsInRange(monthStart, day);
+  const month = await costsInRange(monthStart, day);
   const byProvider: Record<string, CostTotals> = {};
   for (const r of month) {
     const t = byProvider[r.provider] ?? emptyTotals();
@@ -159,7 +158,7 @@ export function costSummary(now = Date.now()): {
     byProvider[r.provider] = t;
   }
   return {
-    today: totalsFor(costsInRange(day, day)),
+    today: totalsFor(await costsInRange(day, day)),
     monthToDate: totalsFor(month),
     byProvider,
   };
@@ -174,8 +173,8 @@ export type BudgetThresholds = { warn: number; high: number; critical: number };
 export const DEFAULT_THRESHOLDS: BudgetThresholds = { warn: 0.7, high: 0.85, critical: 0.95 };
 
 /** The configured monthly budget (USD), or null when unset. */
-export function monthlyBudgetUsd(): number | null {
-  const stored = getStore().findOne("kv", { key: BUDGET_KEY });
+export async function monthlyBudgetUsd(): Promise<number | null> {
+  const stored = await getStore().findOne("kv", { key: BUDGET_KEY });
   if (stored) {
     const n = Number(stored.value);
     if (Number.isFinite(n) && n > 0) return n;
@@ -189,12 +188,12 @@ export function monthlyBudgetUsd(): number | null {
 }
 
 /** Set the monthly budget (admin only). A value <= 0 clears it. */
-export function setMonthlyBudgetUsd(value: number, now = Date.now()): void {
+export async function setMonthlyBudgetUsd(value: number, now = Date.now()): Promise<void> {
   if (!Number.isFinite(value) || value <= 0) {
-    getStore().remove("kv", { key: BUDGET_KEY });
+    await getStore().remove("kv", { key: BUDGET_KEY });
     return;
   }
-  getStore().upsert("kv", { key: BUDGET_KEY, value: String(value), updatedAt: now });
+  await getStore().upsert("kv", { key: BUDGET_KEY, value: String(value), updatedAt: now });
 }
 
 export type BudgetState = {
@@ -205,9 +204,9 @@ export type BudgetState = {
   estimated: true;
 };
 
-export function budgetState(now = Date.now()): BudgetState {
-  const budget = monthlyBudgetUsd();
-  const spent = costSummary(now).monthToDate.estimatedCostUsd;
+export async function budgetState(now = Date.now()): Promise<BudgetState> {
+  const budget = await monthlyBudgetUsd();
+  const spent = (await costSummary(now)).monthToDate.estimatedCostUsd;
   if (budget === null) {
     return { budgetUsd: null, spentUsd: spent, fraction: null, threshold: "none", estimated: true };
   }
@@ -224,13 +223,13 @@ export type BudgetAlert = { level: "warn" | "high" | "critical"; fraction: numbe
  * Compute a budget alert, deduplicated by level so a threshold is announced at
  * most once per day. Returns null when nothing new crossed a threshold.
  */
-export function checkBudgetAlert(now = Date.now()): BudgetAlert | null {
-  const state = budgetState(now);
+export async function checkBudgetAlert(now = Date.now()): Promise<BudgetAlert | null> {
+  const state = await budgetState(now);
   if (state.threshold === "none" || state.threshold === "over" || state.budgetUsd === null) return null;
   const level = state.threshold as BudgetAlert["level"];
   const day = utcDay(now);
   const store = getStore();
-  const stored = store.findOne("kv", { key: ALERT_STATE_KEY });
+  const stored = await store.findOne("kv", { key: ALERT_STATE_KEY });
   let seen: Record<string, string> = {};
   try {
     seen = stored ? JSON.parse(stored.value) : {};
@@ -239,7 +238,7 @@ export function checkBudgetAlert(now = Date.now()): BudgetAlert | null {
   }
   if (seen[level] === day) return null;
   seen[level] = day;
-  store.upsert("kv", { key: ALERT_STATE_KEY, value: JSON.stringify(seen), updatedAt: now });
+  await store.upsert("kv", { key: ALERT_STATE_KEY, value: JSON.stringify(seen), updatedAt: now });
   return { level, fraction: state.fraction ?? 0, budgetUsd: state.budgetUsd, spentUsd: state.spentUsd };
 }
 
@@ -271,14 +270,14 @@ export function forecast(input: ForecastInput): ForecastPoint[] {
  * uses explicit, configurable assumptions and labels the result "assumed" — it
  * never presents an assumption as a measurement.
  */
-export function buildForecast(now = Date.now()): {
+export async function buildForecast(now = Date.now()): Promise<{
   measured: boolean;
   monthlyRequests: number;
   costPerRequest: number;
   points: ForecastPoint[];
   note: string;
-} {
-  const summary = costSummary(now);
+}> {
+  const summary = await costSummary(now);
   const day = utcDay(now);
   const dayOfMonth = Number(day.slice(8, 10));
   const measuredRequests = summary.monthToDate.requests;

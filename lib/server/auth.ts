@@ -59,29 +59,52 @@ export type Session = {
   exp: number;
 };
 
-/** The HMAC secret, generated once and persisted server-side. */
-function sessionSecret(): string {
-  const store = getStore();
-  const existing = store.findOne("kv", { key: SECRET_KEY });
-  if (existing) return existing.value;
-  const secret = randomBytes(32).toString("hex");
-  store.upsert("kv", { key: SECRET_KEY, value: secret, updatedAt: Date.now() });
-  return secret;
+/**
+ * A per-process fallback secret, used only when the store cannot be reached.
+ *
+ * It is random and never persisted, so a token signed with it is still
+ * unforgeable by a client — but it is not shared across processes, so such
+ * tokens verify only in the process that issued them. This is a deliberate
+ * fail-safe: a store outage must not make `verifySession` throw (that would turn
+ * an unauthenticated read into a 500), and it must never accept an unsigned or
+ * client-chosen secret.
+ */
+const processFallbackSecret = randomBytes(32).toString("hex");
+
+/**
+ * The HMAC secret, generated once and persisted server-side.
+ *
+ * A remote store is asynchronous, so this is async. On an ephemeral backend the
+ * secret is regenerated per process — which invalidates sessions across a cold
+ * start, an honest consequence of non-durable storage rather than a bug. When the
+ * store is unreachable the in-process fallback is used instead of throwing.
+ */
+async function sessionSecret(): Promise<string> {
+  try {
+    const store = getStore();
+    const existing = await store.findOne("kv", { key: SECRET_KEY });
+    if (existing) return existing.value;
+    const secret = randomBytes(32).toString("hex");
+    await store.upsert("kv", { key: SECRET_KEY, value: secret, updatedAt: Date.now() });
+    return secret;
+  } catch {
+    return processFallbackSecret;
+  }
 }
 
-function sign(payload: string): string {
-  return createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
+async function sign(payload: string): Promise<string> {
+  return createHmac("sha256", await sessionSecret()).update(payload).digest("base64url");
 }
 
 /** Issue an opaque, tamper-evident session token for a verified address. */
-export function issueSession(address: string, now = Date.now()): string {
+export async function issueSession(address: string, now = Date.now()): Promise<string> {
   const exp = now + SESSION_TTL_MS;
   const payload = `${address.toLowerCase()}.${exp}`;
-  return `${Buffer.from(payload).toString("base64url")}.${sign(payload)}`;
+  return `${Buffer.from(payload).toString("base64url")}.${await sign(payload)}`;
 }
 
 /** Verify a session token; returns the session or null. Never throws. */
-export function verifySession(token: string | undefined | null, now = Date.now()): Session | null {
+export async function verifySession(token: string | undefined | null, now = Date.now()): Promise<Session | null> {
   if (!token || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length !== 2) return null;
@@ -92,7 +115,7 @@ export function verifySession(token: string | undefined | null, now = Date.now()
   } catch {
     return null;
   }
-  const expected = sign(payload);
+  const expected = await sign(payload);
   const a = Buffer.from(mac);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
@@ -104,10 +127,10 @@ export function verifySession(token: string | undefined | null, now = Date.now()
 }
 
 /** Create and persist a nonce challenge for an address. */
-export function createChallenge(address: string, now = Date.now()): { nonce: string; message: string } {
+export async function createChallenge(address: string, now = Date.now()): Promise<{ nonce: string; message: string }> {
   if (!isEvmAddress(address)) throw new Error("A valid wallet address is required.");
   const nonce = newNonce();
-  getStore().upsert("kv", {
+  await getStore().upsert("kv", {
     key: `${NONCE_PREFIX}${nonce}`,
     value: JSON.stringify({ address: address.toLowerCase(), exp: now + NONCE_TTL_MS }),
     updatedAt: now,
@@ -131,10 +154,10 @@ export async function verifyChallenge(input: {
   const now = input.now ?? Date.now();
   const store = getStore();
   const key = `${NONCE_PREFIX}${input.nonce}`;
-  const stored = store.findOne("kv", { key });
+  const stored = await store.findOne("kv", { key });
   if (!stored) return { ok: false, reason: "unknown_nonce" };
   // Single-use: burn the nonce whether or not the rest checks out.
-  store.remove("kv", { key });
+  await store.remove("kv", { key });
   let parsed: { address: string; exp: number };
   try {
     parsed = JSON.parse(stored.value);

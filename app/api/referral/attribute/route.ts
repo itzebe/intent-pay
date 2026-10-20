@@ -23,14 +23,14 @@ export const dynamic = "force-dynamic";
  * rather than reporting a success that would vanish on the next cold start.
  */
 export async function POST(req: Request) {
-  const session = sessionFromRequest(req);
+  const session = await sessionFromRequest(req);
   if (!session) {
     return NextResponse.json(
       { ok: false, code: "unauthenticated", message: "Sign in with your wallet first." },
       { status: 401 },
     );
   }
-  const durable = requireDurableStore();
+  const durable = await requireDurableStore();
   if (!durable.ok) {
     return NextResponse.json(
       { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
@@ -45,22 +45,22 @@ export async function POST(req: Request) {
   }
 
   const fingerprint = clientFingerprint(req);
-  const limited = rateLimit({ bucket: "referral_attribute", subject: session.address, limit: 20, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "referral_attribute", subject: session.address, limit: 20, windowMs: 60_000 });
   if (!limited.ok) {
     const { body: b, headers } = tooManyResponse(limited.resetAt);
     return NextResponse.json(b, { status: 429, headers });
   }
 
   const code = typeof body?.code === "string" ? body.code : "";
-  const result = attribute({ code, referred: session.address, fingerprint });
+  const result = await attribute({ code, referred: session.address, fingerprint });
   if (!result.ok) {
     // "already attributed" is a benign, idempotent outcome: report the existing
     // state without leaking another user's data.
     const status = result.code === "invalid_code" || result.code === "invalid_address" ? 400 : 409;
     return NextResponse.json({ ok: false, code: result.code, message: result.message }, { status });
   }
-  markRegistered(session.address);
-  const current = referralForReferred(session.address);
+  await markRegistered(session.address);
+  const current = await referralForReferred(session.address);
   return NextResponse.json({
     ok: true,
     state: current?.state ?? "attributed",
@@ -70,16 +70,16 @@ export async function POST(req: Request) {
 
 /** POST /api/referral/activate — mark a defined activation event (idempotent). */
 export async function PUT(req: Request) {
-  const session = sessionFromRequest(req);
+  const session = await sessionFromRequest(req);
   if (!session) {
     return NextResponse.json({ ok: false, code: "unauthenticated", message: "Sign in with your wallet first." }, { status: 401 });
   }
-  const limited = rateLimit({ bucket: "referral_activate", subject: session.address, limit: 20, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "referral_activate", subject: session.address, limit: 20, windowMs: 60_000 });
   if (!limited.ok) {
     const { body: b, headers } = tooManyResponse(limited.resetAt);
     return NextResponse.json(b, { status: 429, headers });
   }
-  const result = markActivated(session.address);
+  const result = await markActivated(session.address);
   if (!result.ok) {
     return NextResponse.json({ ok: false, code: result.code, message: result.message }, { status: 400 });
   }

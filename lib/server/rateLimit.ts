@@ -29,27 +29,27 @@ export type RateLimitInput = {
   now?: number;
 };
 
-export function rateLimit(input: RateLimitInput): RateLimitResult {
+export async function rateLimit(input: RateLimitInput): Promise<RateLimitResult> {
   const now = input.now ?? Date.now();
   const windowIndex = Math.floor(now / input.windowMs);
   const resetAt = (windowIndex + 1) * input.windowMs;
   const key = `rl:${input.bucket}:${input.subject}:${windowIndex}`;
   const store = getStore();
-  const existing = store.findOne("kv", { key });
+  const existing = await store.findOne("kv", { key });
   const count = existing ? Number(existing.value) || 0 : 0;
   if (count >= input.limit) {
     return { ok: false, remaining: 0, resetAt, limit: input.limit };
   }
   const next = count + 1;
   if (existing) {
-    store.update("kv", { key }, { value: String(next), updatedAt: now });
+    await store.update("kv", { key }, { value: String(next), updatedAt: now });
   } else {
     try {
-      store.insert("kv", { key, value: String(next), updatedAt: now });
+      await store.insert("kv", { key, value: String(next), updatedAt: now });
     } catch {
       // Lost a race creating the row: increment the winner.
-      const row = store.findOne("kv", { key });
-      if (row) store.update("kv", { key }, { value: String(Number(row.value) + 1), updatedAt: now });
+      const row = await store.findOne("kv", { key });
+      if (row) await store.update("kv", { key }, { value: String(Number(row.value) + 1), updatedAt: now });
     }
   }
   return { ok: true, remaining: Math.max(0, input.limit - next), resetAt, limit: input.limit };

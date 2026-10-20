@@ -26,18 +26,18 @@ export const dynamic = "force-dynamic";
  * than reported as success.
  */
 export async function POST(req: Request) {
-  const session = sessionFromRequest(req);
+  const session = await sessionFromRequest(req);
   if (!session) {
     return NextResponse.json({ ok: false, code: "unauthenticated", message: "Sign in with your wallet first." }, { status: 401 });
   }
-  const durable = requireDurableStore();
+  const durable = await requireDurableStore();
   if (!durable.ok) {
     return NextResponse.json(
       { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
       { status: 503 },
     );
   }
-  const limited = rateLimit({ bucket: "referral_qualify", subject: session.address, limit: 10, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "referral_qualify", subject: session.address, limit: 10, windowMs: 60_000 });
   if (!limited.ok) {
     const { body, headers } = tooManyResponse(limited.resetAt);
     return NextResponse.json(body, { status: 429, headers });
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
 
   if (!result.ok) {
     const pending = result.code === "not_attributed";
-    recordOpsEvent({
+    await recordOpsEvent({
       category: pending ? "transaction_status_unknown" : "invalid_instructions",
       service: "api/referral/qualify",
       message: result.message,

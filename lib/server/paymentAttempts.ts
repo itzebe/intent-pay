@@ -65,11 +65,11 @@ export type CreateAttemptInput = {
  * requests with the same key cannot both insert: the loser gets the winner's
  * record. A missing key always creates a new attempt (no cross-request dedup).
  */
-export function createAttempt(input: CreateAttemptInput, now = Date.now()): PaymentAttemptRecord {
+export async function createAttempt(input: CreateAttemptInput, now = Date.now()): Promise<PaymentAttemptRecord> {
   const store = getStore();
   const key = input.idempotencyKey?.trim() || null;
   if (key) {
-    const existing = store.findOne("paymentAttempts", { idempotencyKey: key });
+    const existing = await store.findOne("paymentAttempts", { idempotencyKey: key });
     if (existing) return existing;
   }
   const record: PaymentAttemptRecord = {
@@ -93,11 +93,11 @@ export function createAttempt(input: CreateAttemptInput, now = Date.now()): Paym
     idempotencyKey: key,
   };
   try {
-    store.insert("paymentAttempts", record);
+    await store.insert("paymentAttempts", record);
   } catch {
     // Lost a race on the idempotency key — return the winner's record.
     if (key) {
-      const winner = store.findOne("paymentAttempts", { idempotencyKey: key });
+      const winner = await store.findOne("paymentAttempts", { idempotencyKey: key });
       if (winner) return winner;
     }
     throw new Error("Could not create the payment attempt.");
@@ -118,9 +118,9 @@ export type UpdateAttemptInput = {
   lastVerifiedAt?: number | null;
 };
 
-export function updateAttempt(id: string, patch: UpdateAttemptInput, now = Date.now()): PaymentAttemptRecord | undefined {
+export async function updateAttempt(id: string, patch: UpdateAttemptInput, now = Date.now()): Promise<PaymentAttemptRecord | undefined> {
   const store = getStore();
-  const existing = store.findOne("paymentAttempts", { id });
+  const existing = await store.findOne("paymentAttempts", { id });
   if (!existing) return undefined;
   const next: Partial<PaymentAttemptRecord> = { updatedAt: now };
   if (patch.status !== undefined) next.status = patch.status;
@@ -133,15 +133,15 @@ export function updateAttempt(id: string, patch: UpdateAttemptInput, now = Date.
   if (patch.provider !== undefined) next.provider = patch.provider;
   if (patch.diagnostic !== undefined) next.diagnostic = redactDiagnostic(patch.diagnostic);
   if (patch.lastVerifiedAt !== undefined) next.lastVerifiedAt = patch.lastVerifiedAt;
-  store.update("paymentAttempts", { id }, next);
+  await store.update("paymentAttempts", { id }, next);
   return store.findOne("paymentAttempts", { id });
 }
 
-export function getAttempt(id: string): PaymentAttemptRecord | undefined {
+export async function getAttempt(id: string): Promise<PaymentAttemptRecord | undefined> {
   return getStore().findOne("paymentAttempts", { id });
 }
 
-export function listAttempts(limit = 100): PaymentAttemptRecord[] {
+export async function listAttempts(limit = 100): Promise<PaymentAttemptRecord[]> {
   return getStore().findMany("paymentAttempts", undefined, { orderBy: "createdAt", dir: "desc", limit });
 }
 
@@ -149,13 +149,13 @@ export function listAttempts(limit = 100): PaymentAttemptRecord[] {
  * Classify a failure code and persist it. Keeps the "may have submitted"
  * distinction explicit so the caller can require reconciliation before retry.
  */
-export function recordFailure(
+export async function recordFailure(
   id: string,
   code: string | null | undefined,
   source: "readiness" | "quote" | "guard" | "execution" | "wallet" | "aa" | "generic",
   diagnostic?: string,
   now = Date.now(),
-): { category: FailureCategory; mayHaveSubmitted: boolean } {
+): Promise<{ category: FailureCategory; mayHaveSubmitted: boolean }> {
   const cls = classifyCode(code, source);
   const status: PaymentAttemptStatus =
     cls.category === "user_rejected"
@@ -165,7 +165,7 @@ export function recordFailure(
           ? "failed"
           : "unknown"
         : "failed";
-  updateAttempt(
+  await updateAttempt(
     id,
     {
       status,

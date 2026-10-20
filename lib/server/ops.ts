@@ -31,7 +31,7 @@ export type RecordOpsInput = {
   at?: number;
 };
 
-export function recordOpsEvent(input: RecordOpsInput): OpsEventRecord {
+export async function recordOpsEvent(input: RecordOpsInput): Promise<OpsEventRecord> {
   const known = (() => {
     try {
       return classificationOf(input.category as FailureCategory);
@@ -52,7 +52,7 @@ export function recordOpsEvent(input: RecordOpsInput): OpsEventRecord {
     unresolved: input.unresolved ?? (severity === "error" || severity === "critical"),
   };
   try {
-    getStore().insert("opsEvents", record);
+    await getStore().insert("opsEvents", record);
   } catch {
     // Telemetry must never break a payment path.
   }
@@ -75,8 +75,8 @@ export type OpsSummary = {
  * Recent errors ordered by severity then time. `sinceMs` defaults to the last
  * 24 hours. Frequency is reported per category and per service.
  */
-export function recentOps(sinceMs: number, now = Date.now(), limit = 200): OpsSummary {
-  const all = getStore().findMany("opsEvents", undefined, { orderBy: "at", dir: "desc", limit: 5000 });
+export async function recentOps(sinceMs: number, now = Date.now(), limit = 200): Promise<OpsSummary> {
+  const all = await getStore().findMany("opsEvents", undefined, { orderBy: "at", dir: "desc", limit: 5000 });
   const inWindow = all.filter((e) => e.at >= sinceMs);
   const bySeverity: Record<string, number> = {};
   const byCategory: Record<string, number> = {};

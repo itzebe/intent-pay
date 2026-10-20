@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { storeStatus } from "@/lib/store";
+import { storeCapability } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -12,11 +12,13 @@ export const dynamic = "force-dynamic";
  * nothing sensitive.
  */
 export async function GET() {
-  const storage = storeStatus();
+  const storage = await storeCapability();
   return NextResponse.json({
     ok: true,
     durable: storage.durable,
     durability: storage.durability,
+    reachable: storage.reachable,
+    schemaReady: storage.schemaReady,
     referralAttribution: storage.durable ? "available" : "unavailable",
   });
 }

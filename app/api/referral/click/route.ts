@@ -26,10 +26,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, code: "invalid_code", message: "That referral code isn't valid." }, { status: 400 });
   }
   const fingerprint = clientFingerprint(req);
-  const limited = rateLimit({ bucket: "referral_click", subject: fingerprint, limit: 60, windowMs: 60_000 });
+  const limited = await rateLimit({ bucket: "referral_click", subject: fingerprint, limit: 60, windowMs: 60_000 });
   if (!limited.ok) return tooMany(limited.resetAt);
 
-  const result = recordClick({ code, fingerprint });
+  const result = await recordClick({ code, fingerprint });
   if (!result.ok) {
     return NextResponse.json({ ok: false, code: result.code, message: result.message }, { status: 400 });
   }

@@ -631,29 +631,48 @@ curl -s -X POST http://localhost:3000/api/quote -H 'Content-Type: application/js
 ## Store durability is a configuration fact, not an adapter property
 
 `lib/store/*` is the single server-side persistence contract (referral
-attribution, payment-attempt correlation, ops events, AI cost accounting). Two
-adapters share the same schema and integrity rules: `MemoryStore` (tests /
-honest fallback) and `SqliteStore` (`node:sqlite`). A record is plain JSON and
-must never carry a key, signature or auth token.
+attribution, payment-attempt correlation, ops events, AI cost accounting). Three
+adapters share the same schema and integrity rules (`lib/store/schema.ts`):
+`MemoryStore` (tests / honest fallback), `SqliteStore` (`node:sqlite`) and
+`PostgresStore` (managed Postgres — Neon). A record is plain JSON and must never
+carry a key, signature or auth token.
 
-Durability is about the *configuration*, not the adapter:
+The `Store` interface is **asynchronous** (every method returns a Promise). A
+remote database cannot be queried synchronously, and a fake blocking bridge
+would be unsafe under serverless concurrency, so the whole interface is async and
+the local adapters resolve immediately. Transactions are **serialized** per
+adapter (`txChain`) because an async transaction body yields the event loop:
+`node:sqlite` has a single connection, so two concurrent `BEGIN`s would throw.
 
-- `storeStatus()` returns `{ kind, durability, durable }` with `durability` one
-  of `memory` (nothing survives a restart), `ephemeral` (a temp-dir SQLite file
-  erased on a serverless cold start) or `persistent` (an explicitly configured
-  `INTENT_PAY_DB_PATH`). Only `persistent` is `durable`.
+Durability is about the *configuration and a real probe*, not the adapter:
+
+- Backend selection: `DATABASE_URL`/`INTENT_PAY_DATABASE_URL` → Postgres;
+  else `INTENT_PAY_DB_PATH` → on-disk SQLite; else a temp-dir SQLite file or
+  memory. Only Postgres is genuinely durable on Vercel.
+- `storeCapability()` performs a real round-trip (`health()`: a trivial query
+  plus a `_migrations` version check) and returns `{ kind, durability, durable,
+  reachable, schemaReady, schemaVersion, reason }` with `durability` one of
+  `memory` / `ephemeral` / `persistent`. **A configured URL is NOT durable
+  storage**: an unreachable or un-migrated database is `ephemeral` with a reason.
 - `requireDurableStore()` is the guard for operations that are meaningless if
   forgotten. Referral endpoints (`/api/referral/{attribute,me,qualify}`) call it
   and **refuse with 503 `storage_unavailable`** when the store is not durable —
   never report an ephemeral success. `/api/referral/availability` is the public,
   non-sensitive probe the UI reads before asking for a signature.
-- `/api/capabilities.storage` reports `{ kind, durability, durable,
-  referralAttribution }` and **never a path or credential**. Payment execution
-  never depends on the store, so a store outage cannot block a payment.
+- `/api/capabilities.storage` reports `{ kind, durability, durable, reachable,
+  schemaReady, schemaVersion, requiredSchemaVersion, referralAttribution,
+  reason }` and **never a path or credential**. Payment execution never depends
+  on the store, so a store outage cannot block a payment.
+- Postgres migrations are versioned and derived from the shared schema
+  (`lib/store/migrations.ts`, `SCHEMA_VERSION`); they run lazily/idempotently on
+  the first probe. SQL is always parameterized; identifiers are quoted. A
+  configured-but-unreachable database makes `verifySession` fall back to a
+  per-process secret (still unforgeable) rather than throwing.
 - Connecting a wallet must **not** raise a `personal_sign` prompt. The referral
   session signature is only requested from an explicit user action
   (`useReferral().authenticate`, driven by the ReferralPanel button); an existing
   session is adopted silently.
 
 Regression coverage: `tests/storageDurability.test.ts`,
+`tests/referralPersistence.test.ts`, `tests/storeMigrations.test.ts`,
 `tests/referralPanel.test.tsx`, `tests/phase2Auth.test.ts`.

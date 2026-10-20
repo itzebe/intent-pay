@@ -18,6 +18,11 @@ import type { Verifier } from "./verify";
  * The lifecycle is explicit:
  *   clicked → attributed → (registered) → activated → pending_verification → qualified
  * with `rejected` as a terminal failure. A click is never a qualified referral.
+ *
+ * Every function is asynchronous because the store is: the same logic runs
+ * unchanged against the in-memory, SQLite and Postgres adapters. Uniqueness is
+ * enforced by the database, so a lost race is handled by reading the winner's
+ * row, never by overwriting.
  */
 
 export type ReferralErrorCode =
@@ -38,8 +43,8 @@ function fail(code: ReferralErrorCode, message: string): Result<never> {
 }
 
 /** The code owned by a wallet, if any. */
-export function getCodeFor(owner: string): string | null {
-  const row = getStore().findOne("referralCodes", { owner: owner.toLowerCase() });
+export async function getCodeFor(owner: string): Promise<string | null> {
+  const row = await getStore().findOne("referralCodes", { owner: owner.toLowerCase() });
   return row?.code ?? null;
 }
 
@@ -47,20 +52,27 @@ export function getCodeFor(owner: string): string | null {
  * Return the wallet's referral code, creating one on first use. The same code is
  * returned on every subsequent call — a code is never regenerated per page load.
  */
-export function getOrCreateCode(owner: string, now = Date.now()): Result<string> {
+export async function getOrCreateCode(owner: string, now = Date.now()): Promise<Result<string>> {
   if (!isEvmAddress(owner)) return fail("invalid_address", "Connect a wallet to get a referral link.");
   const lower = owner.toLowerCase();
-  const existing = getCodeFor(lower);
+  const existing = await getCodeFor(lower);
   if (existing) return { ok: true, value: existing };
   const store = getStore();
-  const code = generateUniqueCode((c) => Boolean(store.findOne("referralCodes", { code: c })));
+  // Draw a candidate and let the UNIQUE constraints settle any race: the insert
+  // either succeeds or throws, and the loser reads the winner's row.
+  let code = generateUniqueCode(() => false);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const collision = await store.findOne("referralCodes", { code });
+    if (!collision) break;
+    code = generateUniqueCode(() => false);
+  }
   try {
-    store.insert("referralCodes", { code, owner: lower, createdAt: now });
+    await store.insert("referralCodes", { code, owner: lower, createdAt: now });
     return { ok: true, value: code };
   } catch (err) {
     if (err instanceof StoreConflictError) {
-      // Another request created the owner's code first — return that one.
-      const winner = getCodeFor(lower);
+      // Another request created the owner's (or this) code first.
+      const winner = await getCodeFor(lower);
       if (winner) return { ok: true, value: winner };
     }
     throw err;
@@ -68,17 +80,17 @@ export function getOrCreateCode(owner: string, now = Date.now()): Result<string>
 }
 
 /** Record a click on a referral link (deduplicated per code+fingerprint+day). */
-export function recordClick(
+export async function recordClick(
   input: { code: string; fingerprint: string; now?: number },
-): Result<{ code: string; deduped: boolean }> {
+): Promise<Result<{ code: string; deduped: boolean }>> {
   const now = input.now ?? Date.now();
   const code = normalizeCode(input.code);
   if (!code) return fail("invalid_code", "That referral code isn't valid.");
-  const ownerRow = getStore().findOne("referralCodes", { code });
+  const ownerRow = await getStore().findOne("referralCodes", { code });
   if (!ownerRow) return fail("invalid_code", "That referral code isn't valid.");
   const day = new Date(now).toISOString().slice(0, 10);
   const clickKey = `${code}:${input.fingerprint}:${day}`;
-  const existing = getStore().findOne("referrals", { clickKey });
+  const existing = await getStore().findOne("referrals", { clickKey });
   if (existing) return { ok: true, value: { code, deduped: true } };
   const record: ReferralRecord = {
     id: randomUUID(),
@@ -96,7 +108,7 @@ export function recordClick(
     clickKey,
   };
   try {
-    getStore().insert("referrals", record);
+    await getStore().insert("referrals", record);
   } catch (err) {
     if (err instanceof StoreConflictError) return { ok: true, value: { code, deduped: true } };
     throw err;
@@ -105,7 +117,7 @@ export function recordClick(
 }
 
 /** The referral attributed to a referred wallet, if any. */
-export function referralForReferred(referred: string): ReferralRecord | undefined {
+export async function referralForReferred(referred: string): Promise<ReferralRecord | undefined> {
   return getStore().findOne("referrals", { referred: referred.toLowerCase() });
 }
 
@@ -116,31 +128,31 @@ export function referralForReferred(referred: string): ReferralRecord | undefine
  * a referrer, a later request with a different code does NOT overwrite it. A
  * self-referral is refused. Repeating the same attribution is idempotent.
  */
-export function attribute(
+export async function attribute(
   input: { code: string; referred: string; fingerprint?: string; now?: number },
-): Result<ReferralRecord> {
+): Promise<Result<ReferralRecord>> {
   const now = input.now ?? Date.now();
   if (!isEvmAddress(input.referred)) return fail("invalid_address", "A valid wallet is required.");
   const referred = input.referred.toLowerCase();
   const code = normalizeCode(input.code);
   if (!code) return fail("invalid_code", "That referral code isn't valid.");
 
-  const codeRow = getStore().findOne("referralCodes", { code });
+  const codeRow = await getStore().findOne("referralCodes", { code });
   if (!codeRow) return fail("invalid_code", "That referral code isn't valid.");
   const referrer = codeRow.owner;
   if (referrer === referred) return fail("self_referral", "You can't refer yourself.");
 
   const store = getStore();
-  const existing = referralForReferred(referred);
+  const existing = await referralForReferred(referred);
   if (existing) {
     if (existing.referrer === referrer) return { ok: true, value: existing };
     // Established attribution is not silently switched.
     return fail("already_attributed", "This wallet already has a referrer.");
   }
 
-  const attributedCount = store
-    .findMany("referrals", { referrer })
-    .filter((r) => r.state !== "clicked" && r.state !== "rejected").length;
+  const attributedCount = (await store.findMany("referrals", { referrer })).filter(
+    (r) => r.state !== "clicked" && r.state !== "rejected",
+  ).length;
   if (attributedCount >= MAX_ATTRIBUTIONS_PER_REFERRER) {
     return fail("referrer_limit", "This referrer has reached the attribution limit.");
   }
@@ -161,11 +173,11 @@ export function attribute(
     clickKey: null,
   };
   try {
-    store.insert("referrals", record);
+    await store.insert("referrals", record);
   } catch (err) {
     if (err instanceof StoreConflictError) {
       // Lost a race: return whatever attribution now exists (never overwrite).
-      const winner = referralForReferred(referred);
+      const winner = await referralForReferred(referred);
       if (winner && winner.referrer === referrer) return { ok: true, value: winner };
       return fail("already_attributed", "This wallet already has a referrer.");
     }
@@ -175,26 +187,26 @@ export function attribute(
 }
 
 /** Advance a referral to `registered` (no-op if already further along). */
-export function markRegistered(referred: string, now = Date.now()): Result<ReferralRecord> {
-  const existing = referralForReferred(referred);
+export async function markRegistered(referred: string, now = Date.now()): Promise<Result<ReferralRecord>> {
+  const existing = await referralForReferred(referred);
   if (!existing) return fail("not_attributed", "This wallet has no referral.");
   if (["registered", "activated", "pending_verification", "qualified"].includes(existing.state)) {
     return { ok: true, value: existing };
   }
   if (existing.state !== "attributed") return { ok: true, value: existing };
-  getStore().update("referrals", { id: existing.id }, { state: "registered", updatedAt: now });
+  await getStore().update("referrals", { id: existing.id }, { state: "registered", updatedAt: now });
   return { ok: true, value: { ...existing, state: "registered", updatedAt: now } };
 }
 
 /** Advance a referral to `activated` (a defined activation event occurred). */
-export function markActivated(referred: string, now = Date.now()): Result<ReferralRecord> {
-  const existing = referralForReferred(referred);
+export async function markActivated(referred: string, now = Date.now()): Promise<Result<ReferralRecord>> {
+  const existing = await referralForReferred(referred);
   if (!existing) return fail("not_attributed", "This wallet has no referral.");
   if (["activated", "pending_verification", "qualified"].includes(existing.state)) {
     return { ok: true, value: existing };
   }
   if (existing.state === "rejected") return { ok: true, value: existing };
-  getStore().update("referrals", { id: existing.id }, { state: "activated", updatedAt: now });
+  await getStore().update("referrals", { id: existing.id }, { state: "activated", updatedAt: now });
   return { ok: true, value: { ...existing, state: "activated", updatedAt: now } };
 }
 
@@ -219,7 +231,7 @@ export async function qualify(input: QualifyInput): Promise<Result<ReferralRecor
   if (!isEvmAddress(input.referred)) return fail("invalid_address", "A valid wallet is required.");
   const referred = input.referred.toLowerCase();
   const store = getStore();
-  const existing = referralForReferred(referred);
+  const existing = await referralForReferred(referred);
   if (!existing) return fail("not_attributed", "This wallet has no referral to qualify.");
 
   // Idempotent: already qualified (even by this same tx) is success.
@@ -233,12 +245,12 @@ export async function qualify(input: QualifyInput): Promise<Result<ReferralRecor
 
   // The attribution window bounds when qualification may happen.
   if (existing.attributedAt !== null && now - existing.attributedAt > ATTRIBUTION_WINDOW_MS) {
-    store.update("referrals", { id: existing.id }, { state: "rejected", reason: "window_expired", updatedAt: now });
+    await store.update("referrals", { id: existing.id }, { state: "rejected", reason: "window_expired", updatedAt: now });
     return fail("window_expired", "The referral window has expired.");
   }
 
   // The same transaction must not qualify two referrals.
-  const txOwner = store.findOne("referrals", { qualifiedTxHash: input.txHash });
+  const txOwner = await store.findOne("referrals", { qualifiedTxHash: input.txHash });
   if (txOwner) {
     if (txOwner.referred === referred) return { ok: true, value: txOwner };
     return fail("duplicate_transaction", "That transaction has already qualified a referral.");
@@ -249,7 +261,7 @@ export async function qualify(input: QualifyInput): Promise<Result<ReferralRecor
     // Retryable outcomes → pending_verification; definitive ones → rejected.
     const retryable = result.reason === "unavailable" || result.reason === "pending" || result.reason === "not_found";
     const state: ReferralState = retryable ? "pending_verification" : "rejected";
-    store.update(
+    await store.update(
       "referrals",
       { id: existing.id },
       { state, reason: result.reason, updatedAt: now },
@@ -261,10 +273,10 @@ export async function qualify(input: QualifyInput): Promise<Result<ReferralRecor
   // makes a concurrent double-qualification impossible: the loser sees the
   // winner's row and returns it.
   try {
-    store.transaction(() => {
-      const fresh = referralForReferred(referred);
+    await store.transaction(async () => {
+      const fresh = await referralForReferred(referred);
       if (!fresh) throw new StoreConflictError("referral disappeared");
-      store.update(
+      await store.update(
         "referrals",
         { id: fresh.id },
         { state: "qualified", qualifiedAt: now, qualifiedTxHash: input.txHash, reason: null, updatedAt: now },
@@ -272,23 +284,23 @@ export async function qualify(input: QualifyInput): Promise<Result<ReferralRecor
     });
   } catch (err) {
     if (err instanceof StoreConflictError) {
-      const winner = store.findOne("referrals", { qualifiedTxHash: input.txHash });
+      const winner = await store.findOne("referrals", { qualifiedTxHash: input.txHash });
       if (winner) return { ok: true, value: winner };
     }
     throw err;
   }
-  const qualified = referralForReferred(referred);
+  const qualified = await referralForReferred(referred);
   return { ok: true, value: qualified! };
 }
 
 /** Mark a referral rejected with a documented reason (authorized correction). */
-export function markRejected(referred: string, reason: string, now = Date.now()): Result<ReferralRecord> {
-  const existing = referralForReferred(referred);
+export async function markRejected(referred: string, reason: string, now = Date.now()): Promise<Result<ReferralRecord>> {
+  const existing = await referralForReferred(referred);
   if (!existing) return fail("not_attributed", "This wallet has no referral.");
   if (existing.state === "qualified") {
     return fail("already_attributed", "A qualified referral cannot be rejected without a correction.");
   }
-  getStore().update("referrals", { id: existing.id }, { state: "rejected", reason, updatedAt: now });
+  await getStore().update("referrals", { id: existing.id }, { state: "rejected", reason, updatedAt: now });
   return { ok: true, value: { ...existing, state: "rejected", reason, updatedAt: now } };
 }
 
@@ -314,13 +326,17 @@ export type Dashboard = {
 };
 
 /** The referral dashboard for an owner — only ever their own records. */
-export function dashboardFor(owner: string, url: (code: string) => string, now = Date.now()): Result<Dashboard> {
+export async function dashboardFor(
+  owner: string,
+  url: (code: string) => string,
+  now = Date.now(),
+): Promise<Result<Dashboard>> {
   if (!isEvmAddress(owner)) return fail("invalid_address", "Connect a wallet to view your referrals.");
   const lower = owner.toLowerCase();
-  const code = getCodeFor(lower);
+  const code = await getCodeFor(lower);
   if (!code) return fail("invalid_code", "No referral code yet.");
   void now;
-  const rows = getStore().findMany("referrals", { referrer: lower }, { orderBy: "createdAt", dir: "desc" });
+  const rows = await getStore().findMany("referrals", { referrer: lower }, { orderBy: "createdAt", dir: "desc" });
   const counts = {
     clicks: rows.filter((r) => r.state === "clicked").length,
     attributed: rows.filter((r) => r.state !== "clicked" && r.state !== "rejected").length,

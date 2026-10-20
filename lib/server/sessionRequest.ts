@@ -8,7 +8,7 @@ import { SESSION_COOKIE, verifySession, type Session } from "@/lib/server/auth";
  * at most a hint, and the authoritative value always comes from the verified
  * session.
  */
-export function sessionFromRequest(req: Request): Session | null {
+export async function sessionFromRequest(req: Request): Promise<Session | null> {
   const cookie = req.headers.get("cookie") ?? "";
   const match = cookie.split(/;\s*/).find((c) => c.startsWith(`${SESSION_COOKIE}=`));
   if (!match) return null;

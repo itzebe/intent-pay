@@ -38,26 +38,26 @@ beforeEach(() => {
 });
 
 describe("wallet-signed session", () => {
-  it("issues a token that verifies and is bound to the address", () => {
-    const token = issueSession(ALICE);
-    const session = verifySession(token);
+  it("issues a token that verifies and is bound to the address", async () => {
+    const token = await issueSession(ALICE);
+    const session = await verifySession(token);
     expect(session?.address).toBe(ALICE.toLowerCase());
   });
 
-  it("rejects a tampered token", () => {
-    const token = issueSession(ALICE);
+  it("rejects a tampered token", async () => {
+    const token = await issueSession(ALICE);
     const [payload] = token.split(".");
-    expect(verifySession(`${payload}.deadbeef`)).toBeNull();
+    expect(await verifySession(`${payload}.deadbeef`)).toBeNull();
   });
 
-  it("rejects an expired token", () => {
+  it("rejects an expired token", async () => {
     const now = Date.now();
-    const token = issueSession(ALICE, now);
-    expect(verifySession(token, now + 25 * 60 * 60 * 1000)).toBeNull();
+    const token = await issueSession(ALICE, now);
+    expect(await verifySession(token, now + 25 * 60 * 60 * 1000)).toBeNull();
   });
 
   it("accepts a valid signature and burns the nonce (single use)", async () => {
-    const { nonce, message } = createChallenge(ALICE);
+    const { nonce, message } = await createChallenge(ALICE);
     const recover = () => ALICE;
     const first = await verifyChallenge({ address: ALICE, nonce, message, signature: "0xsig", recover });
     expect(first.ok).toBe(true);
@@ -66,7 +66,7 @@ describe("wallet-signed session", () => {
   });
 
   it("rejects a signature that recovers a different address", async () => {
-    const { nonce, message } = createChallenge(ALICE);
+    const { nonce, message } = await createChallenge(ALICE);
     const res = await verifyChallenge({ address: ALICE, nonce, message, signature: "0xsig", recover: () => BOB });
     expect(res.ok).toBe(false);
   });
@@ -85,47 +85,47 @@ describe("wallet-signed session", () => {
 });
 
 describe("referral lifecycle", () => {
-  it("creates a stable code for a wallet and reuses it", () => {
-    const a = getOrCreateCode(ALICE);
-    const b = getOrCreateCode(ALICE);
+  it("creates a stable code for a wallet and reuses it", async () => {
+    const a = await getOrCreateCode(ALICE);
+    const b = await getOrCreateCode(ALICE);
     expect(a.ok && b.ok).toBe(true);
     if (a.ok && b.ok) expect(a.value).toBe(b.value);
   });
 
-  it("attributes a wallet once; a later code cannot overwrite (first touch wins)", () => {
-    const aliceCode = getOrCreateCode(ALICE);
-    const bobCode = getOrCreateCode(BOB);
+  it("attributes a wallet once; a later code cannot overwrite (first touch wins)", async () => {
+    const aliceCode = await getOrCreateCode(ALICE);
+    const bobCode = await getOrCreateCode(BOB);
     if (!aliceCode.ok || !bobCode.ok) throw new Error("codes");
-    const first = attribute({ code: aliceCode.value, referred: CAROL });
+    const first = await attribute({ code: aliceCode.value, referred: CAROL });
     expect(first.ok).toBe(true);
-    const second = attribute({ code: bobCode.value, referred: CAROL });
+    const second = await attribute({ code: bobCode.value, referred: CAROL });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.code).toBe("already_attributed");
-    expect(referralForReferred(CAROL)?.referrer).toBe(ALICE.toLowerCase());
+    expect((await referralForReferred(CAROL))?.referrer).toBe(ALICE.toLowerCase());
   });
 
-  it("refuses self-referral", () => {
-    const code = getOrCreateCode(ALICE);
+  it("refuses self-referral", async () => {
+    const code = await getOrCreateCode(ALICE);
     if (!code.ok) throw new Error("code");
-    const res = attribute({ code: code.value, referred: ALICE });
+    const res = await attribute({ code: code.value, referred: ALICE });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.code).toBe("self_referral");
   });
 
-  it("deduplicates clicks per code+fingerprint+day", () => {
-    const code = getOrCreateCode(ALICE);
+  it("deduplicates clicks per code+fingerprint+day", async () => {
+    const code = await getOrCreateCode(ALICE);
     if (!code.ok) throw new Error("code");
     const now = Date.now();
-    const a = recordClick({ code: code.value, fingerprint: "fp", now });
-    const b = recordClick({ code: code.value, fingerprint: "fp", now });
+    const a = await recordClick({ code: code.value, fingerprint: "fp", now });
+    const b = await recordClick({ code: code.value, fingerprint: "fp", now });
     expect(a.ok && b.ok).toBe(true);
     if (a.ok && b.ok) expect(b.value.deduped).toBe(true);
   });
 
   it("qualifies only from a verified on-chain payment", async () => {
-    const code = getOrCreateCode(ALICE);
+    const code = await getOrCreateCode(ALICE);
     if (!code.ok) throw new Error("code");
-    attribute({ code: code.value, referred: CAROL });
+    await attribute({ code: code.value, referred: CAROL });
     const verifier = (async () => ({
       ok: true as const,
       evidence: { chainId: 143, from: CAROL, to: BOB, blockNumber: 1, transferLogs: 1 },
@@ -136,9 +136,9 @@ describe("referral lifecycle", () => {
   });
 
   it("rejects a qualification when the verifier cannot confirm the tx", async () => {
-    const code = getOrCreateCode(ALICE);
+    const code = await getOrCreateCode(ALICE);
     if (!code.ok) throw new Error("code");
-    attribute({ code: code.value, referred: CAROL });
+    await attribute({ code: code.value, referred: CAROL });
     const verifier = (async () => ({
       ok: false as const,
       reason: "reverted" as const,
@@ -148,11 +148,11 @@ describe("referral lifecycle", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("never counts a click as a qualified referral", () => {
-    const code = getOrCreateCode(ALICE);
+  it("never counts a click as a qualified referral", async () => {
+    const code = await getOrCreateCode(ALICE);
     if (!code.ok) throw new Error("code");
-    recordClick({ code: code.value, fingerprint: "fp2" });
-    const dash = dashboardFor(ALICE, (c) => `https://x/?ref=${c}`);
+    await recordClick({ code: code.value, fingerprint: "fp2" });
+    const dash = await dashboardFor(ALICE, (c) => `https://x/?ref=${c}`);
     expect(dash.ok).toBe(true);
     if (dash.ok) {
       expect(dash.value.counts.qualified).toBe(0);
@@ -162,51 +162,51 @@ describe("referral lifecycle", () => {
 });
 
 describe("payment attempt correlation", () => {
-  it("creates, advances and records failure with a taxonomy category", () => {
-    const attempt = createAttempt({ account: ALICE, intentKey: "key1", gasMode: "erc20" });
+  it("creates, advances and records failure with a taxonomy category", async () => {
+    const attempt = await createAttempt({ account: ALICE, intentKey: "key1", gasMode: "erc20" });
     expect(attempt.status).toBe("created");
-    updateAttempt(attempt.id, { status: "submitted", txHash: "0x" + "c".repeat(64) });
-    const failed = recordFailure(attempt.id, "route_unavailable", "quote");
+    await updateAttempt(attempt.id, { status: "submitted", txHash: "0x" + "c".repeat(64) });
+    const failed = await recordFailure(attempt.id, "route_unavailable", "quote");
     expect(failed.category).toBe(classifyCode("route_unavailable", "quote").category);
     expect(failed.mayHaveSubmitted).toBe(false);
-    expect(getAttempt(attempt.id)?.status).toBe("failed");
+    expect((await getAttempt(attempt.id))?.status).toBe("failed");
   });
 
-  it("treats a submitted-stage failure as possibly on-chain", () => {
-    const attempt = createAttempt({ account: ALICE, intentKey: "key2" });
-    updateAttempt(attempt.id, { status: "submitted" });
-    const failed = recordFailure(attempt.id, "submitted", "execution");
+  it("treats a submitted-stage failure as possibly on-chain", async () => {
+    const attempt = await createAttempt({ account: ALICE, intentKey: "key2" });
+    await updateAttempt(attempt.id, { status: "submitted" });
+    const failed = await recordFailure(attempt.id, "submitted", "execution");
     expect(failed.mayHaveSubmitted).toBe(true);
   });
 
-  it("redacts secrets from a stored diagnostic", () => {
-    const attempt = createAttempt({ account: ALICE, intentKey: "key3", diagnostic: "key=sk-live-abc123" });
+  it("redacts secrets from a stored diagnostic", async () => {
+    const attempt = await createAttempt({ account: ALICE, intentKey: "key3", diagnostic: "key=sk-live-abc123" });
     expect(attempt.diagnostic).not.toContain("sk-live-abc123");
   });
 
-  it("reuses one attempt for a repeated idempotency key (retry never duplicates)", () => {
-    const first = createAttempt({ account: ALICE, intentKey: "key4", idempotencyKey: "alice:3|mainnet|..." });
-    const second = createAttempt({ account: ALICE, intentKey: "key4", idempotencyKey: "alice:3|mainnet|..." });
+  it("reuses one attempt for a repeated idempotency key (retry never duplicates)", async () => {
+    const first = await createAttempt({ account: ALICE, intentKey: "key4", idempotencyKey: "alice:3|mainnet|..." });
+    const second = await createAttempt({ account: ALICE, intentKey: "key4", idempotencyKey: "alice:3|mainnet|..." });
     expect(second.id).toBe(first.id);
   });
 
-  it("creates distinct attempts when no idempotency key is supplied", () => {
-    const a = createAttempt({ account: ALICE, intentKey: "key5" });
-    const b = createAttempt({ account: ALICE, intentKey: "key5" });
+  it("creates distinct attempts when no idempotency key is supplied", async () => {
+    const a = await createAttempt({ account: ALICE, intentKey: "key5" });
+    const b = await createAttempt({ account: ALICE, intentKey: "key5" });
     expect(a.id).not.toBe(b.id);
   });
 });
 
 describe("ops events", () => {
-  it("records an event and reports it in the recent window", () => {
-    recordOpsEvent({ category: "provider_error", service: "api/nlp", message: "boom", severity: "error" });
-    const summary = recentOps(60_000);
+  it("records an event and reports it in the recent window", async () => {
+    await recordOpsEvent({ category: "provider_error", service: "api/nlp", message: "boom", severity: "error" });
+    const summary = await recentOps(60_000);
     expect(summary.total).toBeGreaterThan(0);
     expect(summary.events.some((e) => e.service === "api/nlp")).toBe(true);
   });
 
-  it("marks error/critical events unresolved by default", () => {
-    const e = recordOpsEvent({ category: "unknown_error", service: "x", severity: "critical" });
+  it("marks error/critical events unresolved by default", async () => {
+    const e = await recordOpsEvent({ category: "unknown_error", service: "x", severity: "critical" });
     expect(e.unresolved).toBe(true);
   });
 });
@@ -217,22 +217,22 @@ describe("cost accounting", () => {
     expect(cost).toBeGreaterThan(0);
   });
 
-  it("rolls usage into the daily summary", () => {
-    recordUsage({ provider: "intent-llm", kind: "intent_extract", model: "gpt-4o-mini", inputTokens: 500, outputTokens: 100 });
-    const summary = costSummary();
+  it("rolls usage into the daily summary", async () => {
+    await recordUsage({ provider: "intent-llm", kind: "intent_extract", model: "gpt-4o-mini", inputTokens: 500, outputTokens: 100 });
+    const summary = await costSummary();
     expect(summary.today.requests).toBeGreaterThan(0);
     expect(Number(summary.today.estimatedCostUsd)).toBeGreaterThan(0);
   });
 
-  it("raises a threshold alert once the budget is crossed", () => {
+  it("raises a threshold alert once the budget is crossed", async () => {
     // A budget inside the warn/high/critical band (not yet 'over', which is
     // reported as state rather than as a threshold alert).
-    setMonthlyBudgetUsd(0.08);
-    recordUsage({ provider: "intent-llm", kind: "intent_extract", model: "gpt-4o", inputTokens: 5000, outputTokens: 5000 });
-    const alert = checkBudgetAlert();
+    await setMonthlyBudgetUsd(0.08);
+    await recordUsage({ provider: "intent-llm", kind: "intent_extract", model: "gpt-4o", inputTokens: 5000, outputTokens: 5000 });
+    const alert = await checkBudgetAlert();
     expect(alert).not.toBeNull();
     // Deduplicated: the same threshold is not announced twice the same day.
-    expect(checkBudgetAlert()).toBeNull();
+    expect(await checkBudgetAlert()).toBeNull();
   });
 
   it("uses a UTC day key", () => {

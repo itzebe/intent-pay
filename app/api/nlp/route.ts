@@ -21,6 +21,8 @@ import {
 import { applyResolvedAsset, mergeDraft, planFromDraft, planFromText } from "@/lib/nlp/engine";
 import { draftToHandoff, type ComposeHandoff } from "@/lib/nlp/handoff";
 import { llmEnabled, extractIntentHint } from "@/lib/nlp/llm";
+import { recordUsage, checkBudgetAlert } from "@/lib/server/cost";
+import { recordOpsEvent } from "@/lib/server/ops";
 import {
   deriveState,
   missingField,
@@ -68,7 +70,23 @@ export async function POST(req: Request) {
     const symbols = allTokens().map((t) => t.symbol);
 
     // Deterministic parse is always the authority. The LLM may only fill gaps.
-    const hint = llmEnabled() ? await extractIntentHint(text, symbols) : null;
+    // Usage (model + token counts) is recorded for cost accounting; the prompt
+    // and response are never stored.
+    const hint = llmEnabled()
+      ? await extractIntentHint(text, symbols, (usage) => {
+          recordUsage({ provider: "intent-llm", kind: "intent_extract", model: usage.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+          const alert = checkBudgetAlert();
+          if (alert) {
+            recordOpsEvent({
+              category: "unknown_error",
+              service: "api/nlp",
+              message: `AI budget threshold reached: ${alert.level} (${Math.round(alert.fraction * 100)}% of $${alert.budgetUsd}).`,
+              severity: alert.level === "critical" ? "critical" : "warning",
+              unresolved: true,
+            });
+          }
+        })
+      : null;
     let plan = planFromText(text, { symbols, network, hint });
 
     // Conversational continuation: the client returns the draft collected so

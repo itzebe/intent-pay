@@ -43,10 +43,14 @@ export function llmEnabled(): boolean {
 /**
  * Ask the model to extract only NLU fields. Returns null on any failure so the
  * caller always has a deterministic fallback.
+ *
+ * `onUsage` (optional) receives the model + token counts so the caller can do
+ * cost accounting. It never receives the prompt or the response text.
  */
 export async function extractIntentHint(
   text: string,
   symbols: string[],
+  onUsage?: (usage: { model: string; inputTokens: number; outputTokens: number }) => void,
 ): Promise<ParseHint | null> {
   const cfg = llmConfig();
   if (!cfg) return null;
@@ -90,6 +94,15 @@ export async function extractIntentHint(
     const json: any = await res.json();
     const content = json?.choices?.[0]?.message?.content;
     if (typeof content !== "string") return null;
+    // Token usage, when the provider reports it. Counts only — never content.
+    const usage = json?.usage;
+    if (onUsage) {
+      onUsage({
+        model: cfg.model,
+        inputTokens: Number(usage?.prompt_tokens ?? 0) || 0,
+        outputTokens: Number(usage?.completion_tokens ?? 0) || 0,
+      });
+    }
     const parsed = JSON.parse(content);
     return { patch: parsed, source: "llm" };
   } catch {

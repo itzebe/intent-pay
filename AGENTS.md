@@ -628,6 +628,43 @@ curl -s -X POST http://localhost:3000/api/quote -H 'Content-Type: application/js
   Next bump to confirm the override is still needed.
 
 
+## Node.js runtime floor (Brotli RCE)
+
+`package.json` `engines.node` is `>=24.22.1 <25`. That floor is not cosmetic: it
+is the first Node.js 24.x release containing the fix for **CVE-2026-111497**,
+the Brotli decoder out-of-bounds write that permits remote code execution
+(HIGH, reported by Matteo Collina, fixed by Antoine du Hamel). It affects every
+22.x / 24.x / 26.x release before v22.23.4 / v24.22.1 / v26.12.1. The official
+announcement is
+<https://nodejs.org/en/blog/vulnerability/october-2026-security-releases>.
+
+The fix is a cherry-pick of upstream brotli commit `0ed4268a4401abcb44720963`
+("Detect and report invalid stream earlier"): `DecodeBlockTypeAndLength` changes
+from returning `BROTLI_BOOL` to returning a `BrotliDecoderErrorCode` so an
+invalid stream is reported instead of proceeding. **Node does not bump the
+bundled brotli version string for this fix** — `deps/brotli/c/common/version.h`
+still reports `BROTLI_VERSION 1.2.0` in v24.22.1. So a version-string or
+`process.versions.brotli` check is *not* sufficient to tell a fixed build from a
+vulnerable one; compare the **Node.js version** against the fixed list.
+
+The local development runtime must therefore be **24.22.1 or newer**; v24.21.0
+(the container image this was audited in) is vulnerable and ships the
+`BROTLI_BOOL` form of the function.
+
+**Vercel rolls the patch, the repository only sets the floor.** Production runs
+on Vercel's managed Node.js runtime. Vercel documents that "Only major versions
+are available. Vercel automatically rolls out minor and patch updates when
+needed, such as to fix a security issue."
+(<https://vercel.com/docs/functions/runtimes/node-js/node-js-versions>). So no
+repository edit can pin the deployed *patch* — it can only declare the major
+line and the minimum acceptable patch, and Vercel selects the concrete build.
+Confirm the deployed version from the Vercel deployment (build log `node -v`, or
+`process.version`) rather than assuming the floor was honoured. If Vercel is
+serving a 24.x build older than 24.22.1, that is a provider-side action, not a
+repo change: re-deploy so the project picks up the current 24.x build, or open a
+support case.
+
+
 ## Store durability is a configuration fact, not an adapter property
 
 `lib/store/*` is the single server-side persistence contract (referral

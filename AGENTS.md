@@ -664,6 +664,27 @@ serving a 24.x build older than 24.22.1, that is a provider-side action, not a
 repo change: re-deploy so the project picks up the current 24.x build, or open a
 support case.
 
+The production deployment is *older than the patch*. `dpl_41dujBaRF8rNA8bmNAzF3UhgxdP7`
+(the build behind `intent-pay-roan.vercel.app`) was created 2026-10-20 from commit
+`78f99c0`; the Node.js security release shipped 2026-10-21. Vercel's
+`engines` table maps any valid 24-range to the *current* 24.x build, so the fix
+only lands on the next deployment — an existing deployment keeps the runtime it
+was built with. The `engines.node` floor is therefore necessary but not
+sufficient: it must be paired with a re-deploy to take effect.
+
+## PHP is not part of this stack (CVE-2026-109618 / CVE-2026-109619)
+
+Two critical, unauthenticated-RCE PHP CVEs were published by the PHP CNA on
+2026-10-21 (fixed in 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35). They are real, but they
+are **not applicable here**: Intent Pay is a Next.js/TypeScript application on
+Vercel's managed Node.js runtime, and the repository contains no PHP — no `.php`
+/ `.phtml`, no `composer.json` / `composer.lock`, no `php.ini`, no Apache /
+PHP-FPM / FrankenPHP / LiteSpeed layer, and no container or CI manifest that
+could introduce one. `next.config.mjs` and Vercel's static build pipeline are the
+only deployment inputs. The CVEs affect PHP installations that serve web
+requests, which this project does not operate. Re-check only if a PHP-backed
+service is ever added (for example a CMS or a payment webhook receiver).
+
 
 ## Store durability is a configuration fact, not an adapter property
 

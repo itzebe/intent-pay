@@ -1,7 +1,10 @@
 import { describe, expect, it, beforeAll } from "vitest";
+import { parseAbi, type Address } from "viem";
 import { UniswapV3Provider } from "@/lib/providers/uniswapV3";
-import { getToken } from "@/lib/config/tokens";
+import { getToken, poolAddressOf, type TokenConfig } from "@/lib/config/tokens";
 import { ensureCatalog } from "@/lib/server/discovery";
+import { FEE_TIERS, UNISWAP } from "@/lib/providers/constants";
+import { getPublicClient } from "@/lib/server/rpc";
 
 /**
  * Live integration tests against real Monad mainnet.
@@ -44,6 +47,45 @@ async function quoteIn(pay: string, receive: string, amount: string) {
   return res;
 }
 
+/**
+ * Independent market precondition for the `cbBTC -> USDC` exact-output route.
+ *
+ * The route only exists as the multi-hop `cbBTC -> EURW -> USDC`, so both hops
+ * must have a pool with positive active liquidity. This reads the V3 factory
+ * and each pool's `liquidity()` directly — it does NOT use the quote under test
+ * (a quote that fails for any reason, including an empty pool, must never be
+ * its own precondition). Any RPC failure propagates as a thrown error so the
+ * test can fail loudly instead of mistaking an infrastructure problem for
+ * absent liquidity.
+ */
+const FACTORY_ABI = parseAbi([
+  "function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)",
+]);
+const POOL_ABI = parseAbi(["function liquidity() view returns (uint128)"]);
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+/** Deepest active liquidity for a pair across every configured fee tier. */
+async function deepestLiquidity(a: TokenConfig, b: TokenConfig): Promise<bigint> {
+  const client = getPublicClient(network);
+  let best = 0n;
+  for (const fee of FEE_TIERS) {
+    const pool = (await client.readContract({
+      address: UNISWAP.v3Factory as Address,
+      abi: FACTORY_ABI,
+      functionName: "getPool",
+      args: [poolAddressOf(a) as Address, poolAddressOf(b) as Address, fee],
+    })) as Address;
+    if (!pool || pool.toLowerCase() === ZERO_ADDRESS) continue;
+    const liq = (await client.readContract({
+      address: pool,
+      abi: POOL_ABI,
+      functionName: "liquidity",
+    })) as bigint;
+    if (liq > best) best = liq;
+  }
+  return best;
+}
+
 describe.skipIf(!LIVE)("live routing on Monad mainnet (chain 143)", () => {
   beforeAll(async () => {
     // Mirror production: install the runtime catalog from the live Monad list
@@ -79,9 +121,58 @@ describe.skipIf(!LIVE)("live routing on Monad mainnet (chain 143)", () => {
     expect(Number(res.receiveAmount)).toBeGreaterThan(0);
   }, 120_000);
 
-  it("cbBTC -> USDC quotes", async () => {
+  it("cbBTC -> USDC quotes", async ({ skip }) => {
+    // Market precondition (Issue #11): the cbBTC -> USDC route is only reachable
+    // as cbBTC -> EURW -> USDC, so both hops need a pool with active liquidity.
+    // This is probed independently of the quote under test; a genuinely empty
+    // market is skipped, while an RPC failure fails the test below.
+    const cbbtc = getToken("cbBTC");
+    const eurw = getToken("EURW");
+    const usdc = getToken("USDC");
+    if (!cbbtc || !eurw || !usdc) {
+      const missing = [!cbbtc && "cbBTC", !eurw && "EURW", !usdc && "USDC"].filter(Boolean).join(", ");
+      throw new Error(
+        `cbBTC -> USDC live test: the runtime catalog did not resolve ${missing}; ` +
+          "the required route cannot be evaluated.",
+      );
+    }
+
+    let cbbtcEurw: bigint;
+    let eurwUsdc: bigint;
+    try {
+      cbbtcEurw = await deepestLiquidity(cbbtc, eurw);
+      eurwUsdc = await deepestLiquidity(eurw, usdc);
+    } catch (err) {
+      // An RPC/infrastructure error is NOT evidence of zero liquidity.
+      throw new Error(
+        `cbBTC -> USDC live test: could not read pool liquidity to establish the market ` +
+          `precondition (RPC or contract-call failure, not a liquidity outcome): ${(err as Error)?.message}`,
+      );
+    }
+
+    if (cbbtcEurw <= 0n || eurwUsdc <= 0n) {
+      const hop = cbbtcEurw <= 0n ? "cbBTC -> EURW" : "EURW -> USDC";
+      const liq = cbbtcEurw <= 0n ? cbbtcEurw : eurwUsdc;
+      // The supported Vitest `skip()` takes no reason argument; log it first so
+      // the skip is self-explanatory in the run output.
+      console.info(
+        `[live-routing] SKIP cbBTC -> USDC: required hop ${hop} has no pool with active ` +
+          `liquidity on Monad mainnet (deepest liquidity = ${liq} across fee tiers ` +
+          `${FEE_TIERS.join("/")}). This is a market condition, not a routing defect.`,
+      );
+      skip();
+      return;
+    }
+
     const res = await quote("cbBTC", "USDC");
-    expect(res.ok).toBe(true);
+    // Both hops are liquid, so a failure here is a real routing problem.
+    expect(
+      res.ok,
+      res.ok
+        ? ""
+        : `cbBTC -> USDC failed with "${res.code}" although both hops report active liquidity ` +
+          `(cbBTC->EURW=${cbbtcEurw}, EURW->USDC=${eurwUsdc}): ${res.message}`,
+    ).toBe(true);
     if (!res.ok) return;
     expect(Number(res.receiveAmount)).toBeGreaterThan(0);
   }, 120_000);

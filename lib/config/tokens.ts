@@ -2,6 +2,7 @@ import { NATIVE_ADDRESS } from "./chains";
 import { CURATED_TOKENS, type CuratedToken } from "./curated";
 import { WMON_ADDRESS } from "@/lib/providers/constants";
 import { isEvmAddress } from "@/lib/format";
+import { BoundedMap } from "@/lib/util/boundedMap";
 
 /**
  * A payment asset. All token metadata is data — the UI never branches on a
@@ -166,7 +167,7 @@ export function normalizeTokenConfig(input: Partial<TokenConfig> & { address?: s
 // becomes usable the moment it is discovered and has a route.
 // ---------------------------------------------------------------------------
 
-const registry = new Map<string, TokenConfig>();
+const registry = new BoundedMap<string, TokenConfig>(10_000);
 
 function key(address: string): string {
   return (address ?? "").toLowerCase();

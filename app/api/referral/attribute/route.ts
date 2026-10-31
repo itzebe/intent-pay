@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/server/apiGuard";
 import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { attribute, markActivated, markRegistered, referralForReferred } from "@/lib/server/referral";
 import { rateLimit, clientFingerprint, tooManyResponse } from "@/lib/server/rateLimit";
@@ -37,12 +38,11 @@ export async function POST(req: Request) {
       { status: 503 },
     );
   }
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const parsed = await readJsonBody<any>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body = parsed.body;
 
   const fingerprint = clientFingerprint(req);
   const limited = await rateLimit({ bucket: "referral_attribute", subject: session.address, limit: 20, windowMs: 60_000 });

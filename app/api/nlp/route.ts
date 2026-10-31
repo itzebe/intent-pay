@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sanitizeUpstreamError } from "@/lib/server/http";
+import { enforceRateLimit, readJsonBody, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import type { MonadNetwork } from "@/lib/config/chains";
 import {
   allTokens,
@@ -20,9 +21,8 @@ import {
 } from "@/lib/server/discovery";
 import { applyResolvedAsset, mergeDraft, planFromDraft, planFromText } from "@/lib/nlp/engine";
 import { draftToHandoff, type ComposeHandoff } from "@/lib/nlp/handoff";
-import { llmEnabled, extractIntentHint } from "@/lib/nlp/llm";
-import { recordUsage, checkBudgetAlert } from "@/lib/server/cost";
-import { recordOpsEvent } from "@/lib/server/ops";
+import { llmEnabled } from "@/lib/nlp/llm";
+import { runBudgetedIntentHint } from "@/lib/server/aiBudget";
 import {
   deriveState,
   missingField,
@@ -44,19 +44,23 @@ export const dynamic = "force-dynamic";
  * merely decides what the existing composer should be pre-filled with.
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  // This route calls paid LLM inference (when configured), so it is the first
+  // thing an abuser would loop. Bound it per client IP before doing any work.
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.nlp);
+  if (limited) return limited;
+
+  const parsed = await readJsonBody<Record<string, unknown>>(req);
+  if (!parsed.ok) {
     return NextResponse.json(
       { ok: false, code: "provider_error", message: "Invalid request." },
       { status: 400 },
     );
   }
+  const body: any = parsed.body;
 
   const text = typeof body?.text === "string" ? body.text : "";
   const network: MonadNetwork = "mainnet";
-  const balances: Balance[] = Array.isArray(body?.balances) ? (body.balances as Balance[]) : [];
+  const balances: Balance[] = Array.isArray(body?.balances) ? (body.balances as Balance[]).slice(0, 200) : [];
 
   if (!text.trim()) {
     return NextResponse.json(
@@ -69,24 +73,14 @@ export async function POST(req: Request) {
     await ensureCatalog(network);
     const symbols = allTokens().map((t) => t.symbol);
 
-    // Deterministic parse is always the authority. The LLM may only fill gaps.
-    // Usage (model + token counts) is recorded for cost accounting; the prompt
-    // and response are never stored.
-    const hint = llmEnabled()
-      ? await extractIntentHint(text, symbols, async (usage) => {
-          await recordUsage({ provider: "intent-llm", kind: "intent_extract", model: usage.model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
-          const alert = await checkBudgetAlert();
-          if (alert) {
-            await recordOpsEvent({
-              category: "unknown_error",
-              service: "api/nlp",
-              message: `AI budget threshold reached: ${alert.level} (${Math.round(alert.fraction * 100)}% of $${alert.budgetUsd}).`,
-              severity: alert.level === "critical" ? "critical" : "warning",
-              unresolved: true,
-            });
-          }
-        })
-      : null;
+    // Deterministic parse is always the authority. The LLM may only fill gaps,
+    // and only when the hard AI budget admits the call: the guard atomically
+    // reserves the worst-case cost first, so a burst cannot all pass an advisory
+    // check. If the budget is exhausted or the store is unavailable the paid call
+    // is skipped and the deterministic parser continues — a payment is never
+    // blocked by AI availability. Usage (model + token counts) is recorded for
+    // cost accounting; the prompt and response are never stored.
+    const hint = llmEnabled() ? await runBudgetedIntentHint(text, symbols) : null;
     let plan = planFromText(text, { symbols, network, hint });
 
     // Conversational continuation: the client returns the draft collected so

@@ -98,11 +98,13 @@ describe("Postgres migration on a brand-new database", () => {
     await store.migrate();
     expect(h.state.tables.has("_migrations")).toBe(true);
     expect(h.state.tables.has("referral_codes")).toBe(true);
+    // Migration 2 adds the integer counters table the atomic rate limiter needs.
+    expect(h.state.tables.has("counters")).toBe(true);
     expect(h.state.ledger).toContain(1);
     await expect(store.health()).resolves.toMatchObject({
       reachable: true,
       ready: true,
-      schemaVersion: 1,
+      schemaVersion: 2,
     });
   });
 
@@ -110,12 +112,20 @@ describe("Postgres migration on a brand-new database", () => {
     const store = new PostgresStore("postgres://user@db.example/neondb");
     await store.migrate();
     expect(h.state.calls.some((c) => c.startsWith("SELECT to_regclass"))).toBe(true);
-    expect(h.state.calls.find((c) => c.startsWith('SELECT "id" FROM "_migrations"'))).toBeUndefined();
+    // The very first ledger probe (before `_migrations` exists) must be the
+    // to_regclass check; a bare SELECT against a missing relation would abort the
+    // transaction. Later migrations may legitimately SELECT the ledger once it
+    // exists, so we assert on the first probe only.
+    const firstLedgerProbe = h.state.calls.find(
+      (c) => c.startsWith("SELECT to_regclass") || c.startsWith('SELECT "id" FROM "_migrations"'),
+    );
+    expect(firstLedgerProbe).toContain("to_regclass");
   });
 
   it("is idempotent: a second cold start does not re-apply migration 1", async () => {
     await new PostgresStore("postgres://user@db.example/neondb").migrate();
     await new PostgresStore("postgres://user@db.example/neondb").migrate();
     expect(h.state.ledger.filter((id) => id === 1)).toHaveLength(1);
+    expect(h.state.ledger.filter((id) => id === 2)).toHaveLength(1);
   });
 });

@@ -59,7 +59,7 @@ function createTable(schema: TableSchema): string {
  */
 export type Migration = { id: number; statements: string[] };
 
-const TABLES: string[] = SCHEMA.map(createTable);
+const TABLES: string[] = SCHEMA.filter((s) => s.name !== "counters").map(createTable);
 
 /** Indexes that speed the real read patterns (recent ops, per-referrer lists). */
 const INDEXES: string[] = [
@@ -68,6 +68,12 @@ const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_costs_day ON ${qi("costs")} (${qi("day")})`,
 ];
 
+/**
+ * Migration 1 is never edited once applied: an existing database has it recorded
+ * in the ledger and will not re-run it, so a later change to its statements would
+ * silently diverge from the databases that already ran it. New tables get a new
+ * migration.
+ */
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
@@ -75,6 +81,15 @@ export const MIGRATIONS: Migration[] = [
       `CREATE TABLE IF NOT EXISTS ${qi("_migrations")} (${qi("id")} INTEGER PRIMARY KEY, ${qi("applied_at")} BIGINT NOT NULL)`,
       ...TABLES,
       ...INDEXES,
+    ],
+  },
+  {
+    // Integer counters for the rate limiter, so its increment is a single atomic
+    // statement rather than a lossy read-modify-write. Added in migration 2 so a
+    // database already on migration 1 gains the table on the next cold start.
+    id: 2,
+    statements: [
+      createTable(SCHEMA.find((s) => s.name === "counters")!),
     ],
   },
 ];

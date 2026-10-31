@@ -14,6 +14,7 @@ import {
   type TokenConfig,
 } from "@/lib/config/tokens";
 import { isEvmAddress } from "@/lib/format";
+import { BoundedMap } from "@/lib/util/boundedMap";
 import { getCatalog } from "./tokenList";
 
 /**
@@ -55,7 +56,7 @@ export type ResolvedToken = {
 };
 
 const METADATA_TTL_MS = 6 * 60 * 60 * 1000; // 6h — discovery is cached, not permanent
-const metadataCache = new Map<string, { value: ResolvedToken; at: number }>();
+const metadataCache = new BoundedMap<string, { value: ResolvedToken; at: number }>(5_000);
 
 function keyOf(address: string): string {
   return (address ?? "").toLowerCase();

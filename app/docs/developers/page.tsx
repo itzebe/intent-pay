@@ -56,7 +56,8 @@ npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # strict typecheck`}
           <LI><Code>POST /api/optimize</Code> — rank the wallet&apos;s assets for the current intent.</LI>
           <LI><Code>POST /api/nlp</Code> — parse a natural-language payment request.</LI>
           <LI><Code>POST /api/partial</Code> — build a partial-balance split plan.</LI>
-          <LI><Code>GET /api/capabilities</Code> and <Code>GET /api/diagnostics</Code> — provider configuration and reachability.</LI>
+          <LI><Code>GET /api/capabilities</Code> — provider configuration and reachability (public, honest, non-sensitive).</LI>
+          <LI><Code>GET /api/diagnostics</Code> — operator-only integration health (requires <Code>INTENT_PAY_ADMIN_TOKEN</Code>).</LI>
         </UL>
         <P>Example — exercise routing directly:</P>
         <div className="card-flat overflow-x-auto p-4">

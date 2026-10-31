@@ -4,6 +4,7 @@ import { getOrCreateCode, dashboardFor } from "@/lib/server/referral";
 import { referralOrigin } from "@/lib/config/referral";
 import { referralUrl } from "@/lib/domain/referralCode";
 import { requireDurableStore, storeCapability } from "@/lib/store";
+import { rateLimit, tooManyResponse } from "@/lib/server/rateLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,13 @@ export async function GET(req: Request) {
       { ok: false, code: "storage_unavailable", durable: false, message: durable.reason },
       { status: 503 },
     );
+  }
+  // A dashboard read is a per-call database round-trip; cap it per client so a
+  // signed-in caller cannot hammer the durable store.
+  const limited = await rateLimit({ bucket: "referral_me", subject: session.address, limit: 60, windowMs: 60_000 });
+  if (!limited.ok) {
+    const { body, headers } = tooManyResponse(limited.resetAt);
+    return NextResponse.json(body, { status: 429, headers });
   }
   const created = await getOrCreateCode(session.address);
   if (!created.ok) {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { enforceRateLimit, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { alchemyStatus, zerionStatus } from "@/lib/server/diagnostics";
 import { zerionEnabled } from "@/lib/server/zerion";
 import { resolveMevProtection } from "@/lib/domain/protection";
@@ -26,7 +27,9 @@ export const dynamic = "force-dynamic";
  * credential. Referral attribution requires `durable: true`; when it is false the
  * referral endpoints refuse rather than reporting an ephemeral success.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.capabilities);
+  if (limited) return limited;
   const network: MonadNetwork = "mainnet";
   const mev = resolveMevProtection();
   const [alchemy, zerion] = await Promise.all([alchemyStatus(network), zerionStatus()]);

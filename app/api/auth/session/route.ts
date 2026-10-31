@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/server/apiGuard";
 import { recoverMessageAddress } from "viem";
 import {
   SESSION_COOKIE,
@@ -31,12 +32,11 @@ export async function GET(req: Request) {
  * an httpOnly cookie bound to that address.
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const parsed = await readJsonBody<any>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body = parsed.body;
 
   const address = typeof body?.address === "string" ? body.address : "";
   if (!isEvmAddress(address)) {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/server/apiGuard";
 import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { createAttempt } from "@/lib/server/paymentAttempts";
 import { rateLimit, clientIp, tooManyResponse } from "@/lib/server/rateLimit";
@@ -20,12 +21,11 @@ export const dynamic = "force-dynamic";
  * broadcasting a transaction, since the wallet signs and sends directly.
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const parsed = await readJsonBody<any>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body = parsed.body;
 
   const session = await sessionFromRequest(req);
   const bodyAccount = typeof body?.account === "string" && isEvmAddress(body.account) ? body.account : null;

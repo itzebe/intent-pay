@@ -17,6 +17,23 @@ import type { ParseHint } from "./parser";
 
 const TIMEOUT_MS = 4500;
 
+/**
+ * The largest completion the intent extraction may produce. The schema is tiny
+ * (four fields), so this is generous — but it must be a *bound*: the budget
+ * reservation charges the worst case before the call, so an uncapped completion
+ * would let a single request spend past the reservation. Kept in sync with the
+ * budget guard's estimate.
+ */
+export const LLM_MAX_OUTPUT_TOKENS = 512;
+/** The largest prompt we will send (the sentence plus a short system prompt). */
+export const LLM_MAX_INPUT_CHARS = 2_000;
+/**
+ * A conservative upper bound on prompt tokens for one call (the capped user text
+ * plus the fixed system prompt). The budget guard charges this worst case before
+ * the call, so it must never under-estimate.
+ */
+export const LLM_MAX_INPUT_TOKENS_ESTIMATE = Math.ceil(LLM_MAX_INPUT_CHARS / 4) + 400;
+
 export type LlmConfig = {
   baseUrl: string;
   apiKey: string;
@@ -82,10 +99,13 @@ export async function extractIntentHint(
       body: JSON.stringify({
         model: cfg.model,
         temperature: 0,
+        // A hard bound on the completion: the budget guard reserves the worst
+        // case before the call, so the provider must not be allowed to exceed it.
+        max_tokens: LLM_MAX_OUTPUT_TOKENS,
         response_format: { type: "json_object" },
         messages: [
           { role: "system", content: system },
-          { role: "user", content: text },
+          { role: "user", content: text.slice(0, LLM_MAX_INPUT_CHARS) },
         ],
       }),
       signal: controller.signal,
@@ -97,7 +117,9 @@ export async function extractIntentHint(
     // Token usage, when the provider reports it. Counts only — never content.
     const usage = json?.usage;
     if (onUsage) {
-      onUsage({
+      // Awaited: the budget settlement must complete before this returns, so a
+      // reservation can never be left held because the caller moved on.
+      await onUsage({
         model: cfg.model,
         inputTokens: Number(usage?.prompt_tokens ?? 0) || 0,
         outputTokens: Number(usage?.completion_tokens ?? 0) || 0,

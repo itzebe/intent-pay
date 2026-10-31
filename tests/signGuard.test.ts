@@ -160,6 +160,25 @@ describe("signing safety pipeline — the invariant", () => {
     if (!result.ok) expect(result.reason).toBe("quote_stale");
   });
 
+  // The balance read must never fail open. A transient RPC failure that
+  // swallowed the balances to `[]` used to satisfy both coverage checks (no
+  // pay-token entry → coversBalance passes; empty set → coversGas passes), so
+  // the guard signed an unverified payment. It must block instead.
+  it("blocks when the fresh balance read fails, rather than failing open", async () => {
+    const intent = validIntent();
+    const result = await prepareSigning(
+      { intent, sender: SENDER, recipient: RECIPIENT },
+      fetchers({
+        readIntent: () => intent,
+        fetchBalances: async () => {
+          throw new Error("rpc timeout");
+        },
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("balances_unavailable");
+  });
+
   // J. User edits the intent immediately before signing.
   it("aborts when the intent changed before signing (J)", async () => {
     const intent = validIntent();

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { Address } from "viem";
+import { enforceRateLimit, readJsonBody, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { allTokens, SEED_TOKENS, catalogVersion, type TokenConfig } from "@/lib/config/tokens";
 import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -25,6 +26,9 @@ export const dynamic = "force-dynamic";
  * resolved on chain, and routability is decided by the routing layer.
  */
 export async function GET(req: Request) {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.tokensRead);
+  if (limited) return limited;
+
   const url = new URL(req.url);
   const network: MonadNetwork = "mainnet";
   const query = url.searchParams.get("q");
@@ -158,12 +162,17 @@ function serializeToken(t: TokenConfig, source?: string) {
 
 /** POST /api/tokens — register a token the user pasted (server-side metadata read). */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  // Registering a token performs a chain metadata read and inserts into the
+  // runtime registry, so it is both an RPC and a memory-amplification vector.
+  // Bound it, and require a well-formed address (a symbol is not registrable).
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.tokensWrite);
+  if (limited) return limited;
+
+  const parsed = await readJsonBody<Record<string, unknown>>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body: any = parsed.body;
   const address = String(body?.address ?? "");
   const network: MonadNetwork = "mainnet";
 

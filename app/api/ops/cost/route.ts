@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminAuthorized, adminConfigured } from "@/lib/server/auth";
+import { enforceRateLimit, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { budgetState, buildForecast, costSummary, monthlyBudgetUsd, setMonthlyBudgetUsd } from "@/lib/server/cost";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,8 @@ export const dynamic = "force-dynamic";
  * forecast is labelled an assumption, never presented as measured traffic.
  */
 export async function GET(req: Request) {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.admin);
+  if (limited) return limited;
   if (!adminConfigured()) {
     return NextResponse.json({ ok: false, code: "not_configured", message: "Cost accounting is not configured." }, { status: 503 });
   }
@@ -47,6 +50,8 @@ export async function GET(req: Request) {
  * server configuration, not user data, and is recorded in the kv table.
  */
 export async function POST(req: Request) {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.admin);
+  if (limited) return limited;
   if (!adminConfigured()) {
     return NextResponse.json({ ok: false, code: "not_configured", message: "Cost accounting is not configured." }, { status: 503 });
   }

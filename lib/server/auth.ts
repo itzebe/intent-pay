@@ -72,24 +72,47 @@ export type Session = {
 const processFallbackSecret = randomBytes(32).toString("hex");
 
 /**
- * The HMAC secret, generated once and persisted server-side.
- *
- * A remote store is asynchronous, so this is async. On an ephemeral backend the
- * secret is regenerated per process — which invalidates sessions across a cold
- * start, an honest consequence of non-durable storage rather than a bug. When the
- * store is unreachable the in-process fallback is used instead of throwing.
+ * An in-process cache of the resolved secret, plus a single-flight promise so
+ * concurrent first requests converge on one secret. Without this, two requests
+ * that both find no stored secret would each generate one and `upsert`, and the
+ * loser would have already returned a secret that was immediately overwritten —
+ * issuing a session token that can never verify. The cache is keyed to the store
+ * instance so a test that swaps the store does not reuse a stale secret.
  */
+let cachedSecret: { store: unknown; value: string } | null = null;
+let secretInflight: Promise<string> | null = null;
+
 async function sessionSecret(): Promise<string> {
-  try {
-    const store = getStore();
-    const existing = await store.findOne("kv", { key: SECRET_KEY });
-    if (existing) return existing.value;
-    const secret = randomBytes(32).toString("hex");
-    await store.upsert("kv", { key: SECRET_KEY, value: secret, updatedAt: Date.now() });
-    return secret;
-  } catch {
-    return processFallbackSecret;
-  }
+  const store = getStore();
+  if (cachedSecret && cachedSecret.store === store) return cachedSecret.value;
+  if (secretInflight) return secretInflight;
+  secretInflight = (async () => {
+    try {
+      const existing = await store.findOne("kv", { key: SECRET_KEY });
+      if (existing) {
+        cachedSecret = { store, value: existing.value };
+        return existing.value;
+      }
+      const secret = randomBytes(32).toString("hex");
+      try {
+        // Insert (not upsert): a concurrent creator must not be clobbered, so a
+        // lost race falls through to reading the winner below.
+        await store.insert("kv", { key: SECRET_KEY, value: secret, updatedAt: Date.now() });
+        cachedSecret = { store, value: secret };
+        return secret;
+      } catch {
+        const winner = await store.findOne("kv", { key: SECRET_KEY });
+        const value = winner?.value ?? secret;
+        cachedSecret = { store, value };
+        return value;
+      }
+    } catch {
+      return processFallbackSecret;
+    } finally {
+      secretInflight = null;
+    }
+  })();
+  return secretInflight;
 }
 
 async function sign(payload: string): Promise<string> {

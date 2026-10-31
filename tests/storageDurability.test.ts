@@ -153,12 +153,12 @@ describe("a required durable referral operation cannot silently succeed", () => 
 
   it("the availability endpoint reports the honest durability without auth", async () => {
     setStore(new MemoryStore());
-    let json = await (await availabilityGET()).json();
+    let json = await (await availabilityGET(new Request("http://x/api/referral/availability"))).json();
     expect(json).toMatchObject({ durable: false, durability: "memory", referralAttribution: "unavailable" });
 
     process.env.INTENT_PAY_DB_PATH = "/data/intent-pay.sqlite";
     setStore(new SqliteStore(":memory:"));
-    json = await (await availabilityGET()).json();
+    json = await (await availabilityGET(new Request("http://x/api/referral/availability"))).json();
     expect(json).toMatchObject({ durable: true, durability: "persistent", referralAttribution: "available" });
   });
 });
@@ -187,7 +187,7 @@ describe("payment initiation is independent of referral storage", () => {
 describe("capability reporting reflects the implementation", () => {
   it("reports memory storage accurately and marks referrals unavailable", async () => {
     setStore(new MemoryStore());
-    const json = await (await capabilitiesGET()).json();
+    const json = await (await capabilitiesGET(new Request("http://x/api/capabilities"))).json();
     expect(json.storage).toMatchObject({
       kind: "memory",
       durability: "memory",
@@ -199,7 +199,7 @@ describe("capability reporting reflects the implementation", () => {
   it("reports persistent storage accurately", async () => {
     process.env.INTENT_PAY_DB_PATH = "/data/intent-pay.sqlite";
     setStore(new SqliteStore(":memory:"));
-    const json = await (await capabilitiesGET()).json();
+    const json = await (await capabilitiesGET(new Request("http://x/api/capabilities"))).json();
     expect(json.storage.durable).toBe(true);
     expect(json.storage.referralAttribution).toBe("available");
   });
@@ -207,14 +207,14 @@ describe("capability reporting reflects the implementation", () => {
   it("never exposes the database path in the capabilities response", async () => {
     process.env.INTENT_PAY_DB_PATH = "/secret/location/db.sqlite";
     setStore(new SqliteStore(":memory:"));
-    const text = JSON.stringify(await (await capabilitiesGET()).json());
+    const text = JSON.stringify(await (await capabilitiesGET(new Request("http://x/api/capabilities"))).json());
     expect(text).not.toContain("/secret");
     expect(text).not.toContain("db.sqlite");
   });
 
   it("advertises native-MON gas only, never an ERC-20 / account-abstraction path", async () => {
     setStore(new MemoryStore());
-    const json = await (await capabilitiesGET()).json();
+    const json = await (await capabilitiesGET(new Request("http://x/api/capabilities"))).json();
     // The execution path is a plain EOA that pays the fee in MON. A paymaster /
     // AA capability must not be advertised while that path cannot use one — a
     // responding quote endpoint is not proof of usability.
@@ -283,6 +283,7 @@ function fakePg(health: () => Promise<{ reachable: boolean; ready: boolean; sche
     update: async () => 0,
     remove: async () => 0,
     count: async () => 0,
+    incrementInt: async () => 1,
     transaction: async <T>(fn: () => Promise<T>) => fn(),
     reset: async () => {},
   };

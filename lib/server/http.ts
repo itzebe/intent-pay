@@ -4,12 +4,20 @@
  * Provider calls (prices, wallet intelligence) are expensive and bursty — a
  * single keystroke can fan out to several. This keeps the composer responsive
  * and polite to rate-limited APIs without any background machinery.
+ *
+ * The backing store is bounded (`BoundedMap`): keys are token/pool addresses that
+ * a caller can influence, so an unbounded map would be a memory-exhaustion
+ * vector under adversarial traffic.
  */
+import { BoundedMap } from "@/lib/util/boundedMap";
+
 export class TtlCache<K, V> {
-  private store = new Map<K, { value: V; at: number }>();
+  private store: BoundedMap<K, { value: V; at: number }>;
   private inflight = new Map<K, Promise<V>>();
 
-  constructor(private ttlMs: number) {}
+  constructor(private ttlMs: number, maxEntries = 2_000) {
+    this.store = new BoundedMap<K, { value: V; at: number }>(maxEntries);
+  }
 
   peek(key: K): V | undefined {
     const hit = this.store.get(key);

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sanitizeUpstreamError } from "@/lib/server/http";
+import { enforceRateLimit, readJsonBody, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { buildQuote } from "@/lib/server/quote";
 import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -18,15 +19,17 @@ export const dynamic = "force-dynamic";
  * deployment can be quoted without any code change.
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.quote);
+  if (limited) return limited;
+
+  const parsed = await readJsonBody<Record<string, unknown>>(req);
+  if (!parsed.ok) {
     return NextResponse.json(
       { ok: false, code: "provider_error", message: "Invalid request." },
       { status: 400 },
     );
   }
+  const body: any = parsed.body;
 
   const {
     recipient,

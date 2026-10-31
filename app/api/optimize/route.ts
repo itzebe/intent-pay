@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sanitizeUpstreamError } from "@/lib/server/http";
+import { enforceRateLimit, readJsonBody, capArray, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { optimizePayment } from "@/lib/server/optimizer";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -18,12 +19,14 @@ export const dynamic = "force-dynamic";
  * instead of making the user choose.
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.optimize);
+  if (limited) return limited;
+
+  const parsed = await readJsonBody<Record<string, unknown>>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body: any = parsed.body;
 
   const network: MonadNetwork = "mainnet";
   const amountMode: AmountMode =
@@ -40,7 +43,7 @@ export async function POST(req: Request) {
   // its token by symbol *or* by contract address — the latter is what lets a
   // dynamically discovered token (never shipped in source) be optimized on a
   // cold server instance. Resolution order: runtime registry -> catalog -> chain.
-  const rawBalances: any[] = Array.isArray(body?.balances) ? body.balances : [];
+  const rawBalances: any[] = capArray<any>(body?.balances, 200);
 
   try {
     await ensureCatalog(network);

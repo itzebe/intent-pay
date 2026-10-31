@@ -2,6 +2,7 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { isUsdAnchor, poolAddressOf, type TokenConfig } from "@/lib/config/tokens";
 import { getRoutingProvider } from "@/lib/providers";
 import { TtlCache } from "@/lib/server/http";
+import { BoundedMap } from "@/lib/util/boundedMap";
 import { marketProviders } from "./market";
 import type { PriceProvider, PriceQuery } from "./types";
 
@@ -81,7 +82,7 @@ export class PriceResolver {
   private market: PriceProvider[];
   private cache: TtlCache<string, ResolvedPrice>;
   /** Last genuine price per key, so a provider outage can serve STALE data. */
-  private lastGood = new Map<string, ResolvedPrice>();
+  private lastGood = new BoundedMap<string, ResolvedPrice>(2_000);
   /** How long a last-known-good price may be served as STALE before giving up. */
   private staleGraceMs = 15 * 60 * 1000;
 

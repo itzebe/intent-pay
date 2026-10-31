@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/server/apiGuard";
 import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { getAttempt, updateAttempt, recordFailure } from "@/lib/server/paymentAttempts";
 import type { PaymentAttemptStatus } from "@/lib/store/types";
@@ -45,12 +46,11 @@ const FAILURE_SOURCE: Record<string, "readiness" | "quote" | "guard" | "executio
 };
 
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const parsed = await readJsonBody<any>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body = parsed.body;
   const id = typeof body?.id === "string" ? body.id : "";
   const event = typeof body?.event === "string" ? body.event.toLowerCase() : "";
   if (!id || !EVENT_TO_STATUS[event]) {

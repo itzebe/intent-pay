@@ -207,6 +207,38 @@ export class PostgresStore implements Store {
     return res.rows.map((r) => this.decodeRow<T>(schema, r));
   }
 
+  async incrementInt<T extends TableName>(
+    table: T,
+    _where: Partial<StoreTables[T]>,
+    field: keyof StoreTables[T],
+    delta: number,
+    insertIfMissing: StoreTables[T],
+  ): Promise<number> {
+    const schema = schemaFor(table);
+    const def = schema.columns.find((c) => c.field === field);
+    if (!def || def.type !== "int") throw new Error(`incrementInt: ${String(field)} is not an int column`);
+    // One statement: INSERT ... ON CONFLICT (pk) DO UPDATE SET field = GREATEST(0, field + delta)
+    // RETURNING field. Postgres serialises concurrent upserts on the same row, so
+    // the read and the write are a single atomic step — no lost increment. On the
+    // create path the counter starts at `delta` (the increment applied to zero),
+    // so the returned value always equals the stored one.
+    const cols = schema.columns.filter((c) => insertIfMissing[c.field as keyof StoreTables[T]] !== undefined);
+    const values: unknown[] = cols.map((c) =>
+      encodeValue(c.type, c.field === (field as string) ? delta : (insertIfMissing as Record<string, unknown>)[c.field]),
+    );
+    const colNames = cols.map((c) => qi(c.column)).join(", ");
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+    const pk = schema.primaryKeys.map((f) => qi(schema.columns.find((c) => c.field === f)!.column)).join(", ");
+    values.push(delta);
+    const deltaIdx = values.length;
+    const text =
+      `INSERT INTO ${qi(snake(table))} (${colNames}) VALUES (${placeholders}) ` +
+      `ON CONFLICT (${pk}) DO UPDATE SET ${qi(def.column)} = GREATEST(0, ${qi(snake(table))}.${qi(def.column)} + $${deltaIdx}) ` +
+      `RETURNING ${qi(def.column)}`;
+    const res = await this.query(text, values);
+    return Number(decodeValue("int", res.rows[0]?.[def.column]) ?? 0);
+  }
+
   async update<T extends TableName>(
     table: T,
     where: Partial<StoreTables[T]>,
@@ -247,26 +279,52 @@ export class PostgresStore implements Store {
    * Run `fn` on a single checked-out client inside a transaction. Using one
    * client (not the pool) is what makes the statements atomic: a pool would
    * spread them across connections where BEGIN/COMMIT would not apply.
+   *
+   * The adapter binds itself to the transaction's client via a shared
+   * `override` field, so two concurrent transactions would race on that field:
+   * transaction B could overwrite the binding while transaction A is mid-flight,
+   * sending A's statements to B's connection (or the pool) — losing atomicity and
+   * leaking a connection. Transactions are therefore serialized on a promise
+   * chain, exactly as the SQLite adapter does. They are rare (a referral
+   * qualification) and short, so this costs nothing at real traffic levels.
    */
   async transaction<T>(fn: () => Promise<T>): Promise<T> {
-    const pool = await this.getPool();
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const result = await this.runOnClient(client, fn);
-      await client.query("COMMIT");
-      return result;
-    } catch (err) {
+    const run = async (): Promise<T> => {
+      // Migrate BEFORE opening the transaction. Otherwise the first statement in
+      // the body would trigger `migrate()` lazily, which opens its own
+      // transaction on a second connection while ours is already open — two
+      // concurrent transactions on the same store, exactly what the serialization
+      // above exists to prevent.
+      if (!this.migrated) await this.migrate();
+      const pool = await this.getPool();
+      const client = await pool.connect();
       try {
-        await client.query("ROLLBACK");
-      } catch {
-        /* already rolled back */
+        await client.query("BEGIN");
+        const result = await this.runOnClient(client, fn);
+        await client.query("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          /* already rolled back */
+        }
+        wrapError(err);
+      } finally {
+        client.release();
       }
-      wrapError(err);
-    } finally {
-      client.release();
-    }
+    };
+    const result = this.txChain.then(run, run);
+    // Keep the chain alive without leaking a rejection into it.
+    this.txChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
+
+  /** Serializes transactions (see transaction()). */
+  private txChain: Promise<void> = Promise.resolve();
 
   /**
    * Execute `fn` with the adapter temporarily bound to a specific client, so a

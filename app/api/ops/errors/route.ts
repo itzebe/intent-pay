@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminAuthorized, adminConfigured } from "@/lib/server/auth";
+import { enforceRateLimit, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { recentOps } from "@/lib/server/ops";
 import { listAttempts } from "@/lib/server/paymentAttempts";
 import { classificationOf, type FailureCategory } from "@/lib/domain/failureTaxonomy";
@@ -18,6 +19,8 @@ export const dynamic = "force-dynamic";
  * the shared taxonomy and linked to a payment attempt id when one exists.
  */
 export async function GET(req: Request) {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.admin);
+  if (limited) return limited;
   if (!adminConfigured()) {
     return NextResponse.json(
       { ok: false, code: "not_configured", message: "Operational diagnostics are not configured." },

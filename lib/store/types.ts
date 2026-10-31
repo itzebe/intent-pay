@@ -38,7 +38,7 @@ export type StoreKind = "postgres" | "sqlite" | "memory";
  * capabilities surface can prove the required schema is really present rather
  * than merely assume a connection implies a migrated database.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** A unique-constraint violation, shared by both adapters. */
 export class StoreConflictError extends Error {
@@ -186,6 +186,13 @@ export type KvRecord = {
   updatedAt: number;
 };
 
+/** A monotonic integer counter row (rate-limit windows). */
+export type CounterRecord = {
+  key: string;
+  value: number;
+  updatedAt: number;
+};
+
 /** The row shapes each adapter must persist. */
 export type StoreTables = {
   referrals: ReferralRecord;
@@ -194,6 +201,7 @@ export type StoreTables = {
   opsEvents: OpsEventRecord;
   costs: CostRecord;
   kv: KvRecord;
+  counters: CounterRecord;
 };
 
 export type TableName = keyof StoreTables;
@@ -232,6 +240,20 @@ export interface Store {
   remove<T extends TableName>(table: T, where: Partial<StoreTables[T]>): Promise<number>;
   /** Count rows matching `where`. */
   count<T extends TableName>(table: T, where?: Partial<StoreTables[T]>): Promise<number>;
+  /**
+   * Atomically add `delta` to a non-negative integer column of one row,
+   * inserting the row with `delta` when absent, and return the new value. A
+   * single SQL statement / guarded memory op, so two concurrent callers cannot
+   * both read the same old value (the read-modify-write the rate limiter used to
+   * do, which let a burst exceed its own limit). The counter is clamped at 0.
+   */
+  incrementInt<T extends TableName>(
+    table: T,
+    where: Partial<StoreTables[T]>,
+    field: keyof StoreTables[T],
+    delta: number,
+    insertIfMissing: StoreTables[T],
+  ): Promise<number>;
   /** Run `fn` inside a transaction (atomic; rolls back on throw). */
   transaction<T>(fn: () => Promise<T>): Promise<T>;
   /**

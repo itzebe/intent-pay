@@ -109,6 +109,30 @@ export class MemoryStore implements Store {
     return found ? (this.clone(found) as StoreTables[T]) : undefined;
   }
 
+  async incrementInt<T extends TableName>(
+    table: T,
+    where: Partial<StoreTables[T]>,
+    field: keyof StoreTables[T],
+    delta: number,
+    insertIfMissing: StoreTables[T],
+  ): Promise<number> {
+    // A pure-JS read-modify-write with no `await` between the read and the write
+    // is atomic with respect to other requests: the event loop cannot interleave
+    // synchronous code. The store-backed rate limiter was lossy only because its
+    // await points allowed two callers to read the same count.
+    const rows = this.rows(table);
+    const existing = rows.find((r) => match(r, where as Row));
+    if (existing) {
+      const before = this.clone(existing);
+      const next = Math.max(0, Number(existing[field as string] ?? 0) + delta);
+      existing[field as string] = next;
+      if (this.depth > 0) this.undo.push(() => Object.assign(existing, before));
+      return next;
+    }
+    await this.insert(table, { ...insertIfMissing, [field]: delta } as StoreTables[T]);
+    return delta;
+  }
+
   async findMany<T extends TableName>(
     table: T,
     where?: Partial<StoreTables[T]>,

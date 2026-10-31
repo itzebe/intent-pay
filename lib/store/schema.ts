@@ -156,6 +156,19 @@ export const SCHEMA: TableSchema[] = [
     ],
     uniqueGroups: [],
   },
+  {
+    // Integer counters (rate-limit windows). A dedicated int column lets the
+    // increment be a single atomic statement, so a burst cannot read-modify-
+    // write past its own limit. `kv` stores text and cannot do that.
+    name: "counters",
+    primaryKeys: ["key"],
+    columns: [
+      { field: "key", column: "key", type: "text" },
+      { field: "value", column: "value", type: "int" },
+      { field: "updatedAt", column: "updated_at", type: "int" },
+    ],
+    uniqueGroups: [],
+  },
 ];
 
 export function schemaFor(table: TableName): TableSchema {

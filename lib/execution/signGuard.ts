@@ -164,6 +164,7 @@ export type SigningAbortReason =
   | "intent_mismatch"
   | "insufficient_balance"
   | "insufficient_gas"
+  | "balances_unavailable"
   | "account_changed"
   | "price_impact"
   | "unprotected"
@@ -177,6 +178,8 @@ const BLOCKED_MESSAGES: Record<SigningAbortReason, string> = {
   intent_mismatch: "The prepared transaction no longer matches your request. Please review it again.",
   insufficient_balance: "Your balance changed and no longer covers this payment. Review it again.",
   insufficient_gas: INSUFFICIENT_MON_FOR_FEES_MESSAGE,
+  balances_unavailable:
+    "We couldn't read your balances just now, so the payment was not signed. Please try again.",
   account_changed: "Your wallet account changed. Balances and gas were rebuilt for the new account — review and confirm again.",
   price_impact:
     "This route's price impact is too high to execute safely. Slippage is never widened to force it — choose a different amount or payment asset.",
@@ -228,7 +231,20 @@ export async function prepareSigning(
   // 1 + 2. Fresh balances and a fresh plan/quote. A partial payment supplies
   // `fetchPlan` (two legs) and needs the fresh balances to know how much is
   // held; otherwise we quote then build. Both run before the intent re-read.
-  const balances = await fetchers.fetchBalances().catch(() => [] as FreshBalances);
+  //
+  // The fresh balance read is mandatory: the invariant is "current intent +
+  // FRESH LIVE DATA", so a read that fails means we have no fresh data. Swallowing
+  // it to `[]` would silently satisfy both coverage checks (`coversBalance` passes
+  // with no pay-token entry, `coversGas` passes on an empty set) — the guard would
+  // sign an unverified payment on a transient RPC error. A failed read therefore
+  // blocks; the composer keeps the user on Review with a retry, so it is
+  // recoverable, never fatal.
+  const balanceRead = await fetchers
+    .fetchBalances()
+    .then((b) => ({ ok: true as const, balances: b }))
+    .catch(() => ({ ok: false as const }));
+  if (!balanceRead.ok) return block("balances_unavailable", expectedVersion);
+  const balances = balanceRead.balances;
   const freshResult = fetchers.fetchPlan
     ? await fetchers.fetchPlan(ctx.intent, balances)
     : await fetchers.fetchQuote(ctx.intent).then((r) =>

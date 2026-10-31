@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/server/apiGuard";
 import { recordClick } from "@/lib/server/referral";
 import { rateLimit, clientFingerprint } from "@/lib/server/rateLimit";
 import { normalizeCode } from "@/lib/domain/referralCode";
@@ -15,12 +16,11 @@ export const dynamic = "force-dynamic";
  * No wallet address is involved (the visitor may not be connected yet).
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const parsed = await readJsonBody<any>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body = parsed.body;
   const code = normalizeCode(typeof body?.code === "string" ? body.code : "");
   if (!code) {
     return NextResponse.json({ ok: false, code: "invalid_code", message: "That referral code isn't valid." }, { status: 400 });

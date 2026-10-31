@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sanitizeUpstreamError } from "@/lib/server/http";
+import { enforceRateLimit, readJsonBody, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import type { Address } from "viem";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
@@ -20,15 +21,17 @@ export const dynamic = "force-dynamic";
  * rather than pretending the split can execute.
  */
 export async function POST(req: Request) {
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.partial);
+  if (limited) return limited;
+
+  const parsed = await readJsonBody<Record<string, unknown>>(req);
+  if (!parsed.ok) {
     return NextResponse.json(
       { ok: false, code: "provider_error", message: "Invalid request." },
       { status: 400 },
     );
   }
+  const body: any = parsed.body;
 
   const network: MonadNetwork = "mainnet";
   const targetAddress = typeof body?.targetTokenAddress === "string" ? body.targetTokenAddress : "";

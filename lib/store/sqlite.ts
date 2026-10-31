@@ -196,6 +196,42 @@ export class SqliteStore implements Store {
     return rows.map((r) => this.decodeRow<T>(schema, r));
   }
 
+  async incrementInt<T extends TableName>(
+    table: T,
+    _where: Partial<StoreTables[T]>,
+    field: keyof StoreTables[T],
+    delta: number,
+    insertIfMissing: StoreTables[T],
+  ): Promise<number> {
+    const schema = schemaFor(table);
+    const def = schema.columns.find((c) => c.field === field);
+    if (!def || def.type !== "int") throw new Error(`incrementInt: ${String(field)} is not an int column`);
+    // node:sqlite is synchronous, so a read followed immediately by a write has
+    // no interleaving point — the read-modify-write is atomic with respect to
+    // other requests in this process. (The async interface is what made the
+    // store-backed rate limiter lossy; this adapter is not.)
+    const { sql, values } = this.whereClause(schema, _where);
+    try {
+      const existing = this.db
+        .prepare(`SELECT ${def.column} AS v FROM ${snake(table)} ${sql} LIMIT 1`)
+        .get(...values) as { v?: number | bigint } | undefined;
+      if (existing) {
+        const next = Math.max(0, Number(existing.v ?? 0) + delta);
+        this.db
+          .prepare(`UPDATE ${snake(table)} SET ${def.column} = ? ${sql}`)
+          .run(next, ...values);
+        return next;
+      }
+      // Create path: start at `delta` (the increment applied to zero) so the
+      // returned value matches what is stored.
+      await this.insert(table, { ...insertIfMissing, [field]: delta } as StoreTables[T]);
+      return delta;
+    } catch (err) {
+      wrapError(err);
+      throw err;
+    }
+  }
+
   async update<T extends TableName>(
     table: T,
     where: Partial<StoreTables[T]>,

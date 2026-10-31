@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sanitizeUpstreamError } from "@/lib/server/http";
+import { enforceRateLimit, ROUTE_LIMITS } from "@/lib/server/apiGuard";
 import { discoverWalletBalances, ensureCatalog } from "@/lib/server/discovery";
 import { getRoutingProvider } from "@/lib/providers";
 import type { MonadNetwork } from "@/lib/config/chains";
@@ -21,6 +22,12 @@ export const dynamic = "force-dynamic";
  * the on-chain balance, not the indexer'''s.
  */
 export async function GET(req: Request) {
+  // Balance discovery fans out to an RPC multicall across the catalog plus
+  // Zerion plus per-token price probes, for *any* address — the primary RPC
+  // amplification vector. Bound it per client IP.
+  const limited = await enforceRateLimit(req, ROUTE_LIMITS.balances);
+  if (limited) return limited;
+
   const url = new URL(req.url);
   const address = url.searchParams.get("address") ?? "";
   const network: MonadNetwork = "mainnet";

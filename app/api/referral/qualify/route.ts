@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readJsonBody } from "@/lib/server/apiGuard";
 import { sessionFromRequest } from "@/lib/server/sessionRequest";
 import { qualify } from "@/lib/server/referral";
 import { verifyQualifyingTransaction, isValidTxHash } from "@/lib/server/referral/verify";
@@ -43,12 +44,11 @@ export async function POST(req: Request) {
     return NextResponse.json(body, { status: 429, headers });
   }
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch {
+  const parsed = await readJsonBody<any>(req);
+  if (!parsed.ok) {
     return NextResponse.json({ ok: false, message: "Invalid request." }, { status: 400 });
   }
+  const body = parsed.body;
   const txHash = typeof body?.txHash === "string" ? body.txHash : "";
   if (!isValidTxHash(txHash)) {
     return NextResponse.json({ ok: false, code: "invalid_hash", message: "That isn't a valid transaction hash." }, { status: 400 });

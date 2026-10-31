@@ -1,5 +1,6 @@
 import { encodeFunctionData, decodeFunctionResult, parseAbi, type Address, type PublicClient } from "viem";
 import { getPublicClient } from "@/lib/server/rpc";
+import { BoundedMap } from "@/lib/util/boundedMap";
 import {
   allTokens,
   catalogVersion,
@@ -85,15 +86,15 @@ export class UniswapV3Provider implements RoutingProvider {
     at: number;
     catalogVersion: string;
   } | null = null;
-  private tokenByKey = new Map<string, TokenConfig>();
-  private priceCache = new Map<string, { value: UsdPrice; at: number }>();
+  private tokenByKey = new BoundedMap<string, TokenConfig>(5_000);
+  private priceCache = new BoundedMap<string, { value: UsdPrice; at: number }>(5_000);
   /** In-flight price computations, so concurrent cold callers share one probe. */
-  private priceInflight = new Map<string, Promise<UsdPrice>>();
+  private priceInflight = new BoundedMap<string, Promise<UsdPrice>>(5_000);
   /** In-flight graph builds, keyed by catalog version + endpoint set. */
-  private graphInflight = new Map<string, Promise<Map<string, PoolInfo[]>>>();
-  private availCache = new Map<string, { value: string[]; at: number }>();
+  private graphInflight = new BoundedMap<string, Promise<Map<string, PoolInfo[]>>>(64);
+  private availCache = new BoundedMap<string, { value: string[]; at: number }>(5_000);
   /** Token keys with the deepest total liquidity, used to pick basis tokens. */
-  private liquidityScore = new Map<string, bigint>();
+  private liquidityScore = new BoundedMap<string, bigint>(5_000);
 
   constructor(private network: MonadNetwork = "mainnet") {}
 

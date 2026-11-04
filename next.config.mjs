@@ -23,9 +23,37 @@ const browserRpcOrigins = [
   process.env.NEXT_PUBLIC_ALCHEMY_API_KEY ? "https://monad-mainnet.g.alchemy.com" : null,
 ].filter(Boolean);
 
+/**
+ * WalletConnect (Reown) v2 is opt-in. Only when a project id is configured do
+ * we relax the CSP for the relay websocket, the verify/explorer APIs and the
+ * QR modal iframe (`secure.walletconnect.org`). A deployment without
+ * WalletConnect keeps `frame-src 'none'` and no third-party origins.
+ */
+const wcEnabled = Boolean(process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID);
+
+const walletConnectConnectSrc = [
+  "https://relay.walletconnect.com",
+  "https://relay.walletconnect.org",
+  "wss://relay.walletconnect.com",
+  "wss://relay.walletconnect.org",
+  "https://echo.walletconnect.com",
+  "https://verify.walletconnect.com",
+  "https://verify.walletconnect.org",
+  "https://pulse.walletconnect.org",
+  "https://rpc.walletconnect.org",
+  "https://api.web3modal.org",
+];
+
+const walletConnectFrameSrc = [
+  "https://secure.walletconnect.org",
+  "https://secure-mobile.walletconnect.com",
+  "https://secure-mobile.walletconnect.org",
+];
+
 const connectSrc = [
   "'self'",
   ...browserRpcOrigins,
+  ...(wcEnabled ? walletConnectConnectSrc : []),
   // Wallet extension bridges that a page-world provider may talk through.
   "chrome-extension:",
   "moz-extension:",
@@ -50,7 +78,7 @@ const csp = [
   "font-src 'self' data:",
   `connect-src ${connectSrc.join(" ")}`,
   "worker-src 'self' blob:",
-  "frame-src 'none'",
+  `frame-src ${wcEnabled ? walletConnectFrameSrc.join(" ") : "'none'"}`,
   "child-src 'none'",
   "object-src 'none'",
   "base-uri 'self'",

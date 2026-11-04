@@ -27,7 +27,7 @@ server (or remove `.next`) afterwards.
 
 - Intent: `lib/domain/intent.ts`, `lib/domain/validation.ts`
 - Natural-language intent: `lib/nlp/*` (schema, parser, engine, question, handoff, llm)
-- Wallet/balances: `lib/hooks/useWallet.ts`, `app/api/balances/route.ts`
+- Wallet/balances: `lib/hooks/useWallet.tsx`, `lib/wallet/*`, `app/api/balances/route.ts`
 - Quote/routing: `lib/providers/*`, `lib/server/quote.ts`
 - Construction: `lib/execution/plan.ts`, `lib/execution/abis.ts`
 - Execution: `lib/execution/execute.ts`
@@ -78,6 +78,50 @@ intent. It is an **additional interface layer**, not a second payment system:
 - The engine must never break the manual flow: any failure returns a non-fatal
   error and the form composer keeps working.
 
+
+## Wallet connectivity (EIP-6963 + WalletConnect)
+
+One shared connection, several wallets. `lib/hooks/useWallet.tsx` exports
+`WalletProvider` (mounted once in `components/AppShell.tsx`) and `useWallet()`;
+the hook's return shape is a superset of the old standalone hook, so every
+existing consumer keeps working. **Do not create a second `useWallet` instance**
+— one provider means one set of `accountsChanged`/`chainChanged` listeners and
+one account/chain/client the composer, header and referral panel all agree on.
+
+- **Discovery** is `lib/wallet/eip6963.ts`. It dispatches `eip6963:requestProvider`
+  and collects `eip6963:announceProvider` details, then folds in the legacy
+  `window.ethereum` (and its `providers[]`), de-duplicated by provider identity.
+  It is React-free so it can be unit-tested against a fake `window`. Never read
+  `window.ethereum` anywhere else — a page with MetaMask + Rabby + Coinbase would
+  otherwise see only whichever won the slot.
+- **WalletConnect** is `lib/wallet/walletconnect.ts`, a lazy-loaded connector
+  behind `getWalletConnectProvider()`. The SDK (`@walletconnect/ethereum-provider`)
+  is imported on demand, so it is code-split out of the main bundle. It is
+  **config-gated on `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`** (public; free from
+  https://dashboard.reown.com). With no project id `walletConnectConfigured()` is
+  false, the option renders disabled with the real reason, and no session is
+  fabricated. Session restoration re-inits the provider and checks `eth_accounts`;
+  an empty account list means the session expired and we stay disconnected.
+- **Lifecycle rules** live in `lib/wallet/connection.ts` (pure): `chainIdFromHex`,
+  `isMonadChainId`, `firstAccount`, `statusForAccounts`, `pickRestorableWallet`,
+  `connectionErrorMessage`. An empty account list is a disconnect, never a half
+  state; a raw provider error string is never echoed to the user.
+- **UI** is `components/wallet/WalletBar.tsx`: `ConnectButton` (picker + connected
+  menu) and `BalanceOverview`. The picker shows every discovered injected wallet,
+  WalletConnect (when configured), and an honest "no browser wallet detected"
+  note. A wallet icon that the CSP blocks falls back to a neutral glyph.
+- **Gas is unchanged**: the connected provider signs locally and pays the fee in
+  MON. No paymaster, bundler or AA path was reintroduced.
+- **CSP** (`next.config.mjs`) lists the WalletConnect relay/verify origins and
+  relaxes `frame-src` for `secure.walletconnect.org` **only when the project id
+  is set**; an unconfigured deploy keeps `frame-src 'none'`. `img-src` stays
+  tight (`'self' data: blob:` + the GitHub token-logo host).
+- `/api/capabilities.wallets` reports injected discovery as always-on and
+  WalletConnect as `configured: false` unless keyed; `IntegrationStack` renders it.
+
+Regression coverage: `tests/walletDiscovery.test.ts`, `tests/walletConnection.test.ts`,
+`tests/walletConnect.test.ts`, `tests/walletIntegration.test.tsx` (jsdom, mocked
+EIP-1193 provider), plus the WalletConnect CSP cases in `tests/securityHeaders.test.ts`.
 
 ## Ecosystem integrations (T10)
 

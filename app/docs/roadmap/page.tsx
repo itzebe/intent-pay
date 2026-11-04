@@ -37,6 +37,7 @@ const ITEMS: { status: keyof typeof STATUS; title: string; detail: string }[] = 
   { status: "built", title: "Signing guard", detail: "Rebuilds everything from fresh data immediately before signing; refuses on any change." },
   { status: "built", title: "Delivery verification", detail: "Proves the recipient's transfer from the confirmed receipt; never reports unverified as success." },
   { status: "built", title: "Partial-balance split", detail: "Sends what you hold and converts the shortfall, each leg with its own bound." },
+  { status: "built", title: "Multi-wallet connectivity", detail: "EIP-6963 injected-wallet discovery (MetaMask, Rabby, Coinbase, Trust Wallet, …) with a legacy fallback, plus WalletConnect mobile/QR wallets when a project id is configured." },
   { status: "progress", title: "Expanding live-network verification", detail: "Broadening opt-in live tests for routing and execution paths." },
   { status: "progress", title: "Copy and error-surface refinement", detail: "Clearer, more actionable messages for every failure mode." },
   { status: "progress", title: "Mobile layout hardening", detail: "Small-screen usability across the composer, review and token search." },

@@ -29,7 +29,7 @@ Two intent modes:
 
 ```
 Intent layer            lib/domain/intent.ts, lib/domain/validation.ts
-Wallet / balance layer  lib/hooks/useWallet.ts, app/api/balances
+Wallet / balance layer  lib/wallet/*, lib/hooks/useWallet.tsx, app/api/balances
 Quote / routing layer   lib/providers/*, lib/server/quote.ts
 Construction layer      lib/execution/plan.ts, lib/execution/abis.ts
 Execution layer         lib/execution/execute.ts
@@ -88,6 +88,26 @@ INTENT_LLM_API_KEY=
 INTENT_LLM_BASE_URL=https://api.openai.com/v1
 INTENT_LLM_MODEL=gpt-4o-mini
 ```
+
+## Wallet connectivity
+
+Connect any EIP-1193 wallet — MetaMask, Rabby, Coinbase Wallet, Trust Wallet, or
+any other compatible browser wallet. Wallets are discovered in the browser via
+**EIP-6963** (so several installed extensions are offered side by side instead
+of racing over a single `window.ethereum`), with a legacy `window.ethereum`
+fallback. The connected wallet's real address and real MON balance are shown, and
+the app switches the wallet to Monad Mainnet (chain id 143) before signing.
+
+**WalletConnect** (Reown v2) adds mobile and QR wallets. It needs a free project
+id, exposed as the public `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`:
+
+```
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=   # https://dashboard.reown.com
+```
+
+Without it, the WalletConnect option is shown as unavailable and injected wallets
+still work — no session is ever fabricated. Signing always happens locally in the
+wallet's own provider; Intent Pay never asks for a seed phrase or private key.
 
 ## Gas
 

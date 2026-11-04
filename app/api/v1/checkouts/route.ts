@@ -5,7 +5,7 @@ import { parseCreateCheckout } from "@/lib/developer/requests";
 import { currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutEventData, createCheckout, bindIntentForCheckout, listCheckouts, publicCheckout } from "@/lib/developer/checkouts";
 import { isTerminal } from "@/lib/developer/intentLifecycle";
-import { enqueueEvent } from "@/lib/developer/webhooks";
+import { drainDueSoon, enqueueEvent } from "@/lib/developer/webhooks";
 import { storeCapability } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -77,6 +77,7 @@ export async function POST(req: Request) {
       event: "checkout.created",
       data: checkoutEventData(result.checkout, boundState),
     });
+    await drainDueSoon();
   }
 
   return apiOk(

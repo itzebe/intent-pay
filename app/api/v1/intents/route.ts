@@ -3,6 +3,7 @@ import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/api
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { parseCreateIntent, publicIntent } from "@/lib/developer/requests";
 import { createIntent, listIntents, currentState } from "@/lib/developer/intents";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { ensureCatalog, resolveToken } from "@/lib/server/discovery";
 import { storeCapability } from "@/lib/store";
 
@@ -66,6 +67,8 @@ export async function POST(req: Request) {
   if (!result.ok) {
     return apiError("idempotency_conflict", "That idempotency key was already used with different parameters.", auth.requestId);
   }
+
+  if (result.created) await drainDueSoon();
 
   return apiOk(
     {

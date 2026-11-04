@@ -3,6 +3,7 @@ import { apiError, apiOk, readJson } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutPhase, getCheckoutByToken, recordCheckoutSubmission } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { parseCheckoutSubmission } from "@/lib/developer/requests";
 import { isValidCheckoutToken } from "@/lib/developer/checkoutToken";
 
@@ -44,6 +45,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
   const result = await recordCheckoutSubmission(checkout, intent, parsed.hashes);
   if (!result.ok) return apiError(result.code, result.message);
+
+  // Deliver the `payment.submitted` event after the response is sent.
+  await drainDueSoon();
 
   const state = await currentState(intent.id);
   return apiOk({

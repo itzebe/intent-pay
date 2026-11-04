@@ -3,6 +3,7 @@ import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/api
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutStatus, getCheckout, publicCheckout, recordCheckoutFailure, recordCheckoutVerified } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { verifySettlement } from "@/lib/developer/settlement";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 
@@ -64,11 +65,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   if (check.verdict === "verified") {
     const finalState = await recordCheckoutVerified(checkout, intent, check.delivered ?? "", check.blockNumber);
+    await drainDueSoon();
     return apiOk({ verdict: check.verdict, state: finalState, checkout: publicCheckout(checkout, finalState), settlement: check });
   }
 
   if (check.verdict === "reverted" || check.verdict === "short") {
     const finalState = await recordCheckoutFailure(checkout, intent, `${check.verdict}: ${check.message}`);
+    await drainDueSoon();
     return apiOk({ verdict: check.verdict, state: finalState, checkout: publicCheckout(checkout, finalState), settlement: check });
   }
   // pending / not_found / unavailable / invalid_hash — the order stays where it is.

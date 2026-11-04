@@ -3,6 +3,7 @@ import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/api
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { getIntent } from "@/lib/developer/intents";
 import { getCheckout, publicCheckout, recordCheckoutSubmission } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { parseCheckoutSubmission } from "@/lib/developer/requests";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +44,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const result = await recordCheckoutSubmission(checkout, intent, parsed.hashes);
   if (!result.ok) return apiError(result.code, result.message, auth.requestId);
+
+  await drainDueSoon();
 
   return apiOk({
     checkout: publicCheckout(checkout, "submitted"),

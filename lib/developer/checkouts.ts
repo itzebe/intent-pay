@@ -68,6 +68,10 @@ export function checkoutStatus(record: ApiCheckoutRecord, intentState: IntentSta
 
 /** The customer-facing phase derived from the intent's real state. */
 export function checkoutPhase(record: ApiCheckoutRecord, intentState: IntentState, now = Date.now()): CheckoutPhase {
+  // A canceled order is canceled regardless of what its bound intent later
+  // becomes. Cancellation expires the intent, so checking the intent state first
+  // would report a canceled order as merely "expired" and lose the reason.
+  if (record.status === "canceled") return "canceled";
   switch (intentState) {
     case "verified":
       return "payment_verified";
@@ -83,7 +87,6 @@ export function checkoutPhase(record: ApiCheckoutRecord, intentState: IntentStat
     default:
       break;
   }
-  if (record.status === "canceled") return "canceled";
   if (now > record.expiresAt) return "expired";
   return "awaiting_payment";
 }

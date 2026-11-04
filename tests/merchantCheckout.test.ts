@@ -369,8 +369,12 @@ describe("checkout cancellation", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.checkout.status).toBe("canceled");
+    // A canceled order reads "canceled", never "expired" — even though canceling
+    // also expires the bound intent (which would otherwise mask the reason).
+    expect(json.checkout.phase).toBe("canceled");
     const got = await (await checkoutGET(req(`http://localhost/api/v1/checkouts/${checkoutId}`, { token }), { params: Promise.resolve({ id: checkoutId }) })).json();
     expect(got.intent.state).toBe("expired");
+    expect(got.checkout.phase).toBe("canceled");
     void intentId;
   });
 

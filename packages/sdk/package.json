@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@walletconnect/ethereum-provider": "^2.26.0",
     "tsup": "^8.3.5",
     "typescript": "^5.7.3",
     "vitest": "^2.1.9"

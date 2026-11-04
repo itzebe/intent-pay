@@ -294,3 +294,36 @@ export async function listDeliveries(developerId: string, webhookId?: string, li
   const where = webhookId ? { developerId, webhookId } : { developerId };
   return getStore().findMany("apiWebhookDeliveries", where, { orderBy: "createdAt", dir: "desc", limit });
 }
+
+/**
+ * Schedule a best-effort drain of due deliveries after the current response is
+ * sent.
+ *
+ * Delivery is otherwise driven only by the `POST /api/v1/webhooks/drain`
+ * endpoint (an operator or a scheduler calls it). Without this, a merchant's
+ * `payment.submitted` / `payment.verified` event sits `pending` until someone
+ * drains it — the reported "the merchant never receives the webhook" gap on a
+ * plan whose scheduler runs at most once a day.
+ *
+ * `after()` runs the callback once the response has been flushed, so the
+ * customer's request stays fast and its result never depends on an outbound
+ * HTTP call. It is only available inside a request scope (a Next.js route
+ * handler); outside one — a unit test, a plain function call — this is a no-op
+ * and the manual drain remains the fallback. A drain failure is swallowed: it
+ * must never surface to the customer, and the delivery stays `pending` for the
+ * next attempt.
+ */
+export async function drainDueSoon(limit = 25): Promise<void> {
+  try {
+    const { after } = await import("next/server");
+    after(async () => {
+      try {
+        await deliverDue(Date.now(), { limit });
+      } catch {
+        /* a scheduled drain failure must never reach the customer */
+      }
+    });
+  } catch {
+    /* not in a request scope — the manual/cron drain covers it */
+  }
+}

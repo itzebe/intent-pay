@@ -3,6 +3,7 @@ import { apiError, apiOk, readJson } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutPhase, checkoutStatus, getCheckoutByToken, recordCheckoutFailure, recordCheckoutVerified } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { verifySettlement } from "@/lib/developer/settlement";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 import { isValidCheckoutToken } from "@/lib/developer/checkoutToken";
@@ -58,6 +59,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
   if (check.verdict === "verified") {
     const finalState = await recordCheckoutVerified(checkout, intent, check.delivered ?? "", check.blockNumber);
+    await drainDueSoon();
     return apiOk({
       verdict: check.verdict,
       phase: checkoutPhase(checkout, finalState),
@@ -69,6 +71,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
   if (check.verdict === "reverted" || check.verdict === "short") {
     const finalState = await recordCheckoutFailure(checkout, intent, `${check.verdict}: ${check.message}`);
+    await drainDueSoon();
     return apiOk({ verdict: check.verdict, phase: checkoutPhase(checkout, finalState), status: checkoutStatus(checkout, finalState), message: check.message });
   }
 

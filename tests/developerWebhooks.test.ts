@@ -6,6 +6,7 @@ import {
   createWebhook,
   deleteWebhook,
   deliverDue,
+  drainDueSoon,
   enqueueEvent,
   listDeliveries,
   nextAttemptAt,
@@ -188,5 +189,19 @@ describe("delivery", () => {
     const rows = await listDeliveries(developer.id);
     expect(rows.length).toBe(1);
     expect(rows[0].event).toBe("intent.created");
+  });
+});
+
+describe("scheduled drain", () => {
+  it("is a safe no-op outside a request scope (never throws, drains nothing)", async () => {
+    const { developer } = await seedDeveloper();
+    await createWebhook({ developerId: developer.id, url: "https://example.com/hook", events: ["*"] });
+    await enqueueEvent({ developerId: developer.id, event: "intent.created", data: {} });
+    // A direct call has no Next.js request scope, so `after()` is unavailable:
+    // the call must resolve without throwing and leave the delivery pending for
+    // the manual/cron drain rather than performing an outbound fetch here.
+    await expect(drainDueSoon()).resolves.toBeUndefined();
+    const rows = await listDeliveries(developer.id);
+    expect(rows[0].status).toBe("pending");
   });
 });

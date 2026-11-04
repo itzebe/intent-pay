@@ -89,6 +89,7 @@ const h = vi.hoisted(() => {
 vi.mock("@neondatabase/serverless", () => ({ Pool: h.FakePool }));
 
 import { PostgresStore } from "@/lib/store/postgres";
+import { SCHEMA_VERSION } from "@/lib/store/types";
 
 describe("Postgres migration on a brand-new database", () => {
   beforeEach(() => h.reset());
@@ -102,15 +103,24 @@ describe("Postgres migration on a brand-new database", () => {
     await expect(store.health()).resolves.toMatchObject({
       reachable: true,
       ready: true,
-      schemaVersion: 1,
+      schemaVersion: SCHEMA_VERSION,
     });
   });
 
   it("probes the ledger with to_regclass, never with a failing SELECT", async () => {
     const store = new PostgresStore("postgres://user@db.example/neondb");
     await store.migrate();
-    expect(h.state.calls.some((c) => c.startsWith("SELECT to_regclass"))).toBe(true);
-    expect(h.state.calls.find((c) => c.startsWith('SELECT "id" FROM "_migrations"'))).toBeUndefined();
+    // The ledger must be probed with to_regclass before it exists. A direct
+    // `SELECT ... FROM "_migrations"` is only ever issued *after* to_regclass has
+    // confirmed the relation exists (a later migration re-checks the ledger),
+    // never as the first probe — which is what aborted the transaction.
+    const firstProbe = h.state.calls.findIndex((c) => c.startsWith("SELECT to_regclass"));
+    const firstDirect = h.state.calls.findIndex((c) => c.startsWith('SELECT "id" FROM "_migrations"'));
+    // The probe must happen, and any direct read of the ledger must come *after*
+    // it — never as the first ledger access, which is what aborted the
+    // transaction on a brand-new database.
+    expect(firstProbe).toBeGreaterThanOrEqual(0);
+    expect(firstDirect === -1 || firstDirect > firstProbe).toBe(true);
   });
 
   it("is idempotent: a second cold start does not re-apply migration 1", async () => {

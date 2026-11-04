@@ -26,6 +26,18 @@ type DatabaseSyncCtor = new (path: string) => {
 let cachedCtor: DatabaseSyncCtor | null = null;
 function loadDatabaseSync(): DatabaseSyncCtor {
   if (cachedCtor) return cachedCtor;
+  // `process.getBuiltinModule` is the reliable loader inside a bundled server:
+  // a bundler rewrites `require("node:sqlite")` (see the "Critical dependency"
+  // warning) and can rewrite it to a stub, but it leaves this runtime call
+  // alone. Fall back to `createRequire` for runtimes without it.
+  const gbm = (process as unknown as { getBuiltinModule?: (id: string) => unknown }).getBuiltinModule;
+  if (typeof gbm === "function") {
+    const mod = gbm.call(process, "node:sqlite") as { DatabaseSync: DatabaseSyncCtor } | undefined;
+    if (mod?.DatabaseSync) {
+      cachedCtor = mod.DatabaseSync;
+      return cachedCtor;
+    }
+  }
   const req = createRequire(import.meta.url);
   const spec = ["node", "sqlite"].join(":");
   const mod = req(spec) as { DatabaseSync: DatabaseSyncCtor };

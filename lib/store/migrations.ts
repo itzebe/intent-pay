@@ -68,6 +68,18 @@ const INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_costs_day ON ${qi("costs")} (${qi("day")})`,
 ];
 
+/**
+ * Indexes for the external developer API read patterns: an intent list per
+ * tenant (newest first), an intent's event history in order, a tenant's
+ * webhooks, and the deliveries due for retry.
+ */
+const DEVELOPER_INDEXES: string[] = [
+  `CREATE INDEX IF NOT EXISTS idx_api_intents_dev ON ${qi("api_intents")} (${qi("developer_id")}, ${qi("created_at")} DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_api_intent_events_intent ON ${qi("api_intent_events")} (${qi("intent_id")}, ${qi("at")})`,
+  `CREATE INDEX IF NOT EXISTS idx_api_webhooks_dev ON ${qi("api_webhooks")} (${qi("developer_id")})`,
+  `CREATE INDEX IF NOT EXISTS idx_api_deliveries_due ON ${qi("api_webhook_deliveries")} (${qi("status")}, ${qi("next_attempt_at")})`,
+];
+
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
@@ -76,6 +88,13 @@ export const MIGRATIONS: Migration[] = [
       ...TABLES,
       ...INDEXES,
     ],
+  },
+  {
+    // v2 — external developer API. `TABLES` is derived from the shared schema,
+    // so this migration creates the six new tables (and harmlessly re-issues the
+    // v1 tables via IF NOT EXISTS).
+    id: 2,
+    statements: [...TABLES, ...DEVELOPER_INDEXES],
   },
 ];
 

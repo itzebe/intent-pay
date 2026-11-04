@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Intent Pay — SDK quickstart</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0b0f; color: #ececf1; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: #9a9aa8; margin: 0 0 28px; }
+  section { border: 1px solid #23232e; border-radius: 12px; padding: 18px; margin-bottom: 16px; background: #121218; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #9a9aa8; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; color: #b9b9c6; margin: 10px 0 4px; }
+  input { width: 100%; box-sizing: border-box; background: #0b0b0f; border: 1px solid #2c2c38; color: #ececf1; border-radius: 8px; padding: 9px 11px; font: inherit; }
+  button { background: #6d5efc; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: #23232e; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12.5px; word-break: break-all; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid #1d1d26; }
+  .kv:last-child { border-bottom: 0; }
+  .kv span:first-child { color: #9a9aa8; }
+  pre { background: #0b0b0f; border: 1px solid #23232e; border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; margin: 12px 0 0; }
+  .err { color: #ff8f8f; }
+  .ok { color: #6ee7a8; }
+  .warn { color: #ffd479; }
+  .muted { color: #9a9aa8; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Intent Pay — SDK quickstart</h1>
+  <p class="sub">The server holds the API key. Your wallet signs locally. Nothing here is a mock.</p>
+
+  <section>
+    <h2>1 · Wallet</h2>
+    <div id="wallet-body">
+      <p class="muted" id="wallet-status">Not connected.</p>
+      <div class="row" id="wallet-actions"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Payment</h2>
+    <label for="recipient">Recipient (Monad address)</label>
+    <input id="recipient" placeholder="0x…" />
+    <label for="amount">Amount (USD the recipient receives)</label>
+    <input id="amount" value="1" />
+    <label for="token">Receive asset</label>
+    <input id="token" value="USDC" />
+    <div class="row" style="margin-top:14px">
+      <button id="pay" disabled>Review &amp; pay</button>
+      <button id="reset" class="secondary">Reset</button>
+    </div>
+  </section>
+
+  <section id="review" hidden>
+    <h2>3 · Review</h2>
+    <div id="review-body"></div>
+  </section>
+
+  <section id="result" hidden>
+    <h2>4 · Result</h2>
+    <div id="result-body"></div>
+  </section>
+</main>
+
+<script type="module">
+// The browser half. It imports ONLY the wallet entry — the API client (which
+// needs the key) is never loaded here.
+import { Wallet, discoverWallets, WalletError } from "/sdk/wallet/index.js";
+
+const $ = (id) => document.getElementById(id);
+let wallet = null;
+let pending = null;
+
+async function refreshWalletUI() {
+  const actions = $("wallet-actions");
+  actions.innerHTML = "";
+  if (wallet) {
+    $("wallet-body").querySelector(".muted")?.remove();
+    const info = document.createElement("div");
+    info.innerHTML =
+      `<div class="kv"><span>Address</span><span class="mono">${wallet.address}</span></div>` +
+      `<div class="kv"><span>Network</span><span class="${wallet.onMonad ? "ok" : "warn"}">${wallet.onMonad ? "Monad Mainnet (143)" : "chain " + wallet.chainId + " — switch required"}</span></div>` +
+      `<div class="kv"><span>Connection</span><span>${wallet.kind}</span></div>`;
+    $("wallet-body").appendChild(info);
+    const disc = document.createElement("button");
+    disc.className = "secondary";
+    disc.textContent = "Disconnect";
+    disc.onclick = async () => { await wallet.disconnect(); wallet = null; $("wallet-body").innerHTML = '<p class="muted" id="wallet-status">Not connected.</p>'; refreshWalletUI(); updatePayButton(); };
+    actions.appendChild(disc);
+    if (!wallet.onMonad) {
+      const sw = document.createElement("button");
+      sw.textContent = "Switch to Monad";
+      sw.onclick = () => wallet.ensureMonadChain().then(refreshWalletUI).catch(showWalletError);
+      actions.appendChild(sw);
+    }
+  } else {
+    const found = await discoverWallets();
+    if (found.length === 0) {
+      $("wallet-body").innerHTML = '<p class="muted" id="wallet-status">No wallet found. Install MetaMask, Rabby or Coinbase Wallet.</p>';
+      actions.innerHTML = "";
+    } else {
+      $("wallet-body").innerHTML = `<p class="muted" id="wallet-status">${found.length} wallet(s) detected.</p>`;
+      for (const w of found) {
+        const b = document.createElement("button");
+        b.textContent = `Connect ${w.name}`;
+        b.onclick = () => connect(w.id);
+        actions.appendChild(b);
+      }
+    }
+  }
+  updatePayButton();
+}
+
+async function connect(walletId) {
+  try {
+    wallet = await Wallet.connect({ walletId });
+    wallet.onAccountsChanged(() => refreshWalletUI());
+    wallet.onChainChanged(() => refreshWalletUI());
+    if (!wallet.onMonad) await wallet.ensureMonadChain();
+    refreshWalletUI();
+  } catch (err) { showWalletError(err); }
+}
+
+function showWalletError(err) {
+  const msg = err instanceof WalletError ? `${err.walletCode}: ${err.message}` : String(err?.message ?? err);
+  $("wallet-body").insertAdjacentHTML("beforeend", `<p class="err" style="margin:10px 0 0">${msg}</p>`);
+}
+
+function updatePayButton() { $("pay").disabled = !wallet || !wallet.onMonad; }
+
+async function pay() {
+  const recipient = $("recipient").value.trim();
+  const amount = $("amount").value.trim();
+  const receiveToken = $("token").value.trim() || "USDC";
+  $("pay").disabled = true;
+  try {
+    const res = await fetch("/api/pay/create", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipient, amount, receiveToken, sender: wallet.address }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error?.message ?? data.validation?.route?.reason ?? "Could not prepare the payment.");
+    pending = data;
+
+    $("review").hidden = false;
+    const q = data.quote;
+    $("review-body").innerHTML =
+      `<div class="kv"><span>You send</span><span>${q.payAmount} ${q.payToken}</span></div>` +
+      `<div class="kv"><span>Recipient receives</span><span>${q.receiveAmount} ${q.receiveToken}</span></div>` +
+      `<div class="kv"><span>Minimum received (on-chain floor)</span><span>${q.minimumReceived} ${q.receiveToken}</span></div>` +
+      `<div class="kv"><span>Network cost</span><span>$${Number(q.networkCostUsd).toFixed(4)}</span></div>` +
+      `<div class="kv"><span>Steps</span><span>${data.steps.join(" → ")}</span></div>` +
+      `<pre>${JSON.stringify(data.calls, null, 2)}</pre>`;
+
+    const btn = document.createElement("button");
+    btn.style.marginTop = "14px";
+    btn.textContent = `Sign & send ${data.calls.length} transaction(s) in your wallet`;
+    btn.onclick = () => send(btn);
+    $("review-body").appendChild(btn);
+  } catch (err) {
+    $("result").hidden = false;
+    $("result-body").innerHTML = `<p class="err">${err.message}</p>`;
+  } finally { updatePayButton(); }
+}
+
+async function send(btn) {
+  btn.disabled = true;
+  btn.textContent = "Waiting for your wallet…";
+  try {
+    // The wallet prompts, signs locally, and broadcasts.
+    const { txHashes } = await wallet.sendCalls(pending.calls);
+    btn.textContent = "Confirming on Monad…";
+    const res = await fetch("/api/pay/submit", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ intentId: pending.intentId, txHashes }),
+    });
+    const data = await res.json();
+    $("result").hidden = false;
+    const v = data.verification;
+    $("result-body").innerHTML =
+      `<div class="kv"><span>Broadcast hashes</span><span class="mono">${txHashes.join(", ")}</span></div>` +
+      `<div class="kv"><span>Intent state</span><span>${data.status.state}</span></div>` +
+      `<div class="kv"><span>Verdict</span><span class="${v.verdict === "verified" ? "ok" : "warn"}">${v.verdict}</span></div>` +
+      `<p class="muted" style="margin:10px 0 0">${v.settlement?.message ?? "Verification is read from the Monad receipt itself."}</p>`;
+  } catch (err) {
+    const msg = err instanceof WalletError ? `${err.walletCode}: ${err.message}` : String(err?.message ?? err);
+    $("result").hidden = false;
+    $("result-body").innerHTML = `<p class="err">${msg}</p>`;
+    btn.disabled = false;
+    btn.textContent = "Retry";
+  }
+}
+
+$("pay").onclick = pay;
+$("reset").onclick = () => { $("review").hidden = true; $("result").hidden = true; refreshWalletUI(); };
+refreshWalletUI();
+</script>
+</body>
+</html>

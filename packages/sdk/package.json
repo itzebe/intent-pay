@@ -1,0 +1,69 @@
+{
+  "name": "@intentpay/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Intent Pay \u2014 create payment intents on Monad, prepare transactions for your user's wallet, and independently verify settlement.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.19"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./wallet": {
+      "types": "./dist/wallet/index.d.ts",
+      "import": "./dist/wallet/index.js",
+      "require": "./dist/wallet/index.cjs"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.ts",
+      "import": "./dist/webhooks.js",
+      "require": "./dist/webhooks.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:live": "vitest run test/integration.live.test.ts"
+  },
+  "peerDependencies": {
+    "@walletconnect/ethereum-provider": ">=2.17.0"
+  },
+  "peerDependenciesMeta": {
+    "@walletconnect/ethereum-provider": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  },
+  "keywords": [
+    "monad",
+    "payments",
+    "intent",
+    "sdk",
+    "eip-1193",
+    "walletconnect"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itzebe/intent-pay.git",
+    "directory": "packages/sdk"
+  }
+}

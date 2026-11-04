@@ -13,3 +13,10 @@ next-env.d.ts
 coverage
 .env*
 !.env.example
+
+# SDK build output and local installs
+packages/*/dist
+packages/*/node_modules
+
+# Agent working memory (not project code)
+.openhands/

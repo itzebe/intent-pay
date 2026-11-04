@@ -1,0 +1,98 @@
+import { NextResponse } from "next/server";
+import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/apiAuth";
+import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
+import { canonicalParams, currentState, getIntent, intentEvents, transition } from "@/lib/developer/intents";
+
+import { verifySettlement } from "@/lib/developer/settlement";
+import { isValidTxHash } from "@/lib/server/referral/verify";
+import { isTerminal } from "@/lib/developer/intentLifecycle";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * POST /api/v1/intents/:id/verify — independently verify settlement on-chain.
+ *
+ * Body: `{ txHash?: "0x…" }` (defaults to the hash recorded at submit).
+ *
+ * This reads the authoritative Monad receipt itself and proves the recipient
+ * received the requested asset. The verdict is honest and specific:
+ *   - `verified`  → the recipient received at least the authorized minimum;
+ *   - `reverted`  → the transaction failed on-chain (intent → failed);
+ *   - `short`     → the recipient received less than intended (intent → failed);
+ *   - `pending` / `not_found` / `unavailable` → the intent stays submitted and
+ *     the caller is told to retry; nothing is falsely confirmed.
+ *
+ * Only a `verified` verdict advances the intent to `verified`, and only then is
+ * a `payment.verified` webhook emitted (inside the transition).
+ */
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireDeveloper(req);
+  if (!auth.ok) return auth.response;
+
+  const limited = await checkLimit(auth.auth.developer.id, "verify");
+  if (!limited.ok) {
+    const { body, headers } = tooManyResponse(limited.resetAt);
+    return NextResponse.json(body, { status: 429, headers });
+  }
+
+  const { id } = await params;
+  const record = await getIntent(auth.auth.developer.id, id);
+  if (!record) return apiError("not_found", "No such intent.", auth.requestId);
+
+  const state = await currentState(record.id);
+  if (state === "verified") {
+    // Idempotent: an already-verified intent returns its verdict.
+    const events = await intentEvents(record.id);
+    return apiOk({ verdict: "verified", state, lifecycle: events.map((e) => ({ state: e.state, at: new Date(e.at).toISOString() })) });
+  }
+  if (isTerminal(state)) return apiError("invalid_state", `This intent is ${state}.`, auth.requestId);
+
+  // A hash is required: the one from submit, or an explicit one in the body.
+  const body = await readJson(req);
+  const submittedHash = (await intentEvents(record.id))
+    .map((e) => e.detail ?? "")
+    .filter((d) => d.startsWith("tx:"))
+    .pop()
+    ?.slice(3)
+    .split(",")
+    .filter(Boolean)[0];
+  const explicit = typeof body?.txHash === "string" && isValidTxHash(body.txHash) ? body.txHash : null;
+  const txHash = explicit ?? submittedHash ?? null;
+  if (!txHash) {
+    return apiError("invalid_request", "No transaction hash to verify. Submit one, or pass `txHash`.", auth.requestId, "txHash");
+  }
+
+  if (record.authorizedParams && record.authorizedParams !== canonicalParams(record)) {
+    return apiError("conflict", "The intent's parameters changed after authorization.", auth.requestId);
+  }
+
+  const check = await verifySettlement({
+    txHash,
+    recipient: record.recipient,
+    receiveTokenAddress: record.receiveTokenAddress,
+    receiveToken: record.receiveToken,
+    expectedAmount: record.amount,
+  });
+
+  if (check.verdict === "verified") {
+    const current = await currentState(record.id);
+    if (current === "submitted") await transition(record, "confirmed", `block:${check.blockNumber}`);
+    const afterConfirm = await currentState(record.id);
+    if (afterConfirm === "confirmed") await transition(record, "verified", `delivered:${check.delivered}`);
+    const newState = await currentState(record.id);
+    return apiOk({ verdict: check.verdict, state: newState, settlement: check });
+  }
+
+  if (check.verdict === "reverted" || check.verdict === "short") {
+    const current = await currentState(record.id);
+    if (current === "submitted" || current === "confirmed") {
+      await transition(record, "failed", `${check.verdict}: ${check.message}`.slice(0, 300));
+    }
+    const newState = await currentState(record.id);
+    return apiOk({ verdict: check.verdict, state: newState, settlement: check });
+  }
+
+  // pending / not_found / unavailable — the intent stays where it is.
+  return apiOk({ verdict: check.verdict, state, settlement: check, retryable: true });
+}
+

@@ -1,12 +1,15 @@
 "use client";
 
 import type { Address, Hash, WalletClient } from "viem";
-import { encodeFunctionData } from "viem";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { ERC20_ABI, SWAP_ROUTER_ABI, WNATIVE_ABI } from "./abis";
 import { encodePath } from "./path";
 import type { PaymentPlan, PlanStep } from "./plan";
+import { encodeStep, type EncodedCall } from "./encode";
+
+export { encodeStep };
+export type { EncodedCall };
 import { UNISWAP, WMON_ADDRESS } from "@/lib/providers/constants";
 
 export type StepResult = {
@@ -69,125 +72,6 @@ function isUserRejection(err: any): boolean {
   const code = err?.code ?? err?.cause?.code;
   const msg = String(err?.shortMessage ?? err?.message ?? "");
   return code === 4001 || /user rejected|denied transaction/i.test(msg);
-}
-
-/** A single encoded call — the common shape of a sequential tx and a batch entry. */
-export type EncodedCall = { to: Address; data?: `0x${string}`; value?: bigint };
-
-/**
- * Encode one plan step into a `{to, data, value}` call. Shared by the
- * sequential executor and the EIP-5792 batched executor so the two paths can
- * never drift.
- */
-export function encodeStep(step: PlanStep): EncodedCall {
-  const wmon = WMON_ADDRESS as Address;
-  switch (step.kind) {
-    case "approve":
-      return {
-        to: step.token.address,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "approve",
-          args: [step.spender, step.amount],
-        }),
-      };
-    case "wrap":
-      return {
-        to: wmon,
-        data: encodeFunctionData({ abi: WNATIVE_ABI, functionName: "deposit" }),
-        value: step.amount,
-      };
-    case "unwrap":
-      return {
-        to: wmon,
-        data: encodeFunctionData({ abi: WNATIVE_ABI, functionName: "withdraw", args: [step.amount] }),
-      };
-    case "swap": {
-      const router = UNISWAP.swapRouter02 as Address;
-      if (step.tokens.length === 2) {
-        if (step.direction === "exact_in") {
-          return {
-            to: router,
-            data: encodeFunctionData({
-              abi: SWAP_ROUTER_ABI,
-              functionName: "exactInputSingle",
-              args: [
-                {
-                  tokenIn: step.tokens[0],
-                  tokenOut: step.tokens[1],
-                  fee: step.fees[0],
-                  recipient: step.recipient,
-                  amountIn: step.amountIn!,
-                  amountOutMinimum: step.limit,
-                  sqrtPriceLimitX96: 0n,
-                },
-              ],
-            }),
-          };
-        }
-        return {
-          to: router,
-          data: encodeFunctionData({
-            abi: SWAP_ROUTER_ABI,
-            functionName: "exactOutputSingle",
-            args: [
-              {
-                tokenIn: step.tokens[0],
-                tokenOut: step.tokens[1],
-                fee: step.fees[0],
-                recipient: step.recipient,
-                amountOut: step.amountOut!,
-                amountInMaximum: step.limit,
-                sqrtPriceLimitX96: 0n,
-              },
-            ],
-          }),
-        };
-      }
-      if (step.direction === "exact_in") {
-        return {
-          to: router,
-          data: encodeFunctionData({
-            abi: SWAP_ROUTER_ABI,
-            functionName: "exactInput",
-            args: [
-              {
-                path: encodePath(step.tokens, step.fees),
-                recipient: step.recipient,
-                amountIn: step.amountIn!,
-                amountOutMinimum: step.limit,
-              },
-            ],
-          }),
-        };
-      }
-      return {
-        to: router,
-        data: encodeFunctionData({
-          abi: SWAP_ROUTER_ABI,
-          functionName: "exactOutput",
-          args: [
-            {
-              path: encodePath(step.tokens, step.fees, true),
-              recipient: step.recipient,
-              amountOut: step.amountOut!,
-              amountInMaximum: step.limit,
-            },
-          ],
-        }),
-      };
-    }
-    case "transfer":
-      if (!step.token) return { to: step.to, value: step.amount };
-      return {
-        to: step.token.address,
-        data: encodeFunctionData({
-          abi: ERC20_ABI,
-          functionName: "transfer",
-          args: [step.to, step.amount],
-        }),
-      };
-  }
 }
 
 async function submitStep(

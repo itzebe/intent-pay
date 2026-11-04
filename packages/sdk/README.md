@@ -139,6 +139,55 @@ const wallet = await Wallet.connectWalletConnect({
 - **Keys never leave the wallet.** The SDK sends `eth_sendTransaction`; the wallet shows its own
   prompt and signs locally. The SDK never sees, asks for, or stores a key or seed phrase.
 
+## Checkout (merchant orders)
+
+A checkout turns an intent into a payable order with a shareable payment link. Create the
+intent first, then wrap it — the checkout freezes the intent's parameters, so the amount,
+asset and recipient can never change once a link exists.
+
+```ts
+const { intent } = await pay.createIntent({
+  recipient: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603",
+  receiveToken: "USDC",
+  amount: "25",
+  amountMode: "recipient_receives",
+  reference: "ORDER-1001",
+});
+
+const { checkout, token } = await pay.createCheckout({
+  intentId: intent.id,
+  orderReference: "ORDER-1001",
+  idempotencyKey: "order-1001", // a retry returns the same link
+});
+
+// Share this with your customer. The page carries no credential.
+const link = `https://intent-pay-roan.vercel.app/checkout/${token}`;
+```
+
+Your customer's own wallet signs and broadcasts; you only read the outcome:
+
+```ts
+await pay.getCheckout(checkout.id);              // the order + its bound intent
+await pay.listCheckouts();                       // newest first
+
+// For a custom front end, build the calls for the customer's address.
+const prepared = await pay.prepareCheckout(checkout.id, { sender: customerAddress });
+// The customer's wallet sends prepared.calls, then reports the hash back:
+await pay.submitCheckout(checkout.id, { txHashes });
+
+// Independent, on-chain verification — the only thing that completes the order.
+const { verdict, retryable } = await pay.verifyCheckout(checkout.id);
+// verdict: "verified" | "pending" | "not_found" | "unavailable" | "short" | "reverted" | "contradictory"
+
+await pay.getCheckoutEvidence(checkout.id);      // settlement evidence, re-verified live
+await pay.cancelCheckout(checkout.id);           // cancel an unpaid order
+```
+
+The hosted customer page at `/checkout/:token` is a thin client of the public
+`/api/checkout/:token` routes, and the merchant console at `/merchant` is a thin client of
+this same API. The merchant key can **build** and **verify**, but it can never authorize a
+payment — only the customer's wallet can.
+
 ## Webhooks
 
 Register a webhook (the signing secret is shown once):

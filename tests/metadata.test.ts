@@ -116,6 +116,7 @@ describe("public route config", () => {
       "/docs/faq",
       "/docs/developers",
       "/docs/api",
+      "/docs/checkout",
     ]) {
       expect(paths).toContain(p);
     }

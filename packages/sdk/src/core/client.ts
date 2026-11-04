@@ -4,6 +4,8 @@ import { Transport } from "./transport.js";
 import type {
   ApiKeyInfo,
   Capabilities,
+  Checkout,
+  CheckoutSettlement,
   Intent,
   LifecycleEntry,
   PreparedTransaction,
@@ -223,6 +225,109 @@ export class IntentPay {
     return res.deliveries;
   }
 
+  // ── Checkouts (merchant orders) ─────────────────────────────────────────────
+
+  /**
+   * `POST /api/v1/checkouts` — create a payable order for an intent.
+   *
+   * The returned `token` is the public payment-link handle to share with the
+   * customer. Creating a checkout freezes the intent's parameters and makes it
+   * payable; the amount, asset and recipient can never change afterwards.
+   *
+   * Pass a stable `idempotencyKey` so a retried create returns the original
+   * checkout and its link rather than a duplicate.
+   */
+  async createCheckout(input: CreateCheckoutInput): Promise<CreateCheckoutResult> {
+    this.requireCredential();
+    return this.transport.json<CreateCheckoutResult>({
+      method: "POST",
+      path: "/api/v1/checkouts",
+      body: {
+        intentId: input.intentId,
+        ...(input.orderReference ? { orderReference: input.orderReference } : {}),
+        ...(input.ttlSeconds !== undefined ? { ttlSeconds: input.ttlSeconds } : {}),
+        ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      },
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    });
+  }
+
+  /** `GET /api/v1/checkouts/:id` — retrieve an order and its lifecycle. */
+  async getCheckout(id: string): Promise<GetCheckoutResult> {
+    this.requireCredential();
+    return this.transport.json<GetCheckoutResult>({ method: "GET", path: `/api/v1/checkouts/${encodeURIComponent(id)}` });
+  }
+
+  /** `GET /api/v1/checkouts` — list this merchant's orders, newest first. */
+  async listCheckouts(): Promise<Checkout[]> {
+    this.requireCredential();
+    const res = await this.transport.json<{ ok: true; checkouts: Checkout[] }>({ method: "GET", path: "/api/v1/checkouts" });
+    return res.checkouts;
+  }
+
+  /**
+   * `POST /api/v1/checkouts/:id/prepare` — build the calls for the customer's wallet.
+   *
+   * **Builds only.** The customer's wallet must sign and broadcast; the merchant
+   * credential can never authorize a payment.
+   */
+  async prepareCheckout(id: string, input: PrepareInput): Promise<PreparedTransaction> {
+    this.requireCredential();
+    return this.transport.json<PreparedTransaction>({
+      method: "POST",
+      path: `/api/v1/checkouts/${encodeURIComponent(id)}/prepare`,
+      body: { sender: input.sender, ...(input.payToken ? { payToken: input.payToken } : {}) },
+    });
+  }
+
+  /** `POST /api/v1/checkouts/:id/submit` — record the customer's broadcast hash(es). */
+  async submitCheckout(id: string, input: SubmitInput): Promise<SubmitResult> {
+    this.requireCredential();
+    const body = "txHash" in input ? { txHash: input.txHash } : { txHashes: input.txHashes };
+    return this.transport.json<SubmitResult>({
+      method: "POST",
+      path: `/api/v1/checkouts/${encodeURIComponent(id)}/submit`,
+      body,
+      nonIdempotent: true,
+    });
+  }
+
+  /**
+   * `POST /api/v1/checkouts/:id/verify` — independently verify settlement.
+   *
+   * Only a `verified` verdict completes the order. `pending`/`not_found`/
+   * `unavailable` are returned with `retryable: true`; the order is never
+   * falsely completed.
+   */
+  async verifyCheckout(id: string, input: VerifyInput = {}): Promise<CheckoutVerifyResult> {
+    this.requireCredential();
+    const body = input.txHash ? { txHash: input.txHash } : {};
+    return this.transport.json<CheckoutVerifyResult>({
+      method: "POST",
+      path: `/api/v1/checkouts/${encodeURIComponent(id)}/verify`,
+      body,
+    });
+  }
+
+  /** `POST /api/v1/checkouts/:id/cancel` — cancel an unpaid order. */
+  async cancelCheckout(id: string): Promise<{ checkout: Checkout; canceled: boolean }> {
+    this.requireCredential();
+    return this.transport.json<{ checkout: Checkout; canceled: boolean }>({
+      method: "POST",
+      path: `/api/v1/checkouts/${encodeURIComponent(id)}/cancel`,
+      body: {},
+    });
+  }
+
+  /** `GET /api/v1/checkouts/:id/evidence` — settlement evidence, re-verified live. */
+  async getCheckoutEvidence(id: string): Promise<CheckoutEvidence> {
+    this.requireCredential();
+    return this.transport.json<CheckoutEvidence>({
+      method: "GET",
+      path: `/api/v1/checkouts/${encodeURIComponent(id)}/evidence`,
+    });
+  }
+
   // ── Account ─────────────────────────────────────────────────────────────────
 
   /** `GET /api/v1/developers` — this tenant and its key metadata (never secrets). */
@@ -288,6 +393,80 @@ export type PaymentStatus = {
 export type CreateWebhookInput = { url: string; events: string[]; description?: string };
 
 export type CreateWebhookResult = { webhook: Webhook; secret: string };
+
+// ── Checkout (merchant order) input / result types ────────────────────────────
+
+export type CreateCheckoutInput = {
+  /** The intent this order is bound to (created first, via `createIntent`). */
+  intentId: string;
+  /** Your own order id, for reconciliation. */
+  orderReference?: string;
+  /** Link lifetime in seconds (60–86400). Defaults to 30 minutes. */
+  ttlSeconds?: number;
+  /** A stable key so a retried create returns the original checkout. */
+  idempotencyKey?: string;
+};
+
+export type CreateCheckoutResult = {
+  checkout: Checkout;
+  /** The public payment-link handle to share with the customer. */
+  token: string;
+  created: boolean;
+};
+
+export type GetCheckoutResult = {
+  checkout: Checkout;
+  intent: {
+    id: string;
+    state: Intent["state"];
+    chainId: number;
+    recipient: string;
+    receiveToken: string;
+    receiveTokenAddress: string;
+    amountMode: Intent["amountMode"];
+    amount: string;
+    payToken: string | null;
+    authorized: boolean;
+  } | null;
+  lifecycle: LifecycleEntry[];
+};
+
+export type CheckoutVerifyResult = {
+  verdict: CheckoutSettlement["verdict"];
+  /** Present once the order reaches a terminal state. */
+  state?: Intent["state"];
+  checkout?: Checkout;
+  settlement?: CheckoutSettlement;
+  delivered?: string | null;
+  blockNumber?: number | null;
+  retryable?: boolean;
+  message?: string;
+};
+
+export type CheckoutEvidence = {
+  checkout: Checkout;
+  intent: {
+    id: string;
+    state: Intent["state"];
+    chainId: number;
+    recipient: string;
+    receiveToken: string;
+    receiveTokenAddress: string;
+    amountMode: Intent["amountMode"];
+    amount: string;
+    payToken: string | null;
+    reference: string | null;
+    authorized: boolean;
+    frozenMatchesCurrent: boolean;
+    fingerprint: string;
+  };
+  authorizedParams: Record<string, unknown> | null;
+  txHashes: string[];
+  lifecycle: LifecycleEntry[];
+  settlement: CheckoutSettlement | null;
+  /** True only when the chain proves the payment was delivered. */
+  settled: boolean;
+};
 
 export type AccountInfo = {
   developer: { id: string; name: string; status: string };

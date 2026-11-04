@@ -66,9 +66,41 @@ export const WEBHOOK_EVENTS = [
   "payment.failed",
   "payment.rejected",
   "intent.expired",
+  "checkout.created",
+  "checkout.expired",
+  "payment.submitted",
+  "payment.confirmed",
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
+
+/**
+ * The merchant-facing checkout status, derived from the bound intent's real
+ * lifecycle. `completed` is only ever reached after settlement is verified.
+ */
+export const CHECKOUT_STATES = ["open", "completed", "expired", "canceled", "failed"] as const;
+export type CheckoutStatus = (typeof CHECKOUT_STATES)[number];
+
+/**
+ * The customer-facing payment phase. Deliberately finer-grained than the status
+ * so a checkout UI never says "paid" before the chain proves delivery.
+ */
+export const CHECKOUT_PHASES = [
+  "awaiting_payment",
+  "awaiting_wallet",
+  "transaction_submitted",
+  "transaction_confirmed",
+  "payment_verified",
+  "payment_failed",
+  "expired",
+  "canceled",
+] as const;
+export type CheckoutPhase = (typeof CHECKOUT_PHASES)[number];
+
+/** True only when the checkout's payment is proven settled on-chain. */
+export function isCheckoutPaid(phase: CheckoutPhase): boolean {
+  return phase === "payment_verified";
+}
 
 /** How the recipient's amount is interpreted. */
 export type AmountMode = "recipient_receives" | "i_spend";
@@ -96,6 +128,56 @@ export type LifecycleEntry = {
   state: IntentState;
   at: string;
   detail: string | null;
+};
+
+/**
+ * A merchant checkout session — the payable *order* a merchant shares with a
+ * customer. It binds a public payment token to an intent; the amount, asset and
+ * recipient live on the intent and are frozen at creation.
+ */
+export type Checkout = {
+  id: string;
+  object: "checkout";
+  status: CheckoutStatus;
+  phase: CheckoutPhase;
+  intentId: string;
+  orderReference: string | null;
+  /** The public payment-link handle (safe to share with the customer). */
+  token: string;
+  tokenHint: string;
+  expiresAt: string;
+  completedAt: string | null;
+  canceledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** The customer-facing view of a checkout, fetched by its public token. */
+export type PublicCheckout = {
+  id: string;
+  object: "checkout";
+  status: CheckoutStatus;
+  phase: CheckoutPhase;
+  orderReference: string | null;
+  chainId: number;
+  recipient: string;
+  receiveToken: string;
+  receiveTokenAddress: string;
+  amountMode: AmountMode;
+  amount: string;
+  payToken: string | null;
+  expiresAt: string;
+  createdAt: string;
+};
+
+/** The settlement verdict for a checkout's on-chain payment. */
+export type CheckoutSettlement = {
+  verdict: "verified" | "pending" | "reverted" | "short" | "not_found" | "unavailable" | "invalid_hash";
+  delivered: string | null;
+  expected: string;
+  blockNumber: number | null;
+  chainId: number | null;
+  message: string;
 };
 
 /** A registered webhook destination (never carries its signing secret). */
@@ -234,8 +316,13 @@ export type Capabilities = {
   network: { key: string; name: string; chainId: number; explorer: string };
   networks: { key: string; chainId: number }[];
   assets: AssetCapability[];
+  /** Endpoints authenticated with an API key. */
   endpoints: { method: string; path: string; description: string }[];
+  /** Public, unauthenticated endpoints (the customer's token-authenticated checkout). */
+  publicEndpoints?: { method: string; path: string; description: string }[];
   intentStates: IntentState[];
+  /** The states a checkout can be in, when merchant checkouts are enabled. */
+  checkoutStates?: CheckoutStatus[];
   webhookEvents: string[];
   features: {
     frozenParameters: boolean;
@@ -245,6 +332,10 @@ export type Capabilities = {
     webhookMaxAttempts: number;
     credentialCanSign: boolean;
     keyCustody: boolean;
+    /** Merchant checkout sessions (payment links + QR) over the same intents. */
+    merchantCheckouts?: boolean;
+    /** The customer's own wallet authorizes every transaction; never the merchant. */
+    customerAuthorizesPayment?: boolean;
   };
   storage: {
     kind: string;

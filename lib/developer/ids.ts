@@ -29,10 +29,20 @@ export const newIntentId = () => newId("int");
 export const newIntentEventId = () => newId("evt");
 export const newWebhookId = () => newId("wh");
 export const newDeliveryId = () => newId("dlv");
+export const newCheckoutId = () => newId("chk");
 /** A unique event id, stable across a delivery's retries. */
 export const newEventId = () => newId("evt");
 
 /** A random secret for a webhook signing key (hex). */
 export function newWebhookSecret(): string {
   return `whsec_${randomBytes(24).toString("hex")}`;
+}
+
+/**
+ * A public, unguessable checkout token. 32 bytes of CSPRNG entropy, so a link
+ * cannot be enumerated. The plaintext is returned once and only its hash is
+ * stored.
+ */
+export function newCheckoutToken(): string {
+  return `chk_${randomBytes(32).toString("hex")}`;
 }

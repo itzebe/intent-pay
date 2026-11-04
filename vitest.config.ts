@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    exclude: ["**/node_modules/**", "packages/**"],
     // `node:sqlite` is a Node builtin; never let Vite try to bundle it.
     server: { deps: { external: [/^node:sqlite$/] } },
   },

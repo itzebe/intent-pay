@@ -82,6 +82,34 @@ export default function DeveloperApiDocs() {
         </Callout>
       </DocSection>
 
+      <DocSection title="TypeScript SDK">
+        <P>
+          <Code>@intentpay/sdk</Code> wraps this API with typed methods and an error model, and adds
+          the browser wallet layer. It ships three entry points so nothing you do not use enters your
+          bundle:
+        </P>
+        <div className="card-flat overflow-x-auto p-4">
+          <pre className="font-mono text-xs leading-relaxed text-white/70">{`npm install @intentpay/sdk
+# for mobile / QR wallets:
+npm install @walletconnect/ethereum-provider`}</pre>
+        </div>
+        <UL>
+          <LI><Code>@intentpay/sdk</Code> — the API client. <strong>Server only.</strong> It holds your key and refuses to construct in a browser.</LI>
+          <LI><Code>@intentpay/sdk/wallet</Code> — EIP-1193 discovery (MetaMask, Rabby, Coinbase, Trust, any injected wallet) plus WalletConnect, with Monad enforced before every send.</LI>
+          <LI><Code>@intentpay/sdk/webhooks</Code> — constant-time webhook signature verification.</LI>
+        </UL>
+        <Callout tone="warn" title="The API key never goes to the browser">
+          The client throws <Code>client_credential_in_browser</Code> if you build a keyed client in a
+          browser. Keep the key on your server, have the server prepare the calls, and let the browser
+          only sign them — that is the intended split and the one the SDK enforces.
+        </Callout>
+        <P>
+          A complete runnable example lives in the repository at{" "}
+          <Code>examples/quickstart</Code>; the package README documents every method, the retry
+          rules, and the error classes.
+        </P>
+      </DocSection>
+
       <DocSection title="Accounts and keys">
         <UL>
           <LI><Code>POST /api/v1/developers</Code> — create an account and its first key. In production this requires the admin token; outside production it is open. Returns the key <strong>once</strong>.</LI>

@@ -80,6 +80,12 @@ const DEVELOPER_INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_api_deliveries_due ON ${qi("api_webhook_deliveries")} (${qi("status")}, ${qi("next_attempt_at")})`,
 ];
 
+/** Indexes for the merchant checkout read patterns (per-tenant list, by intent). */
+const CHECKOUT_INDEXES: string[] = [
+  `CREATE INDEX IF NOT EXISTS idx_api_checkouts_dev ON ${qi("api_checkouts")} (${qi("developer_id")}, ${qi("created_at")} DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_api_checkouts_intent ON ${qi("api_checkouts")} (${qi("intent_id")})`,
+];
+
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
@@ -95,6 +101,11 @@ export const MIGRATIONS: Migration[] = [
     // v1 tables via IF NOT EXISTS).
     id: 2,
     statements: [...TABLES, ...DEVELOPER_INDEXES],
+  },
+  {
+    // v3 — merchant checkout sessions.
+    id: 3,
+    statements: [...TABLES, ...CHECKOUT_INDEXES],
   },
 ];
 

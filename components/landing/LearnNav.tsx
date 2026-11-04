@@ -12,6 +12,8 @@ const LEARN_LINKS = [
   { href: "/docs/security", label: "Security & Trust", blurb: "Guards, bounds and honest limits" },
   { href: "/docs/roadmap", label: "Roadmap", blurb: "Built, in progress, and planned" },
   { href: "/docs/faq", label: "FAQ", blurb: "Straight answers to common questions" },
+  { href: "/docs/developers", label: "Developers", blurb: "Build on the Intent Pay API" },
+  { href: "/docs/checkout", label: "Checkout", blurb: "Accept payments as a merchant" },
 ] as const;
 
 /**

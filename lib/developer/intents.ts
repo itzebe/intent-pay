@@ -175,6 +175,7 @@ export async function transition(
   to: IntentState,
   detail: string | null = null,
   now = Date.now(),
+  opts: { silent?: boolean } = {},
 ): Promise<TransitionResult> {
   const from = await currentState(intent.id);
   if (!canTransition(from, to)) {
@@ -185,9 +186,12 @@ export async function transition(
     };
   }
   await appendEvent(intent, to, detail, now);
-  // Only emit a webhook for a state that has a public event.
+  // Only emit a webhook for a state that has a public event. `silent` is used by
+  // the merchant checkout flow, which emits its own order-scoped events
+  // (`payment.submitted`, …) instead of the intent-level ones, so a merchant
+  // receives exactly one event per fact rather than two.
   const event = STATE_EVENT[to];
-  if (event) {
+  if (event && !opts.silent) {
     await enqueueEvent({
       developerId: intent.developerId,
       event: event as Parameters<typeof enqueueEvent>[0]["event"],
@@ -196,6 +200,24 @@ export async function transition(
     });
   }
   return { ok: true, state: to };
+}
+
+/** The transaction hashes recorded by `submit`, oldest first. */
+export async function submittedTxHashes(intentId: string): Promise<string[]> {
+  const events = await getStore().findMany("apiIntentEvents", { intentId }, { orderBy: "at", dir: "asc" });
+  const out: string[] = [];
+  for (const e of events) {
+    if (e.detail?.startsWith("tx:")) {
+      for (const h of e.detail.slice(3).split(",")) if (h) out.push(h);
+    }
+  }
+  return out;
+}
+
+/** The first (primary) transaction hash recorded at submit, or null. */
+export async function checkoutSubmittedHash(intentId: string): Promise<string | null> {
+  const hashes = await submittedTxHashes(intentId);
+  return hashes[0] ?? null;
 }
 
 /** The public data payload for an intent's state-change event. */

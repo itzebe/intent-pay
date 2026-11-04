@@ -40,8 +40,10 @@ export type StoreKind = "postgres" | "sqlite" | "memory";
  *
  * v2 adds the external developer API tables (developers, API keys, intents,
  * intent events, webhooks, webhook deliveries).
+ * v3 adds merchant checkout sessions (`apiCheckouts`), which bind a payable
+ * order to a developer-API intent.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** A unique-constraint violation, shared by both adapters. */
 export class StoreConflictError extends Error {
@@ -343,6 +345,55 @@ export type ApiWebhookDeliveryRecord = {
   updatedAt: number;
 };
 
+/**
+ * A merchant checkout session.
+ *
+ * A checkout is the *payable order*: a developer creates one (bound to a
+ * developer-API intent that holds the amount/asset/recipient), shares its
+ * payment link with a customer, and reads its status back. It deliberately does
+ * **not** duplicate the payment parameters — the amount, asset and recipient
+ * live on the bound intent, so they cannot drift or be re-specified, and the
+ * existing freeze-before-sign protection applies unchanged.
+ *
+ * The `token` is a public payment-link handle: 256 bits of CSPRNG entropy that a
+ * customer's browser uses to read the session. It is a bearer capability for one
+ * order (it grants only the ability to view and pay that order — money flows to
+ * the merchant), so it is stored so the merchant can retrieve and copy the link,
+ * exactly as a hosted-checkout URL is. It is never a credential: it cannot read
+ * another tenant's data, mutate an authorized order, or move funds anywhere but
+ * to the merchant's own recipient.
+ */
+export type ApiCheckoutRecord = {
+  /** Opaque public id (`chk_…`). */
+  id: string;
+  /** The owning developer (tenant). Every read is scoped by this. */
+  developerId: string;
+  /** The bound developer-API intent that holds the payment parameters. */
+  intentId: string;
+  /** The merchant's own order reference, echoed back for their mapping. */
+  orderReference: string | null;
+  /** The public, unguessable payment-link token (unique). */
+  token: string;
+  /** A short display handle (last 8 chars) for the dashboard list. */
+  tokenHint: string;
+  /**
+   * The derived lifecycle status, mirrored here for fast listing:
+   * "open" | "completed" | "expired" | "canceled" | "failed". The *payment*
+   * truth (submitted/confirmed/verified) always comes from the bound intent.
+   */
+  status: string;
+  /** Unix ms expiry — after this the checkout can no longer be paid. */
+  expiresAt: number;
+  /** Unix ms the checkout was paid+verified, or null. */
+  completedAt: number | null;
+  /** Unix ms the checkout was canceled by the merchant, or null. */
+  canceledAt: number | null;
+  /** The idempotency key supplied at creation, if any. */
+  idempotencyKey: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
 /** The row shapes each adapter must persist. */
 export type StoreTables = {
   referrals: ReferralRecord;
@@ -357,6 +408,7 @@ export type StoreTables = {
   apiIntentEvents: ApiIntentEventRecord;
   apiWebhooks: ApiWebhookRecord;
   apiWebhookDeliveries: ApiWebhookDeliveryRecord;
+  apiCheckouts: ApiCheckoutRecord;
 };
 
 export type TableName = keyof StoreTables;

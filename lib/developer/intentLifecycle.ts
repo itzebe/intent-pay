@@ -91,6 +91,11 @@ export function isAuthorizedOrBeyond(state: IntentState): boolean {
  * The webhook event name emitted when an intent enters each state. `validating`
  * and `awaiting_authorization` are internal checkpoints with no dedicated event
  * in the public contract, so they emit nothing (see `eventsForState`).
+ *
+ * These are the *intent-level* (transaction-level) events. An intent driven
+ * through a merchant checkout emits the checkout-scoped `checkout.*` / `payment.*`
+ * events instead (see `CHECKOUT_EVENTS`), so a merchant receives exactly one
+ * event per lifecycle fact rather than two views of the same one.
  */
 export const STATE_EVENT: Partial<Record<IntentState, string>> = {
   created: "intent.created",
@@ -104,6 +109,24 @@ export const STATE_EVENT: Partial<Record<IntentState, string>> = {
   expired: "intent.expired",
 };
 
+/**
+ * The checkout-scoped (merchant/order-level) events.
+ *
+ * A merchant thinks in orders, not transactions, so a checkout emits
+ * `payment.submitted` when the customer's transaction is recorded,
+ * `payment.confirmed` when the chain confirms the receipt, and
+ * `payment.verified` only after independent settlement verification proves the
+ * recipient was paid. `payment.failed` covers a reverted/short settlement.
+ */
+export const CHECKOUT_EVENTS = [
+  "checkout.created",
+  "checkout.expired",
+  "payment.submitted",
+  "payment.confirmed",
+  "payment.verified",
+  "payment.failed",
+] as const;
+
 /** Every webhook event the API can emit. */
 export const WEBHOOK_EVENTS = [
   "intent.created",
@@ -115,6 +138,10 @@ export const WEBHOOK_EVENTS = [
   "payment.failed",
   "payment.rejected",
   "intent.expired",
+  "checkout.created",
+  "checkout.expired",
+  "payment.submitted",
+  "payment.confirmed",
 ] as const;
 
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];

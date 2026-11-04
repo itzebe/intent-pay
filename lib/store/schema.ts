@@ -275,6 +275,30 @@ export const SCHEMA: TableSchema[] = [
     checks: [`status IN ('pending', 'delivered', 'failed')`],
     foreignKeys: ["FOREIGN KEY(webhook_id) REFERENCES api_webhooks(id)"],
   },
+  {
+    name: "apiCheckouts",
+    primaryKeys: ["id"],
+    columns: [
+      { field: "id", column: "id", type: "text" },
+      { field: "developerId", column: "developer_id", type: "text" },
+      { field: "intentId", column: "intent_id", type: "text" },
+      { field: "orderReference", column: "order_reference", type: "text", nullable: true },
+      { field: "token", column: "token", type: "text" },
+      { field: "tokenHint", column: "token_hint", type: "text" },
+      { field: "status", column: "status", type: "text" },
+      { field: "expiresAt", column: "expires_at", type: "int" },
+      { field: "completedAt", column: "completed_at", type: "int", nullable: true },
+      { field: "canceledAt", column: "canceled_at", type: "int", nullable: true },
+      { field: "idempotencyKey", column: "idempotency_key", type: "text", nullable: true },
+      { field: "createdAt", column: "created_at", type: "int" },
+      { field: "updatedAt", column: "updated_at", type: "int" },
+    ],
+    // One intent backs at most one checkout (a payable order is created once),
+    // the token is globally unique, and an idempotency key is unique per tenant.
+    uniqueGroups: [["intentId"], ["token"], ["developerId", "idempotencyKey"]],
+    checks: [`status IN ('open', 'completed', 'expired', 'canceled', 'failed')`],
+    foreignKeys: ["FOREIGN KEY(intent_id) REFERENCES api_intents(id)"],
+  },
 ];
 
 export function schemaFor(table: TableName): TableSchema {

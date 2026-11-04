@@ -47,13 +47,33 @@ export async function GET() {
       { method: "POST", path: "/api/v1/intents/{id}/submit", description: "Record the broadcast transaction hash(es)." },
       { method: "POST", path: "/api/v1/intents/{id}/verify", description: "Independently verify settlement on-chain." },
       { method: "GET", path: "/api/v1/intents", description: "List this developer's intents." },
+      { method: "POST", path: "/api/v1/checkouts", description: "Create a merchant checkout session for an intent." },
+      { method: "GET", path: "/api/v1/checkouts", description: "List this merchant's checkouts." },
+      { method: "GET", path: "/api/v1/checkouts/{id}", description: "Retrieve a checkout and its order status." },
+      { method: "POST", path: "/api/v1/checkouts/{id}/prepare", description: "Build the transaction calls for the customer's wallet." },
+      { method: "POST", path: "/api/v1/checkouts/{id}/submit", description: "Record the customer's broadcast transaction hash(es)." },
+      { method: "POST", path: "/api/v1/checkouts/{id}/verify", description: "Independently verify settlement on-chain." },
+      { method: "POST", path: "/api/v1/checkouts/{id}/cancel", description: "Cancel an eligible (unpaid) checkout." },
+      { method: "GET", path: "/api/v1/checkouts/{id}/evidence", description: "Settlement evidence for a checkout (re-verified live)." },
       { method: "GET", path: "/api/v1/capabilities", description: "This document." },
       { method: "POST", path: "/api/v1/webhooks", description: "Register a webhook destination." },
       { method: "GET", path: "/api/v1/webhooks", description: "List webhook destinations." },
       { method: "DELETE", path: "/api/v1/webhooks/{id}", description: "Delete a webhook destination." },
       { method: "GET", path: "/api/v1/webhooks/{id}/deliveries", description: "Delivery history for a webhook." },
     ],
+    /**
+     * Public, unauthenticated endpoints. `/api/checkout/{token}` is the customer's
+     * payment page API — authenticated by the payment-link token, never an API
+     * key (the customer has no credential and must never be given the merchant's).
+     */
+    publicEndpoints: [
+      { method: "GET", path: "/api/checkout/{token}", description: "The customer's view of a checkout (by payment-link token)." },
+      { method: "POST", path: "/api/checkout/{token}/prepare", description: "Build the calls for the customer's wallet." },
+      { method: "POST", path: "/api/checkout/{token}/submit", description: "Record the customer's broadcast transaction hash(es)." },
+      { method: "POST", path: "/api/checkout/{token}/verify", description: "Independently verify settlement on-chain." },
+    ],
     intentStates: INTENT_STATES,
+    checkoutStates: ["open", "completed", "expired", "canceled", "failed"],
     webhookEvents: WEBHOOK_EVENTS,
     features: {
       /** Parameters are frozen at authorization and can never change afterwards. */
@@ -67,6 +87,10 @@ export async function GET() {
       credentialCanSign: false,
       /** No private-key custody anywhere in the API. */
       keyCustody: false,
+      /** Merchant checkout sessions (payment links + QR) over the same intents. */
+      merchantCheckouts: true,
+      /** The customer's own wallet authorizes every transaction; never the merchant. */
+      customerAuthorizesPayment: true,
     },
     storage: {
       kind: storage.kind,

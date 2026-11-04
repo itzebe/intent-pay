@@ -1,5 +1,6 @@
 import { isEvmAddress } from "@/lib/format";
 import type { ApiIntentRecord, ApiWebhookDeliveryRecord } from "@/lib/store/types";
+import { isValidTxHash } from "@/lib/server/referral/verify";
 import type { IntentState } from "./intentLifecycle";
 
 /**
@@ -134,4 +135,48 @@ export function validateWebhookUrl(url: string): { ok: true; url: string } | { o
   }
   if (parsed.protocol !== "https:") return { ok: false, message: "A webhook URL must use HTTPS." };
   return { ok: true, url: parsed.toString() };
+}
+
+export const MAX_ORDER_REFERENCE_LEN = 120;
+
+/** A validated create-checkout request. */
+export type ParsedCreateCheckout = {
+  intentId: string;
+  orderReference: string | null;
+  ttlMs: number | null;
+  idempotencyKey: string | null;
+};
+
+export function parseCreateCheckout(body: Record<string, unknown>, headerIdempotencyKey?: string | null): ParsedCreateCheckout | ParseError {
+  const intentId = typeof body.intentId === "string" ? body.intentId.trim() : "";
+  if (!intentId) {
+    return { ok: false, code: "invalid_request", message: "`intentId` is required.", detail: "intentId" };
+  }
+  const orderReference =
+    typeof body.orderReference === "string" && body.orderReference.trim()
+      ? body.orderReference.trim().slice(0, MAX_ORDER_REFERENCE_LEN)
+      : null;
+  let ttlMs: number | null = null;
+  if (body.ttlSeconds !== undefined) {
+    const seconds = Number(body.ttlSeconds);
+    // Bound the TTL: a checkout that never expires is a payment link that can be
+    // paid at a long-stale price, so it is refused rather than accepted.
+    if (!Number.isFinite(seconds) || seconds < 60 || seconds > 24 * 60 * 60) {
+      return { ok: false, code: "invalid_request", message: "`ttlSeconds` must be between 60 and 86400.", detail: "ttlSeconds" };
+    }
+    ttlMs = Math.floor(seconds) * 1000;
+  }
+  const bodyKey = typeof body.idempotencyKey === "string" && body.idempotencyKey.trim() ? body.idempotencyKey.trim().slice(0, MAX_IDEMPOTENCY_LEN) : null;
+  const idempotencyKey = (headerIdempotencyKey?.trim().slice(0, MAX_IDEMPOTENCY_LEN) || bodyKey) ?? null;
+  return { intentId, orderReference, ttlMs, idempotencyKey };
+}
+
+/** A validated checkout submission request. */
+export function parseCheckoutSubmission(body: Record<string, unknown>): { hashes: string[] } | ParseError {
+  const rawList = Array.isArray(body.txHashes) ? body.txHashes : body.txHash !== undefined ? [body.txHash] : [];
+  const hashes = rawList.filter((h): h is string => typeof h === "string" && isValidTxHash(h));
+  if (hashes.length === 0 || hashes.length !== rawList.length) {
+    return { ok: false, code: "invalid_request", message: "Provide one or more valid 0x transaction hashes.", detail: "txHash" };
+  }
+  return { hashes };
 }

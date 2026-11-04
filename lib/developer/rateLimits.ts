@@ -8,7 +8,7 @@ import { rateLimit, tooManyResponse } from "@/lib/server/rateLimit";
  * legitimate tenant. The store-backed fixed-window limiter is reused so the
  * behaviour is identical across backends and testable without a network.
  */
-export type LimitName = "read" | "write" | "create_intent" | "prepare" | "submit" | "verify" | "webhook";
+export type LimitName = "read" | "write" | "create_intent" | "prepare" | "submit" | "verify" | "webhook" | "checkout_public";
 
 const LIMITS: Record<LimitName, { limit: number; windowMs: number }> = {
   read: { limit: 300, windowMs: 60_000 },
@@ -18,6 +18,9 @@ const LIMITS: Record<LimitName, { limit: number; windowMs: number }> = {
   submit: { limit: 60, windowMs: 60_000 },
   verify: { limit: 60, windowMs: 60_000 },
   webhook: { limit: 30, windowMs: 60_000 },
+  // The public (token-authenticated) checkout endpoints are keyed by the token,
+  // not a tenant, so a leaked link cannot be used to amplify routing work.
+  checkout_public: { limit: 120, windowMs: 60_000 },
 };
 
 export type RateOutcome = { ok: true; remaining: number; limit: number } | { ok: false; resetAt: number };

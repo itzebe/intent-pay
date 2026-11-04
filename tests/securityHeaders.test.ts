@@ -28,6 +28,7 @@ function headerMap(rules: { source: string; headers: { key: string; value: strin
 afterEach(() => {
   delete process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
   delete process.env.NEXT_PUBLIC_MONAD_RPC_URL;
+  delete process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
 });
 
 describe("security headers (production)", () => {
@@ -67,6 +68,24 @@ describe("security headers (production)", () => {
     const config = await loadConfig("production");
     const api = headerMap(await config.headers(), "/api/:path*");
     expect(api.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("keeps frame-src 'none' and no WalletConnect origins when WC is not configured", async () => {
+    const config = await loadConfig("production");
+    const csp = headerMap(await config.headers(), "/:path*").get("Content-Security-Policy")!;
+    expect(csp).toContain("frame-src 'none'");
+    expect(csp).not.toContain("walletconnect.com");
+    expect(csp).not.toContain("secure.walletconnect.org");
+  });
+
+  it("relaxes the CSP for the WalletConnect relay and QR modal only when configured", async () => {
+    process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID = "test-project-id";
+    const config = await loadConfig("production");
+    const csp = headerMap(await config.headers(), "/:path*").get("Content-Security-Policy")!;
+    expect(csp).toContain("wss://relay.walletconnect.com");
+    expect(csp).toContain("https://verify.walletconnect.org");
+    expect(csp).toContain("https://secure.walletconnect.org");
+    expect(csp).not.toContain("frame-src 'none'");
   });
 });
 

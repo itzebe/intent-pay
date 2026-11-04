@@ -223,6 +223,20 @@ describe("capability reporting reflects the implementation", () => {
     expect(json.gasPayment).toBeUndefined();
     expect(json.mevProtection.active).toBe(false);
   });
+
+  it("reports wallet connectivity honestly: injected always, WalletConnect only when configured", async () => {
+    setStore(new MemoryStore());
+    delete process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+    let json = await (await capabilitiesGET()).json();
+    expect(json.wallets.injected).toEqual({ eip6963: true, legacyInjected: true });
+    expect(json.wallets.walletConnect.configured).toBe(false);
+    expect(json.wallets.walletConnect.registration).toMatch(/reown\.com/);
+
+    process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID = "proj_123";
+    json = await (await capabilitiesGET()).json();
+    expect(json.wallets.walletConnect.configured).toBe(true);
+    delete process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+  });
 });
 
 /**

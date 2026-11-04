@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { PaymentProvider, usePaymentFlow } from "@/lib/hooks/usePayment";
-import { useWallet } from "@/lib/hooks/useWallet";
+import { useWallet, WalletProvider } from "@/lib/hooks/useWallet";
 import { Hero, HowItWorks } from "@/components/landing/Hero";
 import { AdvancedDiagnostics } from "@/components/landing/AdvancedDiagnostics";
 import { LearnNav } from "@/components/landing/LearnNav";
@@ -42,13 +42,7 @@ function Shell() {
           </div>
           <div className="flex items-center gap-2.5">
             <LearnNav />
-            <ConnectButton
-              status={wallet.status}
-              address={wallet.address}
-              hasProvider={wallet.hasProvider}
-              onConnect={wallet.connect}
-              onDisconnect={wallet.disconnect}
-            />
+            <ConnectButton />
           </div>
         </div>
         {wallet.error && (
@@ -95,8 +89,12 @@ function Shell() {
 
 export default function AppShell() {
   return (
-    <PaymentProvider>
-      <Shell />
-    </PaymentProvider>
+    <ErrorBoundary scope="app">
+      <WalletProvider>
+        <PaymentProvider>
+          <Shell />
+        </PaymentProvider>
+      </WalletProvider>
+    </ErrorBoundary>
   );
 }

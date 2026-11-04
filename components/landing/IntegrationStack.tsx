@@ -30,6 +30,7 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
   const alchemyReachable = caps.gas.alchemyReachable ?? caps.gas.alchemy;
   const zerionConfigured = caps.wallet.zerionConfigured ?? caps.wallet.zerion;
   const zerionReachable = caps.wallet.zerionReachable ?? caps.wallet.zerion;
+  const wcConfigured = caps.wallets?.walletConnect.configured ?? false;
 
   // Alchemy is the RPC transport (and an optional market-price source). It is
   // not a gas sponsor — gas is always paid in MON by the standard EOA path.
@@ -71,10 +72,18 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
       active: true,
       detail: "Live USD pricing for Monad tokens",
     },
+    {
+      name: "WalletConnect",
+      role: "Mobile & QR wallets",
+      active: wcConfigured,
+      detail: wcConfigured
+        ? "Mobile wallets via QR / deep link"
+        : "Set NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to enable",
+    },
   ];
 
   return (
-    <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
       {items.map((it) => (
         <div
           key={it.name}

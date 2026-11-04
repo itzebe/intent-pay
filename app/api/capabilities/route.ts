@@ -85,6 +85,21 @@ export async function GET() {
       positions: zerion.reachable,
       balances: zerion.reachable,
     },
+    /**
+     * Wallet connectivity. Injected wallets (MetaMask, Rabby, Coinbase Wallet,
+     * Trust Wallet, …) are discovered in the browser via EIP-6963 and need no
+     * server configuration. WalletConnect additionally needs a project id
+     * registered at https://dashboard.reown.com, exposed to the browser as
+     * NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID. Reported honestly so the UI can
+     * offer or withhold the option rather than faking a session.
+     */
+    wallets: {
+      injected: { eip6963: true, legacyInjected: true },
+      walletConnect: {
+        configured: Boolean(process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim()),
+        registration: "https://dashboard.reown.com",
+      },
+    },
     gas: {
       /** The network fee is always paid in the native asset (MON). */
       mode: "native",

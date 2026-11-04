@@ -26,6 +26,14 @@ export type Capabilities = {
     zerionReachable?: boolean;
     zerionError?: string;
   };
+  /**
+   * Wallet connectivity capability. Injected wallets are always discoverable in
+   * the browser; WalletConnect is offered only when configured.
+   */
+  wallets?: {
+    injected: { eip6963: boolean; legacyInjected: boolean };
+    walletConnect: { configured: boolean; registration: string };
+  };
   gas: {
     /** The network fee is always paid in the native asset (MON). */
     mode: "native";

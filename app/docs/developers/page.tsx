@@ -42,6 +42,7 @@ npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # strict typecheck`}
           <LI><Code>lib/providers/*</Code> — the routing provider interface and the live Uniswap V3 engine.</LI>
           <LI><Code>lib/server/*</Code> — server-only concerns: quote orchestration, balances/discovery, pricing, diagnostics, optimizer.</LI>
           <LI><Code>lib/execution/*</Code> — plan construction, ABIs, execution, the signing guard and delivery verification.</LI>
+          <LI><Code>lib/wallet/*</Code> — wallet connectivity: EIP-6963 injected-wallet discovery, the WalletConnect connector, chain params and the connection lifecycle rules.</LI>
           <LI><Code>lib/hooks/*</Code> — React hooks for wallet, payment flow, optimizer and capabilities.</LI>
           <LI><Code>app/api/*</Code> — HTTP routes (quote, balances, tokens, optimize, nlp, partial, capabilities, diagnostics, health).</LI>
           <LI><Code>components/*</Code> — the UI: composer, review sheet, wallet bar, landing, docs.</LI>
@@ -84,6 +85,7 @@ npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # strict typecheck`}
           <LI><Code>MONAD_RPC_URL</Code> / <Code>NEXT_PUBLIC_MONAD_RPC_URL</Code> — RPC transport.</LI>
           <LI><Code>ALCHEMY_API_KEY</Code> — Alchemy RPC and the Alchemy Prices source (not gas abstraction).</LI>
           <LI><Code>ZERION_API_KEY</Code> — wallet asset discovery and USD valuation.</LI>
+          <LI><Code>NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID</Code> — mobile / QR wallet support via WalletConnect (Reown). Free project id from <Code>dashboard.reown.com</Code>; optional — injected wallets work without it.</LI>
           <LI><Code>NEXT_PUBLIC_SLIPPAGE_BPS</Code> / <Code>NEXT_PUBLIC_MAX_PRICE_IMPACT_BPS</Code> — execution-protection thresholds.</LI>
           <LI><Code>INTENT_LLM_*</Code> — optional gap-filling for the natural-language parser.</LI>
         </UL>

@@ -112,8 +112,26 @@ export class SqliteStore implements Store {
       const extras = [pk, unique, checks, fks].filter(Boolean).join(", ");
       const table = snake(schema.name);
       this.db.exec(`CREATE TABLE IF NOT EXISTS ${table} (${cols}, ${extras});`);
+      this.addMissingColumns(table, schema);
     }
     this.db.exec(`INSERT OR IGNORE INTO _migrations (id, applied_at) VALUES (${SCHEMA_VERSION}, ${Date.now()});`);
+  }
+
+  /**
+   * Add any column the shared schema declares but an already-existing table
+   * lacks. `CREATE TABLE IF NOT EXISTS` never alters an existing table, so a
+   * database written by an older version would otherwise be missing a new
+   * column and every read of it would fail. Added columns are always nullable
+   * (the schema only grows optional columns), so existing rows stay valid.
+   */
+  private addMissingColumns(table: string, schema: ReturnType<typeof schemaFor>): void {
+    const info = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    const present = new Set(info.map((c) => c.name));
+    for (const col of schema.columns) {
+      if (present.has(col.column)) continue;
+      const type = col.type === "int" || col.type === "bool" ? "INTEGER" : "TEXT";
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col.column} ${type}`);
+    }
   }
 
   async insert<T extends TableName>(table: T, row: StoreTables[T]): Promise<void> {

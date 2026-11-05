@@ -66,6 +66,8 @@ export async function createDeveloperWithKey(input: {
     id: newDeveloperId(),
     name: input.name.slice(0, 120) || "developer",
     status: "active",
+    paymentXpub: null,
+    nextDerivationIndex: 0,
     createdAt: now,
     updatedAt: now,
   };

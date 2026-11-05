@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { apiError, apiOk, readJson } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
-import { checkoutPhase, checkoutStatus, getCheckoutByToken, recordCheckoutFailure, recordCheckoutVerified } from "@/lib/developer/checkouts";
+import { checkoutPhase, checkoutStatus, getCheckoutByToken, recordCheckoutFailure, recordCheckoutVerified, verificationDestination } from "@/lib/developer/checkouts";
 import { drainDueSoon } from "@/lib/developer/webhooks";
 import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
 import { claimTransaction } from "@/lib/developer/claims";
@@ -58,6 +58,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
   const check = await verifySettlement({
     txHash,
     recipient: intent.recipient,
+    destination: verificationDestination(checkout, intent),
     receiveTokenAddress: intent.receiveTokenAddress,
     receiveToken: intent.receiveToken,
     expectedAmount: intent.amount,

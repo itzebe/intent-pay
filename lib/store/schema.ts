@@ -164,6 +164,8 @@ export const SCHEMA: TableSchema[] = [
       { field: "id", column: "id", type: "text" },
       { field: "name", column: "name", type: "text" },
       { field: "status", column: "status", type: "text" },
+      { field: "paymentXpub", column: "payment_xpub", type: "text", nullable: true },
+      { field: "nextDerivationIndex", column: "next_derivation_index", type: "int" },
       { field: "createdAt", column: "created_at", type: "int" },
       { field: "updatedAt", column: "updated_at", type: "int" },
     ],
@@ -290,12 +292,16 @@ export const SCHEMA: TableSchema[] = [
       { field: "completedAt", column: "completed_at", type: "int", nullable: true },
       { field: "canceledAt", column: "canceled_at", type: "int", nullable: true },
       { field: "idempotencyKey", column: "idempotency_key", type: "text", nullable: true },
+      { field: "attributionAddress", column: "attribution_address", type: "text", nullable: true },
+      { field: "derivationIndex", column: "derivation_index", type: "int", nullable: true },
       { field: "createdAt", column: "created_at", type: "int" },
       { field: "updatedAt", column: "updated_at", type: "int" },
     ],
     // One intent backs at most one checkout (a payable order is created once),
-    // the token is globally unique, and an idempotency key is unique per tenant.
-    uniqueGroups: [["intentId"], ["token"], ["developerId", "idempotencyKey"]],
+    // the token is globally unique, an idempotency key is unique per tenant, and
+    // a derived attribution address is globally unique (so two checkouts can
+    // never share a destination).
+    uniqueGroups: [["intentId"], ["token"], ["developerId", "idempotencyKey"], ["attributionAddress"]],
     checks: [`status IN ('open', 'completed', 'expired', 'canceled', 'failed')`],
     foreignKeys: ["FOREIGN KEY(intent_id) REFERENCES api_intents(id)"],
   },

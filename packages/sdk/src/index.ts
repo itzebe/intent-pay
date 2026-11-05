@@ -11,6 +11,7 @@
 export { IntentPay } from "./core/client.js";
 export type {
   AccountInfo,
+  AttributionConfig,
   AuthorizeResult,
   CheckoutEvidence,
   CheckoutVerifyResult,
@@ -73,8 +74,10 @@ export type {
   AmountMode,
   ApiKeyInfo,
   AssetCapability,
+  AttributionMode,
   Capabilities,
   Checkout,
+  CheckoutAttribution,
   CheckoutPhase,
   CheckoutSettlement,
   CheckoutStatus,

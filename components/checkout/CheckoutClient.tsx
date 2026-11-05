@@ -45,6 +45,7 @@ type CheckoutView = {
   payToken: string | null;
   expiresAt: string;
   createdAt: string;
+  attribution?: { mode: "checkout_bound" | "shared_recipient"; destination: string | null; derivationIndex: number | null };
 };
 
 type PreparedCalls = {
@@ -255,6 +256,11 @@ export function CheckoutClient({ token }: { token: string }) {
         <Row label="Recipient">
           <span className="font-mono text-xs text-white/75">{shortAddress(view.recipient, 6)}</span>
         </Row>
+        {view.attribution?.mode === "checkout_bound" && (
+          <Row label="Destination">
+            <span className="text-[11px] text-emerald-200/80">Unique to this order</span>
+          </Row>
+        )}
         <Row label="You receive">
           <span className="flex items-center gap-2 text-sm text-white/80">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/[0.08] text-[10px] font-bold text-white/80">

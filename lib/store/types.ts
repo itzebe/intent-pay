@@ -45,7 +45,7 @@ export type StoreKind = "postgres" | "sqlite" | "memory";
  * v4 adds `apiTxClaims`, the durable `(chainId, txHash)` replay guard: one
  * on-chain transaction can be payment evidence for at most one intent.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** A unique-constraint violation, shared by both adapters. */
 export class StoreConflictError extends Error {
@@ -210,6 +210,16 @@ export type ApiDeveloperRecord = {
   name: string;
   /** "active" | "suspended". A suspended developer cannot authenticate. */
   status: string;
+  /**
+   * A watch-only BIP32 extended **public** key (`xpub…`) the merchant registers
+   * to receive per-checkout destinations. Intent Pay derives each checkout's
+   * unique address from it but never holds a spend key, so this is not custody.
+   * `null` means the merchant has not opted into checkout-bound attribution and
+   * checkouts fall back to the shared recipient (weaker, and labelled as such).
+   */
+  paymentXpub: string | null;
+  /** The next unused derivation index. Monotonic, so an address is never reused. */
+  nextDerivationIndex: number;
   createdAt: number;
   updatedAt: number;
 };
@@ -392,6 +402,17 @@ export type ApiCheckoutRecord = {
   canceledAt: number | null;
   /** The idempotency key supplied at creation, if any. */
   idempotencyKey: string | null;
+  /**
+   * The unique destination this checkout must be paid at, when the merchant has
+   * registered a payment xpub. A transfer that does not land here cannot settle
+   * this order, so a payment is bound to the exact checkout rather than merely
+   * to the merchant's shared recipient. `null` when the merchant has not opted
+   * into checkout-bound attribution (the checkout then uses the intent's shared
+   * recipient, which is weaker and is reported as such).
+   */
+  attributionAddress: string | null;
+  /** The derivation index this checkout's `attributionAddress` came from. */
+  derivationIndex: number | null;
   createdAt: number;
   updatedAt: number;
 };

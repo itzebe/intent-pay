@@ -104,6 +104,39 @@ curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/checkouts \\
         </P>
       </DocSection>
 
+      <DocSection title="Attribute a payment to a specific order">
+        <P>
+          By default every order shares your recipient address, so a payment is attributed by the
+          token, amount and time guards. To make attribution exact, register a{" "}
+          <strong>watch-only payment xpub</strong> — a BIP32 public extended key (<Code>xpub…</Code>).
+          Each checkout is then paid to a <strong>unique destination</strong> derived for that order,
+          so a transfer can only settle the order it was created for.
+        </P>
+        <Code>{`curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/attribution \\
+  -H "Authorization: Bearer ipk_live_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{"paymentXpub":"xpub6…"}'`}</Code>
+        <UL>
+          <LI>
+            <strong>Public key only.</strong> A private key (<Code>xprv…</Code>) or a seed phrase is
+            refused, so Intent Pay can never spend. The xpub itself is never returned by the API.
+          </LI>
+          <LI>
+            <Code>GET /api/v1/attribution</Code> — whether attribution is on, the next index, and a
+            preview of upcoming destinations.
+          </LI>
+          <LI>
+            <Code>POST /api/v1/attribution</Code> with <Code>{`{"paymentXpub":null}`}</Code> —
+            disable and fall back to the shared recipient.
+          </LI>
+          <LI>
+            Each checkout reports its <Code>attribution.mode</Code> —{" "}
+            <Code>checkout_bound</Code> (a unique destination) or <Code>shared_recipient</Code>. The
+            two are never presented as equivalent.
+          </LI>
+        </UL>
+      </DocSection>
+
       <DocSection title="Manage orders">
         <UL>
           <LI><Code>GET /api/v1/checkouts</Code> — list your orders, newest first.</LI>
@@ -113,6 +146,7 @@ curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/checkouts \\
           <LI><Code>POST /api/v1/checkouts/:id/verify</Code> — verify settlement.</LI>
           <LI><Code>POST /api/v1/checkouts/:id/cancel</Code> — cancel an unpaid order.</LI>
           <LI><Code>GET /api/v1/checkouts/:id/evidence</Code> — settlement evidence, re-verified live.</LI>
+          <LI><Code>GET/POST /api/v1/attribution</Code> — read or set per-order attribution.</LI>
         </UL>
       </DocSection>
 

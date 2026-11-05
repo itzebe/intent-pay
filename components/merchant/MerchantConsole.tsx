@@ -239,18 +239,25 @@ export function MerchantConsole() {
           <section className="card p-5">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-white/90">Payment attribution</h2>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  attribution?.checkoutBound ? "text-emerald-200 bg-emerald-400/10" : "text-amber-200 bg-amber-400/10"
-                }`}
-              >
-                {attribution?.checkoutBound ? "Per-order destination" : "Shared recipient"}
-              </span>
+              <div className="flex items-center gap-2">
+                {attribution && !attribution.checkoutBound && (
+                  <span className="rounded-full bg-mono/15 px-2 py-0.5 text-[10px] font-medium text-mono-soft">
+                    Recommended
+                  </span>
+                )}
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                    attribution?.checkoutBound ? "text-emerald-200 bg-emerald-400/10" : "text-amber-200 bg-amber-400/10"
+                  }`}
+                >
+                  {attribution?.checkoutBound ? "Per-order destination" : "Shared recipient"}
+                </span>
+              </div>
             </div>
             <p className="mt-1 text-xs text-white/45">
               {attribution?.checkoutBound
-                ? "Each order is paid to a unique address derived from your xpub. Only your wallet holds the keys; Intent Pay watches, and can never spend."
-                : "Without a payment xpub, orders share your recipient, so attribution relies on the token, amount and timing guards. Register an xpub to give every order its own destination."}
+                ? "Each order is paid to a unique address derived from your xpub, so a payment can only settle the order it was created for. Only your wallet holds the keys; Intent Pay watches, and can never spend."
+                : "Recommended: register a payment xpub so every order gets its own destination. Without it, orders share your recipient and attribution relies only on the token, amount and timing guards — a payment cannot be tied to one specific order."}
             </p>
             {attribution?.checkoutBound && attribution.preview.length > 0 && (
               <div className="mt-3 rounded-xl bg-white/[0.03] p-3">
@@ -289,7 +296,11 @@ export function MerchantConsole() {
               )}
             </div>
             <p className="mt-2 text-[11px] text-white/35">
-              A public extended key only. A private key (xprv) or a seed phrase is refused.
+              Use the account extended <strong className="text-white/50">public</strong> key (xpub…) exported by
+              your own wallet — the derived addresses then follow your normal receive path{" "}
+              <code className="text-white/45">m/44&apos;/60&apos;/0&apos;/0/i</code> and appear in your wallet. A
+              private key (xprv) or a seed phrase is refused. You sweep the funds later with the wallet that holds
+              the matching seed — Intent Pay never can.
             </p>
             {xpubError && (
               <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-200/90">
@@ -300,6 +311,11 @@ export function MerchantConsole() {
 
           <section className="card p-5">
             <h2 className="text-sm font-semibold text-white/90">Create a payment link</h2>
+            <p className="mt-1 text-xs text-white/45">
+              {attribution?.checkoutBound
+                ? "This order will be paid to its own derived destination (per-order attribution)."
+                : "This order will share your recipient address. Register a payment xpub above to give each order its own destination."}
+            </p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <Field label="Amount (USD)">
                 <input
@@ -419,6 +435,17 @@ export function MerchantConsole() {
                       </a>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      {c.attribution && (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                            c.attribution.mode === "checkout_bound"
+                              ? "text-emerald-200 bg-emerald-400/10"
+                              : "text-amber-200 bg-amber-400/10"
+                          }`}
+                        >
+                          {c.attribution.mode === "checkout_bound" ? "bound" : "shared"}
+                        </span>
+                      )}
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(c.status)}`}>{c.status}</span>
                       {c.status === "open" && (
                         <button onClick={() => void cancel(c.id)} className="text-[11px] text-white/40 hover:text-rose-200">

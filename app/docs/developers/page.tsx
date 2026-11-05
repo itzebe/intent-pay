@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { DocsShell, DocTitle } from "@/components/docs/DocsShell";
-import { DocSection, P, UL, LI, Code, Callout } from "@/components/docs/Prose";
+import { DocSection, P, UL, OL, LI, Code, Callout } from "@/components/docs/Prose";
 
 export const metadata: Metadata = {
   title: "Developers — Intent Pay",
@@ -89,6 +89,48 @@ npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # strict typecheck`}
           <LI><Code>NEXT_PUBLIC_SLIPPAGE_BPS</Code> / <Code>NEXT_PUBLIC_MAX_PRICE_IMPACT_BPS</Code> — execution-protection thresholds.</LI>
           <LI><Code>INTENT_LLM_*</Code> — optional gap-filling for the natural-language parser.</LI>
         </UL>
+      </DocSection>
+
+      <DocSection title="Wallet connectivity">
+        <P>
+          Two connection paths are supported, and the app never fakes a session on either.
+        </P>
+        <UL>
+          <LI>
+            <strong>Injected wallets</strong> (MetaMask, Rabby, Coinbase Wallet, Trust Wallet, …) are
+            discovered in the browser via <strong>EIP-6963</strong>, with a legacy{" "}
+            <Code>window.ethereum</Code> fallback. No configuration is required; they work on every
+            deployment.
+          </LI>
+          <LI>
+            <strong>WalletConnect (Reown) v2</strong> adds mobile and QR wallets. It needs a free
+            project id, which is a public, browser-visible value (the same id travels in the QR
+            handshake), so it is configured as <Code>NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID</Code>.
+            Without it the WalletConnect option is shown as unavailable and injected wallets keep
+            working.
+          </LI>
+        </UL>
+        <P>To enable mobile / QR wallets:</P>
+        <OL>
+          <LI>
+            Create a free account at <Code>dashboard.reown.com</Code> and create a project; copy its{" "}
+            <strong>Project ID</strong>.
+          </LI>
+          <LI>
+            In Vercel → Project → Settings → Environment Variables, add{" "}
+            <Code>NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID</Code> for the Production (and Preview)
+            environment.
+          </LI>
+          <LI>
+            Re-deploy so the value is baked into the client bundle, then confirm{" "}
+            <Code>GET /api/capabilities</Code> reports{" "}
+            <Code>wallets.walletConnect.configured = true</Code>.
+          </LI>
+        </OL>
+        <P>
+          No paid plan is required for this. WalletConnect being unavailable is reported honestly and
+          never blocks a payment: injected wallets and the checkout flow are unaffected.
+        </P>
       </DocSection>
 
       <DocSection title="Testing conventions">

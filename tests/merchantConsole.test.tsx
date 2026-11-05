@@ -82,6 +82,12 @@ describe("merchant console", () => {
       if (url === "/api/v1/checkouts" && (init?.method ?? "GET") === "GET") {
         return new Response(JSON.stringify({ ok: true, checkouts: [] }), { status: 200 });
       }
+      if (url === "/api/v1/attribution" && (init?.method ?? "GET") === "GET") {
+        return new Response(
+          JSON.stringify({ ok: true, attribution: { mode: "shared_recipient", checkoutBound: false, nextDerivationIndex: 0, preview: [] } }),
+          { status: 200 },
+        );
+      }
       if (url === "/api/v1/intents") {
         return new Response(JSON.stringify({ ok: true, created: true, intent: { id: "int_1" } }), { status: 201 });
       }
@@ -106,5 +112,33 @@ describe("merchant console", () => {
     expect(intentIdx).toBeGreaterThanOrEqual(0);
     expect(checkoutIdx).toBeGreaterThan(intentIdx);
     expect(screen.getByText(/\/checkout\/chk_/)).toBeTruthy();
+  });
+
+  it("recommends per-order attribution and explains the shared-recipient fallback", async () => {
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/v1/developers") {
+        return new Response(JSON.stringify({ ok: true, developer: { id: "dev_1", name: "shop", status: "active" }, keys: [] }), { status: 200 });
+      }
+      if (url === "/api/v1/checkouts" && (init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify({ ok: true, checkouts: [] }), { status: 200 });
+      }
+      if (url === "/api/v1/attribution" && (init?.method ?? "GET") === "GET") {
+        return new Response(
+          JSON.stringify({ ok: true, attribution: { mode: "shared_recipient", checkoutBound: false, nextDerivationIndex: 0, preview: [] } }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as any;
+
+    render(<MerchantConsole />);
+    fireEvent.change(screen.getByPlaceholderText("ipk_live_…"), { target: { value: "ipk_live_ok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await flush();
+
+    // The recommended path is stated, and the weaker fallback is named honestly.
+    expect(screen.getByText("Recommended")).toBeTruthy();
+    expect(screen.getByText("Shared recipient")).toBeTruthy();
+    expect(screen.getByText(/cannot be tied to one specific order/)).toBeTruthy();
   });
 });

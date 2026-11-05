@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { HDKey } from "@scure/bip32";
 import { MemoryStore, SqliteStore, setStore } from "@/lib/store";
 import { getStore } from "@/lib/store";
 import { createDeveloperWithKey } from "@/lib/developer/credentials";
@@ -76,6 +77,11 @@ describe("xpub validation (no spending key is ever accepted)", () => {
     expect(validatePaymentXpub("not-an-xpub").ok).toBe(false);
     expect(validatePaymentXpub("").ok).toBe(false);
   });
+
+  it("refuses a testnet extended key (wrong network for Monad mainnet)", () => {
+    const tpub = TEST_XPUB.replace(/^xpub/, "tpub");
+    expect(validatePaymentXpub(tpub).ok).toBe(false);
+  });
 });
 
 describe("watch-only derivation", () => {
@@ -92,6 +98,15 @@ describe("watch-only derivation", () => {
   it("refuses a negative or fractional index", () => {
     expect(() => derivePaymentAddress(TEST_XPUB, -1)).toThrow();
     expect(() => derivePaymentAddress(TEST_XPUB, 1.5)).toThrow();
+  });
+
+  it("derives non-hardened children only (a hardened path cannot be derived from an xpub)", () => {
+    // `derivePaymentAddress` uses the non-hardened branch `m/0/<index>`; the
+    // library refuses a hardened step from a public key, which is the boundary
+    // that keeps a leaked xpub from reaching the merchant's other accounts.
+    expect(() => derivePaymentAddress(TEST_XPUB, 0)).not.toThrow();
+    const root = HDKey.fromExtendedKey(TEST_XPUB);
+    expect(() => root.derive("m/0'")).toThrow();
   });
 });
 

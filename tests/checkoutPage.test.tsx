@@ -55,11 +55,21 @@ const wallet: any = {
 
 vi.mock("@/lib/hooks/useWallet", () => ({
   useWallet: () => wallet,
+  useBalances: () => ({ balances: [], loading: false, error: undefined, refresh: vi.fn(), setBalances: vi.fn() }),
 }));
 
-// The connect control is not under test here.
+// The connect control and balance panel are not under test here.
 vi.mock("@/components/wallet/WalletBar", () => ({
   ConnectButton: () => React.createElement("button", null, "Connect wallet"),
+  BalanceOverview: () => React.createElement("div", null, "Your wallet"),
+}));
+
+// The page waits for each transaction's receipt before sending the next. The
+// real client is not under test here; a confirmed receipt keeps the flow moving.
+vi.mock("@/lib/wallet/clients", () => ({
+  getClientPublicClient: () => ({
+    waitForTransactionReceipt: vi.fn(async () => ({ status: "success" as const })),
+  }),
 }));
 
 function checkoutView(overrides: Record<string, unknown> = {}) {

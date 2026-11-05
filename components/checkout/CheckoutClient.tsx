@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useWallet } from "@/lib/hooks/useWallet";
+import { useBalances, useWallet } from "@/lib/hooks/useWallet";
+import { getClientPublicClient } from "@/lib/wallet/clients";
+import { sendCallsSequentially } from "@/lib/wallet/sendCalls";
 import { NETWORKS, explorerTxUrl } from "@/lib/config/chains";
 import { shortAddress } from "@/lib/format";
 import { Copy, ExternalLink, Shield, Spinner, Warning } from "@/components/ui/Icons";
-import { ConnectButton } from "@/components/wallet/WalletBar";
+import { BalanceOverview, ConnectButton } from "@/components/wallet/WalletBar";
 
 /**
  * The customer's payment page.
@@ -80,6 +82,15 @@ export function CheckoutClient({ token }: { token: string }) {
 
   const onMonad = wallet.chainId === NETWORKS.mainnet.chainId;
 
+  // The customer's real holdings, so they can see what they have before paying.
+  // Read only for a connected wallet on the right network; balances are then
+  // *unknown*, never a false zero.
+  const { balances, loading: balancesLoading } = useBalances(
+    wallet.address,
+    wallet.network ?? "mainnet",
+    Boolean(wallet.address) && onMonad,
+  );
+
   const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/checkout/${token}`, { cache: "no-store" });
@@ -142,30 +153,63 @@ export function CheckoutClient({ token }: { token: string }) {
       const prepared = (await prep.json()) as PreparedCalls;
       preparedRef.current = prepared;
 
-      // 2. The customer's own wallet signs and broadcasts. The page never sees a key.
+      // Record whatever has actually been broadcast, so an interrupted payment
+      // still shows its hash(es) and can be status-checked. Best-effort: a
+      // failure here must not hide the transaction the customer already sent.
+      const recordSubmitted = async (hs: string[]) => {
+        if (hs.length === 0) return;
+        setTxHashes(hs);
+        try {
+          await fetch(`/api/checkout/${token}/submit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ txHashes: hs }),
+          });
+        } catch {
+          /* the hash is still displayed; recording is best-effort */
+        }
+        // Reflect the recorded state so the order shows "submitted" and offers a
+        // status check rather than appearing unpaid.
+        await load();
+      };
+
+      // 2. The customer's own wallet signs and broadcasts. The page never sees a
+      //    key. A swap payment is several sequential transactions (approve → swap
+      //    → unwrap → deliver) and each depends on the previous being mined, so
+      //    they are sent and confirmed one at a time (`sendCallsSequentially`).
       if (!wallet.provider) {
         setActionError("Connect a wallet to pay.");
         return;
       }
-      const hashes: string[] = [];
-      for (const call of prepared.calls) {
-        const hash = (await wallet.provider.request({
-          method: "eth_sendTransaction",
-          params: [
-            {
-              from: wallet.address,
-              to: call.to,
-              data: call.data && call.data !== "0x" ? call.data : undefined,
-              value: call.value && call.value !== "0" ? `0x${BigInt(call.value).toString(16)}` : undefined,
-            },
-          ],
-        })) as string;
-        if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash)) {
-          setActionError("Your wallet did not return a transaction hash.");
-          return;
-        }
-        hashes.push(hash);
+      const outcome = await sendCallsSequentially({
+        calls: prepared.calls,
+        send: (call) =>
+          wallet.provider!.request({
+            method: "eth_sendTransaction",
+            params: [
+              {
+                from: wallet.address,
+                to: call.to,
+                data: call.data && call.data !== "0x" ? call.data : undefined,
+                value: call.value && call.value !== "0" ? `0x${BigInt(call.value).toString(16)}` : undefined,
+              },
+            ],
+          }),
+        waitForReceipt: (hash) =>
+          getClientPublicClient(wallet.network ?? "mainnet").waitForTransactionReceipt({
+            hash: hash as `0x${string}`,
+            confirmations: 2,
+            timeout: 90_000,
+          }),
+      });
+
+      if (!outcome.ok) {
+        // Record whatever already broadcast so the order reflects it, then stop.
+        await recordSubmitted(outcome.hashes);
+        setActionError(outcome.message);
+        return;
       }
+      const hashes = outcome.hashes;
 
       // 3. Record the broadcast so the order reflects it.
       const sub = await fetch(`/api/checkout/${token}/submit`, {
@@ -200,7 +244,7 @@ export function CheckoutClient({ token }: { token: string }) {
     } finally {
       setBusy(false);
     }
-  }, [wallet.address, wallet.provider, token, load]);
+  }, [wallet.address, wallet.provider, wallet.network, token, load]);
 
   /** Re-check settlement for a submitted payment (an explicit, safe retry). */
   const checkStatus = useCallback(async () => {
@@ -297,6 +341,10 @@ export function CheckoutClient({ token }: { token: string }) {
             <Warning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{actionError}</span>
           </div>
+        )}
+
+        {!terminal && wallet.address && onMonad && (
+          <BalanceOverview balances={balances} loading={balancesLoading} connected />
         )}
 
         {!terminal && (

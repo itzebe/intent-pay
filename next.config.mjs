@@ -50,6 +50,14 @@ const walletConnectFrameSrc = [
   "https://secure-mobile.walletconnect.org",
 ];
 
+/**
+ * The QR modal (`@reown/appkit`) renders wallet logos from the Web3Modal API and
+ * loads its own web font. Without these the modal opens but its wallet list and
+ * typography fail to load — which on mobile reads as "the QR never appears".
+ */
+const walletConnectImgSrc = ["https://api.web3modal.org"];
+const walletConnectFontSrc = ["https://fonts.reown.com"];
+
 const connectSrc = [
   "'self'",
   ...browserRpcOrigins,
@@ -74,8 +82,8 @@ const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} chrome-extension: moz-extension:`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://raw.githubusercontent.com",
-  "font-src 'self' data:",
+  `img-src 'self' data: blob: https://raw.githubusercontent.com${wcEnabled ? ` ${walletConnectImgSrc.join(" ")}` : ""}`,
+  `font-src 'self' data:${wcEnabled ? ` ${walletConnectFontSrc.join(" ")}` : ""}`,
   `connect-src ${connectSrc.join(" ")}`,
   "worker-src 'self' blob:",
   `frame-src ${wcEnabled ? walletConnectFrameSrc.join(" ") : "'none'"}`,

@@ -219,10 +219,12 @@ describe("disconnect", () => {
 });
 
 describe("pure helpers", () => {
-  it("parses a hex chain id", () => {
+  it("parses a hex chain id, and the decimal number WalletConnect returns", () => {
     expect(chainIdFromHex("0x8f")).toBe(143);
     expect(chainIdFromHex("nope")).toBeUndefined();
-    expect(chainIdFromHex(143)).toBeUndefined();
+    // WalletConnect answers `eth_chainId` with a decimal number, not hex.
+    expect(chainIdFromHex(143)).toBe(143);
+    expect(chainIdFromHex("143")).toBe(143);
   });
 
   it("identifies Monad", () => {

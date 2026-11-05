@@ -331,9 +331,22 @@ export function WalletProvider({
             return;
           }
           attach(provider, "walletconnect", WALLETCONNECT_ID);
-          await provider.request({ method: "eth_requestAccounts" });
+          // `enable()` (equivalently `connect()`) is what starts the pairing
+          // flow — it opens the QR modal / deep link and resolves with the
+          // authorised accounts. Calling `eth_requestAccounts` alone is answered
+          // locally from the current session, which has none yet, so it returned
+          // an empty list and the customer was never prompted (the mobile defect).
+          let accounts: unknown;
+          if (typeof provider.enable === "function") {
+            accounts = await provider.enable();
+          } else if (typeof provider.connect === "function") {
+            await provider.connect({ chains: [NETWORKS.mainnet.chainId] });
+            accounts = await provider.request({ method: "eth_accounts" });
+          } else {
+            accounts = await provider.request({ method: "eth_requestAccounts" });
+          }
           const chainIdHex = (await provider.request({ method: "eth_chainId" })) as string;
-          const address = firstAccount(await provider.request({ method: "eth_accounts" }));
+          const address = firstAccount(accounts);
           writeStoredConnector(WALLETCONNECT_ID);
           setState((s) => ({
             ...s,
@@ -343,7 +356,7 @@ export function WalletProvider({
             connectorId: WALLETCONNECT_ID,
             kind: "walletconnect",
             restoring: false,
-            error: undefined,
+            error: address ? undefined : "The WalletConnect session was closed before an account was shared.",
           }));
           return;
         }

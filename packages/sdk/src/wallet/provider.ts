@@ -35,12 +35,29 @@ export function monadAddChainParams() {
   };
 }
 
-/** Parse a hex chain id (`0x8f`) into a number, or undefined when malformed. */
+/**
+ * Parse a chain id into a number, or undefined when malformed.
+ *
+ * EIP-1193 mandates a hex quantity (`0x8f`), which injected wallets honour.
+ * WalletConnect does **not**: its UniversalProvider answers `eth_chainId` with
+ * `parseInt(...)` — a decimal *number* (143). A hex-only parser returned
+ * `undefined` for a WalletConnect session, so a connected mobile wallet was
+ * reported as the wrong network. Accept the hex form and the decimal number.
+ */
 export function chainIdFromHex(hex: unknown): number | undefined {
+  if (typeof hex === "number") {
+    return Number.isSafeInteger(hex) && hex >= 0 ? hex : undefined;
+  }
   if (typeof hex !== "string") return undefined;
-  if (!/^0x[0-9a-fA-F]+$/.test(hex)) return undefined;
-  const n = parseInt(hex, 16);
-  return Number.isFinite(n) ? n : undefined;
+  if (/^0x[0-9a-fA-F]+$/.test(hex)) {
+    const n = parseInt(hex, 16);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  if (/^[0-9]+$/.test(hex)) {
+    const n = parseInt(hex, 10);
+    return Number.isSafeInteger(n) ? n : undefined;
+  }
+  return undefined;
 }
 
 /** True when a chain id is Monad Mainnet. */

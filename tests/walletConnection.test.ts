@@ -19,12 +19,22 @@ describe("chainIdFromHex", () => {
     expect(chainIdFromHex("0x1")).toBe(1);
   });
 
+  it("parses the decimal number WalletConnect returns from eth_chainId", () => {
+    // WalletConnect's UniversalProvider answers `eth_chainId` with a number, not
+    // a hex string. A hex-only parser reported a connected mobile session as the
+    // wrong network; the decimal form must resolve to the same chain id.
+    expect(chainIdFromHex(143)).toBe(143);
+    expect(chainIdFromHex("143")).toBe(143);
+  });
+
   it("rejects malformed values instead of guessing", () => {
-    expect(chainIdFromHex("143")).toBeUndefined();
     expect(chainIdFromHex("0x")).toBeUndefined();
     expect(chainIdFromHex(undefined)).toBeUndefined();
-    expect(chainIdFromHex(143)).toBeUndefined();
     expect(chainIdFromHex("0xzz")).toBeUndefined();
+    expect(chainIdFromHex("14a")).toBeUndefined();
+    expect(chainIdFromHex(-1)).toBeUndefined();
+    expect(chainIdFromHex(1.5)).toBeUndefined();
+    expect(chainIdFromHex(NaN)).toBeUndefined();
   });
 });
 

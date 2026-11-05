@@ -76,6 +76,9 @@ describe("security headers (production)", () => {
     expect(csp).toContain("frame-src 'none'");
     expect(csp).not.toContain("walletconnect.com");
     expect(csp).not.toContain("secure.walletconnect.org");
+    // No third-party font/logo origins leak in either.
+    expect(csp).not.toContain("fonts.reown.com");
+    expect(csp).not.toContain("api.web3modal.org");
   });
 
   it("relaxes the CSP for the WalletConnect relay and QR modal only when configured", async () => {
@@ -86,6 +89,12 @@ describe("security headers (production)", () => {
     expect(csp).toContain("https://verify.walletconnect.org");
     expect(csp).toContain("https://secure.walletconnect.org");
     expect(csp).not.toContain("frame-src 'none'");
+    // The QR modal renders wallet logos from the Web3Modal API and its own font.
+    // Without these the mobile modal opens but never fills in.
+    expect(csp).toContain("https://api.web3modal.org");
+    expect(csp).toContain("https://fonts.reown.com");
+    expect(csp).toMatch(/img-src[^;]*https:\/\/api\.web3modal\.org/);
+    expect(csp).toMatch(/font-src[^;]*https:\/\/fonts\.reown\.com/);
   });
 });
 

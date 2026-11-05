@@ -134,6 +134,15 @@ curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/checkouts \\
             <Code>checkout_bound</Code> (a unique destination) or <Code>shared_recipient</Code>. The
             two are never presented as equivalent.
           </LI>
+          <LI>
+            <strong>Not retroactive.</strong> Registering an xpub only affects checkouts created
+            afterwards; existing orders keep the destination they were bound to.
+          </LI>
+          <LI>
+            <strong>You sweep.</strong> Derived addresses are ordinary receive addresses of your
+            wallet. Intent Pay watches them and can never move funds; collect them with the wallet
+            that holds the matching seed.
+          </LI>
         </UL>
       </DocSection>
 

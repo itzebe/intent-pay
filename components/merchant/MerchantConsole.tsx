@@ -78,6 +78,9 @@ export function MerchantConsole() {
   const [xpubInput, setXpubInput] = useState("");
   const [savingXpub, setSavingXpub] = useState(false);
   const [xpubError, setXpubError] = useState<string | null>(null);
+  const [evidence, setEvidence] = useState<{ id: string; body: Record<string, unknown> } | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState<string | null>(null);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -193,6 +196,23 @@ export function MerchantConsole() {
     [apiKey, refresh],
   );
 
+  // Fetch an order's settlement evidence — re-verified on-chain, so it is the
+  // merchant's proof of delivery, not a cached status.
+  const loadEvidence = useCallback(
+    async (id: string) => {
+      setEvidenceError(null);
+      setEvidenceLoading(id);
+      const res = await api(apiKey, `/checkouts/${id}/evidence`);
+      setEvidenceLoading(null);
+      if (!res.ok) {
+        setEvidenceError("Could not load settlement evidence for that order.");
+        return;
+      }
+      setEvidence({ id, body: res.body });
+    },
+    [apiKey],
+  );
+
   const statusTone = useMemo(
     () => (status: string) =>
       status === "completed"
@@ -232,6 +252,13 @@ export function MerchantConsole() {
             <Warning className="h-3.5 w-3.5" /> {authError}
           </p>
         )}
+        <p className="mt-2 text-[11px] text-white/35">
+          No key yet?{" "}
+          <a href="/docs/api" className="text-mono-soft hover:underline">
+            Create a developer account
+          </a>{" "}
+          and copy its first API key.
+        </p>
       </section>
 
       {connected && (
@@ -447,6 +474,12 @@ export function MerchantConsole() {
                         </span>
                       )}
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(c.status)}`}>{c.status}</span>
+                      <button
+                        onClick={() => void loadEvidence(c.id)}
+                        className="text-[11px] text-white/40 hover:text-mono-soft"
+                      >
+                        {evidenceLoading === c.id ? "…" : "Evidence"}
+                      </button>
                       {c.status === "open" && (
                         <button onClick={() => void cancel(c.id)} className="text-[11px] text-white/40 hover:text-rose-200">
                           Cancel
@@ -458,6 +491,72 @@ export function MerchantConsole() {
               </div>
             )}
           </section>
+
+          {evidenceError && (
+            <p className="flex items-center gap-1.5 text-xs text-amber-200/90">
+              <Warning className="h-3.5 w-3.5" /> {evidenceError}
+            </p>
+          )}
+
+          {evidence && (
+            <section className="card p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-white/90">Settlement evidence</h2>
+                <button onClick={() => setEvidence(null)} className="text-xs text-white/40 hover:text-white/70">
+                  Close
+                </button>
+              </div>
+              {(() => {
+                const checkout = evidence.body.checkout as { status?: string; phase?: string } | undefined;
+                const settlement = evidence.body.settlement as
+                  | { verdict?: string; delivered?: string | null; expected?: string; blockNumber?: number | null; message?: string }
+                  | null
+                  | undefined;
+                const txHashes = (evidence.body.txHashes as string[] | undefined) ?? [];
+                const settled = Boolean(evidence.body.settled);
+                return (
+                  <div className="mt-3 space-y-1.5 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          settled ? "text-emerald-200 bg-emerald-400/10" : "text-amber-200 bg-amber-400/10"
+                        }`}
+                      >
+                        {settled ? "Settled on-chain" : "Not settled"}
+                      </span>
+                      <span className="text-white/45">
+                        {checkout?.status ?? "—"} · {checkout?.phase ?? "—"}
+                      </span>
+                    </div>
+                    {settlement && (
+                      <div className="text-white/60">
+                        verdict <span className="text-white/85">{settlement.verdict}</span>
+                        {settlement.delivered ? <> · delivered {settlement.delivered}</> : null}
+                        {settlement.expected ? <> of {settlement.expected}</> : null}
+                        {settlement.blockNumber ? <> · block {settlement.blockNumber}</> : null}
+                      </div>
+                    )}
+                    {settlement?.message && <p className="text-white/45">{settlement.message}</p>}
+                    {txHashes.length > 0 && (
+                      <div className="space-y-0.5">
+                        {txHashes.map((h) => (
+                          <a
+                            key={h}
+                            href={`https://monadscan.com/tx/${h}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block truncate font-mono text-[11px] text-mono-soft hover:underline"
+                          >
+                            {h}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </section>
+          )}
         </>
       )}
     </div>

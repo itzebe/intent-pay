@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Intent Pay — merchant integration example</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0b0f; color: #ececf1; font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: #9a9aa8; margin: 0 0 28px; }
+  section { border: 1px solid #23232e; border-radius: 12px; padding: 18px; margin-bottom: 16px; background: #121218; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #9a9aa8; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; color: #b9b9c6; margin: 10px 0 4px; }
+  input { width: 100%; box-sizing: border-box; background: #0b0b0f; border: 1px solid #2c2c38; color: #ececf1; border-radius: 8px; padding: 9px 11px; font: inherit; }
+  button { background: #6d5efc; color: #fff; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: #23232e; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12.5px; word-break: break-all; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid #1d1d26; }
+  .kv:last-child { border-bottom: 0; }
+  .kv span:first-child { color: #9a9aa8; }
+  pre { background: #0b0b0f; border: 1px solid #23232e; border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; margin: 12px 0 0; }
+  .err { color: #ff8f8f; } .ok { color: #6ee7a8; } .warn { color: #ffd479; } .muted { color: #9a9aa8; font-size: 13px; }
+  .badge { border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 600; }
+  .badge.bound { background: rgba(52,211,153,.12); color: #6ee7a8; }
+  .badge.shared { background: rgba(251,191,36,.12); color: #ffd479; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Intent Pay — merchant integration</h1>
+  <p class="sub">An independent app: its own server holds the API key, its own page drives the customer's wallet. No Intent Pay component is imported.</p>
+
+  <section>
+    <h2>1 · Merchant account</h2>
+    <div id="status-body"><p class="muted">Loading…</p></div>
+  </section>
+
+  <section>
+    <h2>2 · Attribution</h2>
+    <div id="attr-body"><p class="muted">Loading…</p></div>
+  </section>
+
+  <section>
+    <h2>3 · Create an order</h2>
+    <label>Amount (USD)</label>
+    <input id="amount" value="5" />
+    <label>Recipient (your Monad address)</label>
+    <input id="recipient" placeholder="0x…" />
+    <label>Order reference</label>
+    <input id="ref" placeholder="ORDER-1001" />
+    <div class="row" style="margin-top:12px">
+      <button id="create">Create order</button>
+    </div>
+    <div id="order-out"></div>
+  </section>
+
+  <section>
+    <h2>4 · Orders &amp; settlement</h2>
+    <div id="orders-body"><p class="muted">No orders yet.</p></div>
+  </section>
+
+  <section>
+    <h2>5 · Webhook events received</h2>
+    <div id="events-body"><p class="muted">None yet.</p></div>
+  </section>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error?.message || body?.error || `HTTP ${res.status}`);
+  return body;
+};
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+let wallet = null;
+
+async function loadStatus() {
+  try {
+    const s = await api("/api/merchant/status");
+    $("status-body").innerHTML = `
+      <div class="kv"><span>Merchant</span><span>${esc(s.merchant.name)} <span class="muted">(${esc(s.merchant.id)})</span></span></div>
+      <div class="kv"><span>Status</span><span>${esc(s.merchant.status)}</span></div>
+      <div class="kv"><span>Key</span><span class="mono">${esc(s.keys[0]?.prefix ?? "—")}… · ${esc(s.keys[0]?.environment ?? "")}</span></div>
+      <div class="kv"><span>API base</span><span class="mono">${esc(s.baseUrl)}</span></div>`;
+    renderAttribution(s.attribution);
+  } catch (e) {
+    $("status-body").innerHTML = `<p class="err">${esc(e.message)}</p>`;
+  }
+}
+
+function renderAttribution(a) {
+  const badge = a.checkoutBound
+    ? '<span class="badge bound">Per-order destination</span>'
+    : '<span class="badge shared">Shared recipient</span>';
+  $("attr-body").innerHTML = `
+    <div class="row" style="justify-content:space-between"><span class="muted">Mode</span>${badge}</div>
+    <p class="muted" style="margin:10px 0 0">${esc(a.note ?? (a.checkoutBound ? "Every order is paid to a unique address derived from your xpub." : "Orders share your recipient; attribution relies on token/amount/time guards."))}</p>
+    ${a.preview?.length ? `<p class="mono muted" style="margin:10px 0 0">next: ${a.preview.map(esc).join(", ")}</p>` : ""}`;
+}
+
+$("create").onclick = async () => {
+  $("order-out").innerHTML = '<p class="muted">Creating…</p>';
+  try {
+    const out = await api("/api/merchant/orders", {
+      method: "POST",
+      body: JSON.stringify({ amount: $("amount").value, recipient: $("recipient").value, orderReference: $("ref").value }),
+    });
+    $("order-out").innerHTML = `
+      <div class="kv"><span>Order</span><span class="mono">${esc(out.order.id)}</span></div>
+      <div class="kv"><span>Attribution</span><span>${esc(out.attribution.mode)}${out.attribution.destination ? ` → <span class="mono">${esc(out.attribution.destination)}</span>` : ""}</span></div>
+      <p style="margin:12px 0 0"><a href="${esc(out.link)}" target="_blank" rel="noopener" class="ok">Open the customer checkout →</a></p>
+      <p class="mono muted" style="margin:6px 0 0">${esc(out.link)}</p>`;
+    loadOrders();
+  } catch (e) {
+    $("order-out").innerHTML = `<p class="err">${esc(e.message)}</p>`;
+  }
+};
+
+async function loadOrders() {
+  try {
+    const { orders, events } = await api("/api/merchant/orders");
+    $("orders-body").innerHTML = orders.length
+      ? orders.map((o) => `
+        <div style="padding:10px 0;border-bottom:1px solid #1d1d26">
+          <div class="row" style="justify-content:space-between">
+            <span class="mono">${esc(o.reference ?? o.id)}</span>
+            <span class="badge ${o.attribution.mode === "checkout_bound" ? "bound" : "shared"}">${esc(o.attribution.mode)}</span>
+          </div>
+          <div class="row" style="justify-content:space-between;margin-top:4px">
+            <span class="muted">${esc(o.phase)}</span><span>${esc(o.status)}</span>
+          </div>
+          ${o.link ? `<div class="row" style="margin-top:6px"><a href="${esc(o.link)}" target="_blank" rel="noopener">payment link</a>
+            <button class="secondary" data-evidence="${esc(o.id)}" style="padding:4px 10px;font-size:12px">evidence</button></div>` : ""}
+          <div class="evidence-out" data-for="${esc(o.id)}"></div>
+        </div>`).join("")
+      : '<p class="muted">No orders yet.</p>';
+    document.querySelectorAll("[data-evidence]").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-evidence");
+        const box = document.querySelector(`.evidence-out[data-for="${CSS.escape(id)}"]`);
+        box.innerHTML = '<p class="muted">Fetching…</p>';
+        try {
+          const { evidence } = await api(`/api/merchant/orders/${encodeURIComponent(id)}/evidence`);
+          box.innerHTML = `<pre>${esc(JSON.stringify({
+            status: evidence.checkout.status,
+            phase: evidence.checkout.phase,
+            settled: evidence.settled,
+            attribution: evidence.checkout.attribution,
+            settlement: evidence.settlement,
+            txHashes: evidence.txHashes,
+            frozenMatchesCurrent: evidence.intent.frozenMatchesCurrent,
+          }, null, 2))}</pre>`;
+        } catch (e) {
+          box.innerHTML = `<p class="err">${esc(e.message)}</p>`;
+        }
+      };
+    });
+    $("events-body").innerHTML = events.length
+      ? events.map((e) => `<div class="kv"><span class="mono">${esc(e.event)}</span><span class="muted">${esc(e.at)}</span></div>`).join("")
+      : '<p class="muted">None yet. Register a webhook URL pointing at this process, then pay an order.</p>';
+  } catch (e) {
+    $("orders-body").innerHTML = `<p class="err">${esc(e.message)}</p>`;
+  }
+}
+
+loadStatus();
+loadOrders();
+setInterval(loadOrders, 5000);
+</script>
+</body>
+</html>

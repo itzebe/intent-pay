@@ -3,7 +3,8 @@ import type { ApiCheckoutRecord, ApiIntentRecord } from "@/lib/store/types";
 import { newCheckoutId, newCheckoutToken } from "./ids";
 import { isValidCheckoutToken } from "./checkoutToken";
 import { allocateAttributionAddress } from "./attribution";
-import { currentState, expireIfStale, intentEvents, submittedTxHashes } from "./intents";
+import { derivePaymentAddress } from "./xpub";
+import { canonicalParams, currentState, expireIfStale, intentEvents, submittedTxHashes } from "./intents";
 import type { IntentState } from "./intentLifecycle";
 
 /**
@@ -283,6 +284,7 @@ export async function cancelCheckout(
 export async function expireCheckoutIfStale(record: ApiCheckoutRecord, now = Date.now()): Promise<CheckoutStatus> {
   const { transition } = await import("./intents");
   const { enqueueEvent } = await import("./webhooks");
+  await reconcileAttributionAddress(record, now);
   const intent = await getStore().findOne("apiIntents", { id: record.intentId });
   if (!intent) return "failed";
 
@@ -351,6 +353,43 @@ export function attributionInfo(record: ApiCheckoutRecord): {
  */
 export function verificationDestination(record: ApiCheckoutRecord, intent: ApiIntentRecord): string {
   return (record.attributionAddress?.trim() || intent.recipient).toLowerCase();
+}
+
+/**
+ * Heal an order whose stored destination was derived by the superseded
+ * compressed-key derivation — an address the merchant's wallet cannot spend
+ * from. `verifySettlement` reads the *intent's* frozen `authorizedParams`, not the
+ * checkout row, so such an order would send the customer to that dead address and
+ * then never settle. Re-deriving with the corrected derivation and rewriting both
+ * the checkout row and the frozen recipient makes the order payable again.
+ *
+ * Strictly gated so it can never disturb a real payment: it runs only for a bound
+ * checkout that is still `awaiting_authorization` (nothing signed or sent) and
+ * whose frozen recipient still equals the previously stored destination — proving
+ * the freeze predates the fix and nothing has re-frozen it since. Once a payment
+ * is submitted the order is immutable and is never rewritten.
+ */
+async function reconcileAttributionAddress(record: ApiCheckoutRecord, now: number): Promise<void> {
+  if (!record.attributionAddress || record.derivationIndex === null) return;
+  const state = await currentState(record.intentId);
+  if (state !== "awaiting_authorization") return;
+
+  const developer = await getStore().findOne("apiDevelopers", { id: record.developerId });
+  if (!developer?.paymentXpub) return;
+  const expected = derivePaymentAddress(developer.paymentXpub, record.derivationIndex);
+  if (expected.toLowerCase() === record.attributionAddress.toLowerCase()) return;
+
+  const intent = await getStore().findOne("apiIntents", { id: record.intentId });
+  if (!intent?.authorizedParams || intent.recipient.toLowerCase() !== record.attributionAddress.toLowerCase()) return;
+
+  const healed = { ...intent, recipient: expected.toLowerCase() };
+  await getStore().update("apiCheckouts", { id: record.id }, { attributionAddress: expected.toLowerCase(), updatedAt: now });
+  await getStore().update(
+    "apiIntents",
+    { id: intent.id },
+    { recipient: expected.toLowerCase(), authorizedParams: canonicalParams(healed), updatedAt: now },
+  );
+  record.attributionAddress = expected.toLowerCase();
 }
 
 /** The public representation of a checkout, for a merchant (includes the link). */

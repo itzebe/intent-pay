@@ -135,13 +135,17 @@ curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/checkouts \\
             two are never presented as equivalent.
           </LI>
           <LI>
-            <strong>Not retroactive.</strong> Registering an xpub only affects checkouts created
-            afterwards; existing orders keep the destination they were bound to.
+            <strong>Not retroactive.</strong> Registering or replacing an xpub only affects checkouts
+            created afterwards; existing orders keep the destination they were bound to. (One
+            exception: an order bound before 2026-11-05 with a superseded derivation is re-derived to
+            your real address when it is read, so no customer is ever sent to an unspendable
+            destination.)
           </LI>
           <LI>
             <strong>You sweep.</strong> Derived addresses are ordinary receive addresses of your
-            wallet. Intent Pay watches them and can never move funds; collect them with the wallet
-            that holds the matching seed.
+            wallet — the <Code>m/0/&lt;index&gt;</Code> external chain of the account the xpub belongs
+            to. Intent Pay watches them and can never move funds; collect them with the wallet that
+            holds the matching seed.
           </LI>
         </UL>
       </DocSection>

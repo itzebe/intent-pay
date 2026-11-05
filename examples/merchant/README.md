@@ -65,8 +65,12 @@ verify a payment but can never authorize one.
 
 ## Notes
 
-- Webhook delivery is asynchronous. Events enqueue and are drained by the deployment's
-  scheduler, or manually via `POST /api/v1/webhooks/drain` (admin token). Local drains happen
-  after the customer's submit/verify response.
+- Webhook delivery is asynchronous and **request-driven**. Events enqueue a delivery row;
+  a due attempt happens after the customer's `submit`/`verify` response, after a merchant
+  reads a delivery log, or manually via `POST /api/v1/webhooks/drain` (admin token). This
+  deployment has **no cron configured**, so a delivery that fails on the last event is
+  retried on the next one of those triggers rather than on a timer — nothing is lost, but a
+  production merchant should add a scheduled drain (a `vercel.json` `crons` entry calling the
+  drain route, or any external scheduler) so a retry is not waiting on new traffic.
 - Secrets are shown once. This example keeps the webhook secret in memory; a real integration
   persists it in its own secret store.

@@ -1,5 +1,6 @@
 import { HDKey } from "@scure/bip32";
-import { publicKeyToAddress } from "viem/accounts";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { keccak256, checksumAddress } from "viem";
 
 /**
  * Watch-only BIP32 derivation for per-checkout payment destinations.
@@ -69,7 +70,23 @@ export function derivePaymentAddress(xpub: string, index: number): string {
   const root = HDKey.fromExtendedKey(xpub);
   const child = root.derive(`${DEFAULT_DERIVATION_PREFIX}/${index}`);
   if (!child.publicKey) throw new Error("Could not derive a public key from the payment xpub.");
-  return publicKeyToAddress(`0x${Buffer.from(child.publicKey).toString("hex")}`);
+  return publicKeyToAddress(child.publicKey);
+}
+
+/**
+ * The Ethereum address for a secp256k1 public key.
+ *
+ * `@scure/bip32` yields a **33-byte compressed** point, while the address is the
+ * last 20 bytes of `keccak256` over the **64-byte uncompressed** point (the
+ * `0x04` prefix dropped). Passing the compressed form straight to a helper that
+ * assumes 65 bytes silently hashes the wrong 32 bytes — the derived address is
+ * then one the merchant's wallet cannot spend from. Decompressing first is what
+ * makes every derived destination an address the merchant's own wallet controls.
+ */
+function publicKeyToAddress(compressed: Uint8Array): string {
+  const uncompressed = secp256k1.ProjectivePoint.fromHex(compressed).toRawBytes(false);
+  const body = Buffer.from(uncompressed).toString("hex").slice(2); // drop the 0x04 prefix
+  return checksumAddress(`0x${keccak256(`0x${body}`).slice(-40)}`);
 }
 
 /**

@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HDKey } from "@scure/bip32";
+import { mnemonicToSeedSync } from "@scure/bip39";
+import { secp256k1 } from "@noble/curves/secp256k1";
+import { checksumAddress, getAddress, keccak256 } from "viem";
+import { publicKeyToAddress } from "viem/accounts";
 import { MemoryStore, SqliteStore, setStore } from "@/lib/store";
 import { getStore } from "@/lib/store";
 import { createDeveloperWithKey } from "@/lib/developer/credentials";
 import { createIntent } from "@/lib/developer/intents";
 import { allocateAttributionAddress, setPaymentXpub, attributionDestination } from "@/lib/developer/attribution";
 import { derivePaymentAddress, derivePaymentAddresses, validatePaymentXpub } from "@/lib/developer/xpub";
-import { createCheckout, bindIntentForCheckout, verificationDestination, attributionInfo, publicCheckoutForCustomer } from "@/lib/developer/checkouts";
+import { createCheckout, bindIntentForCheckout, expireCheckoutIfStale, verificationDestination, attributionInfo, publicCheckoutForCustomer } from "@/lib/developer/checkouts";
 import { currentState } from "@/lib/developer/intents";
 
 /**
@@ -107,6 +111,55 @@ describe("watch-only derivation", () => {
     expect(() => derivePaymentAddress(TEST_XPUB, 0)).not.toThrow();
     const root = HDKey.fromExtendedKey(TEST_XPUB);
     expect(() => root.derive("m/0'")).toThrow();
+  });
+});
+
+/**
+ * The derivation must agree with the merchant's own wallet. These are *known*
+ * addresses from the canonical Hardhat/Anvil test mnemonic
+ * (`test test test … junk`), whose `m/44'/60'/0'` account xpub is `TEST_XPUB`.
+ * `m/0/<i>` from that account xpub is exactly the merchant wallet's normal
+ * receive path (`m/44'/60'/0'/0/<i>`), so the expected values are fixed by an
+ * independent implementation, not by ours.
+ *
+ * The address is the last 20 bytes of `keccak256` over the **uncompressed** key.
+ * A regression here — hashing the compressed point instead — yields addresses
+ * the merchant cannot spend from, so a literal-vector assertion is the only
+ * thing that catches it (a self-consistent "two derivations agree" check cannot).
+ */
+describe("known-address vectors (the merchant's wallet controls every destination)", () => {
+  const VECTORS: [number, string][] = [
+    [0, "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"],
+    [1, "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"],
+    [2, "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"],
+  ];
+
+  it("derives the merchant's real receive addresses for indices 0, 1, 2", () => {
+    for (const [index, expected] of VECTORS) {
+      expect(derivePaymentAddress(TEST_XPUB, index)).toBe(expected);
+    }
+  });
+
+  it("agrees with a full-path derivation from the mnemonic (m/44'/60'/0'/0/i)", () => {
+    const master = HDKey.fromMasterSeed(
+      mnemonicToSeedSync("test test test test test test test test test test test junk"),
+    );
+    for (const [index, expected] of VECTORS) {
+      const full = master.derive(`m/44'/60'/0'/0/${index}`);
+      const body = Buffer.from(secp256k1.ProjectivePoint.fromHex(full.publicKey!).toRawBytes(false))
+        .toString("hex")
+        .slice(2);
+      expect(derivePaymentAddress(TEST_XPUB, index)).toBe(checksumAddress(`0x${keccak256(`0x${body}`).slice(-40)}`));
+      expect(derivePaymentAddress(TEST_XPUB, index)).toBe(expected);
+    }
+  });
+
+  it("returns a checksum-valid address that round-trips through getAddress", () => {
+    const address = derivePaymentAddress(TEST_XPUB, 0) as `0x${string}`;
+    // A wrong (compressed-key) derivation still *looks* like an address, so the
+    // guard is the literal vector above; here we pin the EIP-55 checksum shape.
+    expect(getAddress(address)).toBe(address);
+    expect(address).toBe(checksumAddress(address));
   });
 });
 
@@ -245,5 +298,85 @@ describe("attributionDestination helper", () => {
     expect(attributionDestination("0xABC")).toBe("0xabc");
     expect(attributionDestination(null)).toBeNull();
     expect(attributionDestination("   ")).toBeNull();
+  });
+});
+
+/**
+ * Healing a destination produced by the superseded compressed-key derivation.
+ *
+ * A pre-fix order stored a destination that was keccak-hashed over the 33-byte
+ * compressed key instead of the 64-byte uncompressed point, so it is an address
+ * the merchant's wallet cannot spend from. `BUGGY` below reproduces that exact
+ * computation, so the test pins the real defect rather than a description of it.
+ * The heal must fix a still-unpaid order and must never touch one with a payment.
+ */
+describe("self-heal of a pre-fix destination", () => {
+  function buggyAddress(index: number): string {
+    const child = HDKey.fromExtendedKey(TEST_XPUB).derive(`m/0/${index}`);
+    // The old code: viem's publicKeyToAddress on a 33-byte compressed key.
+    return publicKeyToAddress(`0x${Buffer.from(child.publicKey!).toString("hex")}`).toLowerCase();
+  }
+
+  it("rewrites a stale frozen destination back to the merchant's real address", async () => {
+    const dev = await makeDeveloper();
+    await setPaymentXpub(dev, TEST_XPUB);
+    const intent = await makeIntent(dev);
+    const result = await createCheckout(intent, { developerId: dev, intentId: intent.id });
+    if (!result.ok) throw new Error("create failed");
+
+    // Simulate the pre-fix freeze: the order's stored destination (and the frozen
+    // recipient) is the wrong address.
+    const buggy = buggyAddress(0);
+    await getStore().update("apiCheckouts", { id: result.checkout.id }, { attributionAddress: buggy });
+    result.checkout.attributionAddress = buggy;
+    await bindIntentForCheckout(intent, buggy);
+    expect((await getStore().findOne("apiIntents", { id: intent.id }))!.recipient.toLowerCase()).toBe(buggy);
+
+    await expireCheckoutIfStale(result.checkout);
+
+    const correct = derivePaymentAddress(TEST_XPUB, 0).toLowerCase();
+    const healedCheckout = await getStore().findOne("apiCheckouts", { id: result.checkout.id });
+    const healedIntent = await getStore().findOne("apiIntents", { id: intent.id });
+    expect(healedCheckout!.attributionAddress).toBe(correct);
+    expect(healedIntent!.recipient.toLowerCase()).toBe(correct);
+    // The frozen parameters move with the recipient, so the verifier reads the
+    // same destination the customer is now shown.
+    expect(JSON.parse(healedIntent!.authorizedParams!).recipient).toBe(correct);
+    expect(verificationDestination(healedCheckout!, healedIntent!)).toBe(correct);
+  });
+
+  it("never rewrites an order that already has a submitted payment", async () => {
+    const dev = await makeDeveloper();
+    await setPaymentXpub(dev, TEST_XPUB);
+    const intent = await makeIntent(dev);
+    const result = await createCheckout(intent, { developerId: dev, intentId: intent.id });
+    if (!result.ok) throw new Error("create failed");
+    const buggy = buggyAddress(0);
+    await getStore().update("apiCheckouts", { id: result.checkout.id }, { attributionAddress: buggy });
+    result.checkout.attributionAddress = buggy;
+    await bindIntentForCheckout(intent, buggy);
+    // A submitted payment freezes the order: the heal must leave it untouched.
+    const { transition } = await import("@/lib/developer/intents");
+    await transition(intent, "submitted", null, Date.now(), { silent: true });
+
+    await expireCheckoutIfStale(result.checkout);
+
+    const after = await getStore().findOne("apiCheckouts", { id: result.checkout.id });
+    expect(after!.attributionAddress).toBe(buggy);
+  });
+
+  it("is a no-op when the stored destination is already correct", async () => {
+    const dev = await makeDeveloper();
+    await setPaymentXpub(dev, TEST_XPUB);
+    const intent = await makeIntent(dev);
+    const result = await createCheckout(intent, { developerId: dev, intentId: intent.id });
+    if (!result.ok) throw new Error("create failed");
+    await bindIntentForCheckout(intent, result.checkout.attributionAddress);
+    const before = (await getStore().findOne("apiIntents", { id: intent.id }))!.authorizedParams;
+
+    await expireCheckoutIfStale(result.checkout);
+
+    const after = (await getStore().findOne("apiIntents", { id: intent.id }))!.authorizedParams;
+    expect(after).toBe(before);
   });
 });

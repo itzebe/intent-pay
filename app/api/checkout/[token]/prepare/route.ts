@@ -6,6 +6,7 @@ import { currentState, getIntent } from "@/lib/developer/intents";
 import { expireCheckoutIfStale, getCheckoutByToken } from "@/lib/developer/checkouts";
 import { prepareIntent } from "@/lib/developer/engine";
 import { isTerminal } from "@/lib/developer/intentLifecycle";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { isValidCheckoutToken } from "@/lib/developer/checkoutToken";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +36,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
   if (!checkout) return apiError("not_found", "No such checkout.");
 
   await expireCheckoutIfStale(checkout);
+  // Expiring a stale order emits `checkout.expired`; schedule its delivery after
+  // the response (it runs regardless of which branch below returns).
+  await drainDueSoon();
   const intent = await getIntent(checkout.developerId, checkout.intentId);
   if (!intent) return apiError("not_found", "This checkout's payment no longer exists.");
 

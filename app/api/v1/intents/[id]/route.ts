@@ -2,6 +2,7 @@ import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { getIntent, intentEvents, expireIfStale } from "@/lib/developer/intents";
 import { publicIntent } from "@/lib/developer/requests";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   // A stale pre-submission intent ages into `expired` on read.
   const state = await expireIfStale(record);
   const events = await intentEvents(record.id);
+  // Expiring a stale intent emits `intent.expired`; deliver it after the response.
+  await drainDueSoon();
   return apiOk({
     intent: publicIntent(record, state),
     lifecycle: events.map((e) => ({ state: e.state, at: new Date(e.at).toISOString(), detail: e.detail })),

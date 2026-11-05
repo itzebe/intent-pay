@@ -2,6 +2,7 @@ import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutLifecycle, expireCheckoutIfStale, getCheckout, publicCheckout } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -33,6 +34,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const intent = await getIntent(auth.auth.developer.id, checkout.intentId);
   const intentState = intent ? await currentState(intent.id) : "expired";
   const lifecycle = await checkoutLifecycle(checkout.intentId);
+  // Expiring a stale order emits `checkout.expired`; deliver it after the response.
+  await drainDueSoon();
 
   return apiOk({
     checkout: { ...publicCheckout(checkout, intentState), status },

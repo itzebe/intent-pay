@@ -169,3 +169,52 @@ describe("checkout resilience", () => {
     expect(screen.getByText("$25.00 in USDC")).toBeTruthy();
   });
 });
+
+/**
+ * The render path reads `receiveToken`, `recipient` and `amount` directly, so a
+ * malformed checkout from a newer/older server used to throw inside render
+ * (`receiveToken.slice`) and blank the page. Every such payload must now render
+ * the honest "unavailable" state instead — never an unmounted tree.
+ */
+describe("checkout payload validation", () => {
+  const cases: Array<[string, unknown]> = [
+    ["a missing receiveToken", checkoutView({ receiveToken: undefined })],
+    ["a null receiveToken", checkoutView({ receiveToken: null })],
+    ["an empty receiveToken", checkoutView({ receiveToken: "" })],
+    ["a missing recipient", checkoutView({ recipient: undefined })],
+    ["a missing amount", checkoutView({ amount: undefined })],
+    ["a non-numeric amount", checkoutView({ amount: "abc" })],
+    ["a non-object checkout", "not-an-object"],
+    ["an array checkout", []],
+    ["a null checkout", null],
+  ];
+
+  for (const [name, checkout] of cases) {
+    it(`renders a usable page (not blank) for ${name}`, async () => {
+      global.fetch = mockFetch({
+        "GET /api/checkout/chk_token": () => ({ checkout, txHashes: [] }),
+      }) as any;
+      render(
+        <ErrorBoundary scope="app">
+          <CheckoutClient token="chk_token" />
+        </ErrorBoundary>,
+      );
+      await flush();
+      // No crash / no blank: the honest unavailability message is shown and the
+      // ErrorBoundary fallback was not tripped.
+      expect(screen.getByText(/could not be read|not valid|unavailable/i)).toBeTruthy();
+      expect(screen.queryByText(/Unable to prepare this payment/)).toBeNull();
+    });
+  }
+
+  it("ignores non-string transaction hashes rather than rendering them", async () => {
+    global.fetch = mockFetch({
+      "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [123, null, "0xabc"] }),
+    }) as any;
+    render(<CheckoutClient token="chk_token" />);
+    await flush();
+    expect(screen.getByText("$25.00 in USDC")).toBeTruthy();
+    // The numeric/null entries are dropped; only the real hash is linked.
+    expect(screen.getAllByRole("link").some((a) => a.getAttribute("href")?.includes("0xabc"))).toBe(true);
+  });
+});

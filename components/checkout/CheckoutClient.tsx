@@ -79,6 +79,54 @@ function centsOf(usd: string): string {
   return `$${Number(usd).toFixed(2)}`;
 }
 
+/**
+ * Validate the server-supplied checkout before anything renders it.
+ *
+ * The server is the source of truth and a newer deployment can return a shape
+ * this bundle does not expect. The render path reads `receiveToken`, `recipient`
+ * and `amount` directly, so a missing or mistyped field used to throw inside
+ * render (`receiveToken.slice`) and blank the whole page. Validating here turns
+ * any such payload into the honest "payment unavailable" state instead — the
+ * page stays usable and never unmounts.
+ */
+function parseCheckoutView(value: unknown): CheckoutView | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const str = (x: unknown): string | null => (typeof x === "string" && x ? x : null);
+
+  const id = str(v.id);
+  const receiveToken = str(v.receiveToken);
+  const recipient = str(v.recipient);
+  const amount = str(v.amount);
+  if (!id || !receiveToken || !recipient || !amount) return null;
+  // The amount is rendered through `Number(...).toFixed(2)`; a non-numeric
+  // value would otherwise show "$NaN".
+  if (!Number.isFinite(Number(amount))) return null;
+
+  const attribution =
+    v.attribution && typeof v.attribution === "object" && !Array.isArray(v.attribution)
+      ? (v.attribution as CheckoutView["attribution"])
+      : undefined;
+
+  return {
+    id,
+    object: "checkout",
+    status: str(v.status) ?? "open",
+    phase: (str(v.phase) ?? "awaiting_payment") as Phase,
+    orderReference: str(v.orderReference),
+    chainId: typeof v.chainId === "number" ? v.chainId : NETWORKS.mainnet.chainId,
+    recipient,
+    receiveToken,
+    receiveTokenAddress: str(v.receiveTokenAddress) ?? "",
+    amountMode: v.amountMode === "i_spend" ? "i_spend" : "recipient_receives",
+    amount,
+    payToken: str(v.payToken),
+    expiresAt: str(v.expiresAt) ?? "",
+    createdAt: str(v.createdAt) ?? "",
+    attribution,
+  };
+}
+
 export function CheckoutClient({ token }: { token: string }) {
   const wallet = useWallet();
   const [view, setView] = useState<CheckoutView | null>(null);
@@ -113,8 +161,15 @@ export function CheckoutClient({ token }: { token: string }) {
         return;
       }
       const json = await res.json();
-      setView(json.checkout);
-      setTxHashes(Array.isArray(json.txHashes) ? json.txHashes : []);
+      const parsed = parseCheckoutView(json?.checkout);
+      if (!parsed) {
+        setLoadError("This payment link could not be read. Ask the merchant for a new one.");
+        return;
+      }
+      setView(parsed);
+      setTxHashes(
+        Array.isArray(json?.txHashes) ? json.txHashes.filter((h: unknown) => typeof h === "string") : [],
+      );
       setLoadError(null);
     } catch {
       setLoadError("We could not reach Intent Pay. Check your connection and try again.");

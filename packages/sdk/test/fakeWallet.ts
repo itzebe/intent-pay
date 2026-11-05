@@ -17,6 +17,7 @@ export type FakeProvider = {
   isMetaMask?: boolean;
   isRabby?: boolean;
   isCoinbaseWallet?: boolean;
+  isTrust?: boolean;
   providers?: FakeProvider[];
   [key: string]: unknown;
 };
@@ -37,6 +38,7 @@ export type FakeProviderOptions = {
   isMetaMask?: boolean;
   isRabby?: boolean;
   isCoinbaseWallet?: boolean;
+  isTrust?: boolean;
 };
 
 let hashCounter = 0;
@@ -52,6 +54,7 @@ export function makeProvider(options: FakeProviderOptions = {}): FakeProvider {
     ...(options.isMetaMask ? { isMetaMask: true } : {}),
     ...(options.isRabby ? { isRabby: true } : {}),
     ...(options.isCoinbaseWallet ? { isCoinbaseWallet: true } : {}),
+    ...(options.isTrust ? { isTrust: true } : {}),
     async request(args) {
       calls.push({ method: args.method, ...(args.params === undefined ? {} : { params: args.params }) });
       switch (args.method) {
@@ -145,6 +148,16 @@ export function installWindow(input: {
   };
   const original = (globalThis as { window?: unknown }).window;
   (globalThis as { window?: unknown }).window = win;
+  // Simulate a wallet that injects *after* the page has loaded: set the global
+  // and dispatch the convention event, as Trust Wallet's in-app browser does.
+  (win as unknown as { lateInject: (p: FakeProvider, onWindow?: boolean) => void }).lateInject = (
+    provider,
+    onWindow = true,
+  ) => {
+    if (onWindow) (win as unknown as { ethereum?: FakeProvider }).ethereum = provider;
+    else (win as unknown as { trustwallet?: { ethereum: FakeProvider } }).trustwallet = { ethereum: provider };
+    for (const h of listeners.get("ethereum#initialized") ?? []) h(new Event("ethereum#initialized"));
+  };
   return () => {
     if (original === undefined) delete (globalThis as { window?: unknown }).window;
     else (globalThis as { window?: unknown }).window = original;

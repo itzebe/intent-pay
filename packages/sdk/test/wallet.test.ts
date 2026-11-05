@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Wallet, discoverWallets } from "../src/wallet/index.js";
+import { Wallet, discoverWallets, watchWallets } from "../src/wallet/index.js";
+import { collectLegacyWallets } from "../src/wallet/eip6963.js";
 import { WalletError } from "../src/core/errors.js";
 import {
   chainIdFromHex,
@@ -9,7 +10,7 @@ import {
   walletErrorMessage,
   MONAD_CHAIN_ID,
 } from "../src/wallet/provider.js";
-import { installLegacyWindow, installWindow, makeProvider } from "./fakeWallet.js";
+import { installLegacyWindow, installWindow, makeProvider, type FakeProvider } from "./fakeWallet.js";
 
 const ADDR = "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4";
 
@@ -55,6 +56,55 @@ describe("discovery (EIP-6963 + legacy)", () => {
     cleanup = installLegacyWindow(legacy);
     const wallets = await discoverWallets();
     expect(wallets.map((w) => w.name)).toEqual(["MetaMask", "Coinbase Wallet"]);
+  });
+
+  it("discovers a Trust Wallet provider exposed only on window.trustwallet.ethereum", () => {
+    const trust = makeProvider({ isTrust: true });
+    cleanup = installWindow({});
+    (globalThis as unknown as { window: Record<string, unknown> }).window = {
+      ...(globalThis as unknown as { window: Record<string, unknown> }).window,
+      trustwallet: { ethereum: trust },
+    };
+    const wallets = collectLegacyWallets((globalThis as unknown as { window: Window }).window);
+    expect(wallets).toHaveLength(1);
+    expect(wallets[0]!.name).toBe("Trust Wallet");
+    expect(wallets[0]!.id).toBe("legacy:trust");
+  });
+
+  it("gives a legacy provider a stable id derived from its identity, not its index", () => {
+    const mm = makeProvider({ isMetaMask: true });
+    const trust = makeProvider({ isTrust: true });
+    const a = collectLegacyWallets({
+      ethereum: { ...makeProvider(), providers: [mm, trust] },
+    } as unknown as Window);
+    const b = collectLegacyWallets({
+      ethereum: { ...makeProvider(), providers: [trust, mm] },
+    } as unknown as Window);
+    expect(a.map((w) => w.id).sort()).toEqual(b.map((w) => w.id).sort());
+    expect(a.map((w) => w.id)).toContain("legacy:trust");
+  });
+
+  it("discovers a legacy-only provider that appears AFTER watchWallets starts", () => {
+    const trust = makeProvider({ isTrust: true });
+    cleanup = installWindow({});
+    const win = (globalThis as unknown as { window: { lateInject: (p: FakeProvider, onWindow?: boolean) => void } }).window;
+    const seen: number[] = [];
+    const watcher = watchWallets((globalThis as unknown as { window: Window }).window, (w) => seen.push(w.length));
+    expect(seen[seen.length - 1]).toBe(0);
+    win.lateInject(trust);
+    expect(seen[seen.length - 1]).toBe(1);
+    watcher.destroy();
+  });
+
+  it("discovers a Trust Wallet provider that injects late on window.trustwallet only", () => {
+    const trust = makeProvider({ isTrust: true });
+    cleanup = installWindow({});
+    const win = (globalThis as unknown as { window: { lateInject: (p: FakeProvider, onWindow?: boolean) => void } }).window;
+    const seen: number[] = [];
+    const watcher = watchWallets((globalThis as unknown as { window: Window }).window, (w) => seen.push(w.length));
+    win.lateInject(trust, false);
+    expect(seen[seen.length - 1]).toBe(1);
+    watcher.destroy();
   });
 });
 

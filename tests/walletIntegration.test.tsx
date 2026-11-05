@@ -175,4 +175,57 @@ describe("wallet connection (mocked injected provider)", () => {
     expect(screen.getByText("WalletConnect")).toBeTruthy();
     expect(screen.getByText(/No browser wallet detected/i)).toBeTruthy();
   });
+
+  /**
+   * Trust Wallet's in-app browser injects `window.ethereum` after the dapp has
+   * booted. A previously chosen injected wallet must reconnect when it finally
+   * appears — the stored choice was already made, so no user action is required.
+   */
+  it("restores a stored injected wallet that only appears after first paint", async () => {
+    // A connector was chosen on a previous visit, but nothing is injected yet.
+    window.localStorage.setItem("intentpay.wallet.connector", "legacy:metamask");
+
+    render(
+      <WalletProvider>
+        <ConnectButton />
+      </WalletProvider>,
+    );
+    await flush();
+    expect(screen.getByRole("button", { name: /connect wallet/i })).toBeTruthy();
+
+    // The wallet injects late (as Trust Wallet does), then discovery notices it.
+    await act(async () => {
+      (window as any).ethereum = makeProvider();
+      await new Promise((r) => setTimeout(r, 600));
+    });
+
+    expect(screen.getByText(/0x7A91/)).toBeTruthy();
+  });
+
+  it("does not resurrect a deliberately disconnected wallet when a late provider appears", async () => {
+    const provider = makeProvider();
+    (window as any).ethereum = provider;
+
+    render(
+      <WalletProvider>
+        <ConnectButton />
+      </WalletProvider>,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    fireEvent.click(screen.getByText("MetaMask"));
+    await flush();
+    expect(screen.getByText(/0x7A91/)).toBeTruthy();
+
+    // The user disconnects on purpose — the stored choice is cleared.
+    fireEvent.click(screen.getByRole("button", { name: /wallet menu/i }));
+    fireEvent.click(screen.getByText("Disconnect"));
+    expect(screen.getByRole("button", { name: /connect wallet/i })).toBeTruthy();
+
+    // A later discovery event must not silently reconnect it.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    expect(screen.getByRole("button", { name: /connect wallet/i })).toBeTruthy();
+  });
 });

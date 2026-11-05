@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ANNOUNCE_EVENT,
+  LEGACY_INITIALIZED_EVENT,
   REQUEST_EVENT,
   collectLegacyWallets,
   legacyProviderName,
@@ -41,6 +42,10 @@ function fakeWindow(ethereum?: Eip1193Provider) {
       return true;
     },
     _dispatched: dispatched,
+    _dispatch(event: Event) {
+      for (const handler of listeners.get(event.type) ?? []) handler(event);
+      return true;
+    },
     _announce(detail: unknown) {
       const event = new CustomEvent(ANNOUNCE_EVENT, { detail });
       for (const handler of listeners.get(ANNOUNCE_EVENT) ?? []) handler(event);
@@ -124,8 +129,41 @@ describe("collectLegacyWallets", () => {
     const eth = fakeProvider({ providers: [mm, cb] });
     const wallets = collectLegacyWallets({ ethereum: eth } as unknown as Window);
     expect(wallets.map((w) => w.name)).toEqual(["MetaMask", "Coinbase Wallet"]);
-    expect(wallets.map((w) => w.id)).toEqual(["legacy:0", "legacy:1"]);
+    // The id is derived from the provider's identity, not its index in the
+    // array (which is not stable across page loads).
+    expect(wallets.map((w) => w.id)).toEqual(["legacy:metamask", "legacy:coinbase"]);
     expect(wallets.every((w) => w.announced === false)).toBe(true);
+  });
+
+  it("gives a legacy provider a stable id derived from its identity, not its index", () => {
+    // The same wallet seen in a different array order must yield the same id,
+    // otherwise a stored connector id restores the wrong wallet (or none).
+    const mm = fakeProvider({ isMetaMask: true });
+    const trust = fakeProvider({ isTrust: true });
+    const a = collectLegacyWallets({ ethereum: fakeProvider({ providers: [mm, trust] }) } as unknown as Window);
+    const b = collectLegacyWallets({ ethereum: fakeProvider({ providers: [trust, mm] }) } as unknown as Window);
+    expect(a.map((w) => w.id).sort()).toEqual(b.map((w) => w.id).sort());
+    expect(a.map((w) => w.id)).toContain("legacy:trust");
+  });
+
+  it("discovers a Trust Wallet provider exposed only on window.trustwallet.ethereum", () => {
+    const trust = fakeProvider({ isTrust: true });
+    // The native layer sets `window.trustwallet.ethereum` first; `window.ethereum`
+    // may not exist yet on the tick the dapp runs.
+    const wallets = collectLegacyWallets({ trustwallet: { ethereum: trust } } as unknown as Window);
+    expect(wallets).toHaveLength(1);
+    expect(wallets[0].name).toBe("Trust Wallet");
+    expect(wallets[0].id).toBe("legacy:trust");
+    expect(wallets[0].provider).toBe(trust);
+  });
+
+  it("does not double-count a provider exposed on both window.ethereum and window.trustwallet", () => {
+    const trust = fakeProvider({ isTrust: true });
+    const wallets = collectLegacyWallets({
+      ethereum: trust,
+      trustwallet: { ethereum: trust },
+    } as unknown as Window);
+    expect(wallets).toHaveLength(1);
   });
 
   it("treats a single provider as one legacy wallet", () => {
@@ -183,5 +221,75 @@ describe("watchWallets", () => {
     const before = seen.length;
     win._announce(detail("uuid-x", "io.rabby", "Rabby", fakeProvider()));
     expect(seen.length).toBe(before);
+  });
+
+  describe("late legacy injection (Trust Wallet mobile)", () => {
+    it("discovers a legacy-only provider that appears AFTER watchWallets starts", () => {
+      vi.useFakeTimers();
+      try {
+        const win = fakeWindow(undefined);
+        const seen: number[] = [];
+        const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+        expect(seen[seen.length - 1]).toBe(0);
+
+        // Trust Wallet's in-app browser injects window.ethereum on a later tick.
+        (win as { ethereum?: Eip1193Provider }).ethereum = fakeProvider({ isTrust: true });
+        vi.advanceTimersByTime(500);
+
+        expect(seen[seen.length - 1]).toBe(1);
+        destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("discovers a provider that only signals via ethereum#initialized", () => {
+      const win = fakeWindow(undefined);
+      const seen: number[] = [];
+      const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+      expect(seen[seen.length - 1]).toBe(0);
+
+      // Some wallets inject and then dispatch the convention event.
+      (win as { ethereum?: Eip1193Provider }).ethereum = fakeProvider({ isMetaMask: true });
+      win._dispatch(new Event(LEGACY_INITIALIZED_EVENT));
+
+      expect(seen[seen.length - 1]).toBe(1);
+      destroy();
+    });
+
+    it("discovers a Trust Wallet provider exposed only on window.trustwallet.ethereum, late", () => {
+      vi.useFakeTimers();
+      try {
+        const win = fakeWindow(undefined);
+        const seen: number[] = [];
+        const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+
+        (win as unknown as { trustwallet?: { ethereum: Eip1193Provider } }).trustwallet = {
+          ethereum: fakeProvider({ isTrust: true }),
+        };
+        vi.advanceTimersByTime(500);
+
+        expect(seen[seen.length - 1]).toBe(1);
+        destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops polling for a late provider after destroy", () => {
+      vi.useFakeTimers();
+      try {
+        const win = fakeWindow(undefined);
+        const seen: number[] = [];
+        const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+        destroy();
+        const before = seen.length;
+        (win as { ethereum?: Eip1193Provider }).ethereum = fakeProvider({ isTrust: true });
+        vi.advanceTimersByTime(2000);
+        expect(seen.length).toBe(before);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

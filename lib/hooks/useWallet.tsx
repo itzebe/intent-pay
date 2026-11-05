@@ -227,13 +227,23 @@ export function WalletProvider({
   );
 
   // ---- Silent reconnect for the previously chosen wallet -------------------
-  // Runs once, after a short delay so late EIP-6963 announcements are included.
+  // Runs once, shortly after load so late EIP-6963 announcements are included,
+  // and again if a stored injected wallet only appears later — the Trust Wallet
+  // mobile case, where the stored connector exists but `window.ethereum` did not
+  // exist when the first attempt ran.
   const restoreAttemptedRef = useRef(false);
-  useEffect(() => {
-    if (restoreAttemptedRef.current) return;
-    restoreAttemptedRef.current = true;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
+  const restoredRef = useRef(false);
+  /**
+   * True only when the first attempt found a stored injected connector id but
+   * the wallet itself was not present yet (a late injection). The late-restore
+   * effect keys off this, so it can never resurrect a wallet the user has
+   * deliberately disconnected or re-connected by hand.
+   */
+  const lateRestorePendingRef = useRef(false);
+
+  const restore = useCallback(
+    async (signal: { cancelled: boolean }) => {
+      const cancelled = () => signal.cancelled;
       const storedId = readStoredConnector();
 
       // WalletConnect: restore a live session by re-initialising the provider
@@ -242,14 +252,16 @@ export function WalletProvider({
       // disconnected rather than showing a phantom one.
       if (storedId === WALLETCONNECT_ID && walletConnectConfigured()) {
         const provider = await getWalletConnectProvider();
-        if (cancelled || !provider) {
-          if (!cancelled) setState((s) => ({ ...s, restoring: false }));
+        if (cancelled() || !provider) {
+          if (!cancelled()) setState((s) => ({ ...s, restoring: false }));
           return;
         }
         attach(provider, "walletconnect", WALLETCONNECT_ID);
+        restoredRef.current = true;
+        lateRestorePendingRef.current = false;
         try {
           const accounts = await provider.request({ method: "eth_accounts" });
-          if (cancelled) return;
+          if (cancelled()) return;
           const address = firstAccount(accounts);
           const chainIdHex = address
             ? ((await provider.request({ method: "eth_chainId" })) as string)
@@ -264,7 +276,7 @@ export function WalletProvider({
             kind: address ? "walletconnect" : undefined,
           }));
         } catch {
-          if (!cancelled) setState((s) => ({ ...s, restoring: false }));
+          if (!cancelled()) setState((s) => ({ ...s, restoring: false }));
         }
         return;
       }
@@ -274,13 +286,18 @@ export function WalletProvider({
         ? injectedRef.current.find((w) => w.id === restorableId)
         : undefined;
       if (!wallet) {
-        if (!cancelled) setState((s) => ({ ...s, restoring: false }));
+        // A stored injected connector that is not here yet may simply have
+        // injected late; the effect below re-tries when it appears.
+        lateRestorePendingRef.current = Boolean(storedId && storedId !== WALLETCONNECT_ID);
+        if (!cancelled()) setState((s) => ({ ...s, restoring: false }));
         return;
       }
       attach(wallet.provider, "injected", wallet.id);
+      restoredRef.current = true;
+      lateRestorePendingRef.current = false;
       try {
         const accounts = await wallet.provider.request({ method: "eth_accounts" });
-        if (cancelled) return;
+        if (cancelled()) return;
         const address = firstAccount(accounts);
         const chainIdHex = address
           ? ((await wallet.provider.request({ method: "eth_chainId" })) as string)
@@ -295,14 +312,37 @@ export function WalletProvider({
           kind: address ? "injected" : undefined,
         }));
       } catch {
-        if (!cancelled) setState((s) => ({ ...s, restoring: false }));
+        if (!cancelled()) setState((s) => ({ ...s, restoring: false }));
       }
-    }, 250);
+    },
+    [attach],
+  );
+
+  useEffect(() => {
+    if (restoreAttemptedRef.current) return;
+    restoreAttemptedRef.current = true;
+    const signal = { cancelled: false };
+    const timer = setTimeout(() => void restore(signal), 250);
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
       clearTimeout(timer);
     };
-  }, [attach]);
+  }, [restore]);
+
+  // A stored injected wallet that only appears after the first attempt (a late
+  // injection) is restored as soon as it shows up. Scoped to the genuinely
+  // pending case, so it never fights a deliberate disconnect or manual connect.
+  // The attempt is not cancelled on re-render: `restore` marks itself done
+  // synchronously once it has attached, so it can never run twice.
+  useEffect(() => {
+    if (!restoreAttemptedRef.current || restoredRef.current) return;
+    if (!lateRestorePendingRef.current) return;
+    if (state.status !== "disconnected") return;
+    const storedId = readStoredConnector();
+    if (!storedId || storedId === WALLETCONNECT_ID) return;
+    if (!pickRestorableWallet(storedId, injected)) return;
+    void restore({ cancelled: false });
+  }, [injected, state.status, restore]);
 
   // Keep `hasProvider` in sync with discovery even when nothing is restored.
   useEffect(() => {

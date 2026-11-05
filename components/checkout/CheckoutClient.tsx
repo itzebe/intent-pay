@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBalances, useWallet } from "@/lib/hooks/useWallet";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { sendCallsSequentially } from "@/lib/wallet/sendCalls";
+import { logCheckoutDiagnostic, diagnosticCodeOf } from "@/lib/wallet/checkoutDiagnostics";
+import { classifyTransactionError } from "@/lib/domain/transactionError";
 import { NETWORKS, explorerTxUrl } from "@/lib/config/chains";
 import { shortAddress } from "@/lib/format";
 import { Copy, ExternalLink, Shield, Spinner, Warning } from "@/components/ui/Icons";
@@ -31,6 +33,14 @@ type Phase =
   | "payment_failed"
   | "expired"
   | "canceled";
+
+/**
+ * The phase a renderer may actually receive. The server is the source of truth
+ * and a newer deployment can return a phase this bundle does not know, so the
+ * UI must treat the value as untrusted: an unrecognised phase renders a neutral
+ * state instead of throwing (which unmounted the tree and blanked the page).
+ */
+type RenderPhase = Phase | (string & {});
 
 type CheckoutView = {
   id: string;
@@ -138,6 +148,7 @@ export function CheckoutClient({ token }: { token: string }) {
     if (!wallet.address) return;
     setBusy(true);
     setActionError(null);
+    const kind: "injected" | "walletconnect" | "none" = wallet.kind ?? (wallet.provider ? "injected" : "none");
     try {
       // 1. Ask the server for the calls, built from the frozen parameters.
       const prep = await fetch(`/api/checkout/${token}/prepare`, {
@@ -148,9 +159,17 @@ export function CheckoutClient({ token }: { token: string }) {
       if (!prep.ok) {
         const err = await prep.json().catch(() => null);
         setActionError(err?.error?.message ?? "This payment could not be prepared. Try again.");
+        logCheckoutDiagnostic({ stage: "prepare", walletKind: kind, chainId: wallet.chainId, code: err?.error?.code });
         return;
       }
       const prepared = (await prep.json()) as PreparedCalls;
+      // A malformed prepare response must be a clear error, never a crash on
+      // `prepared.calls.length` (which would blank the page).
+      if (!prepared || !Array.isArray(prepared.calls) || prepared.calls.length === 0) {
+        setActionError("This payment could not be prepared. Try again or contact the merchant.");
+        logCheckoutDiagnostic({ stage: "prepare", walletKind: kind, chainId: wallet.chainId, code: "malformed_prepare" });
+        return;
+      }
       preparedRef.current = prepared;
 
       // Record whatever has actually been broadcast, so an interrupted payment
@@ -207,6 +226,12 @@ export function CheckoutClient({ token }: { token: string }) {
         // Record whatever already broadcast so the order reflects it, then stop.
         await recordSubmitted(outcome.hashes);
         setActionError(outcome.message);
+        logCheckoutDiagnostic({
+          stage: outcome.reason === "unconfirmed" ? "receipt" : "broadcast",
+          walletKind: kind,
+          chainId: wallet.chainId,
+          code: outcome.reason,
+        });
         return;
       }
       const hashes = outcome.hashes;
@@ -221,6 +246,7 @@ export function CheckoutClient({ token }: { token: string }) {
         const err = await sub.json().catch(() => null);
         setActionError(err?.error?.message ?? "Your transaction was sent, but we could not record it. Keep the hash and contact the merchant.");
         setTxHashes(hashes);
+        logCheckoutDiagnostic({ stage: "submit", walletKind: kind, chainId: wallet.chainId, code: err?.error?.code });
         return;
       }
       setTxHashes(hashes);
@@ -232,19 +258,24 @@ export function CheckoutClient({ token }: { token: string }) {
         body: JSON.stringify({}),
       });
       if (!ver.ok) {
-        const body = (await ver.json().catch(() => null)) as { error?: { message?: string } } | null;
+        const body = (await ver.json().catch(() => null)) as { error?: { message?: string; code?: string } } | null;
         // A non-OK verify (e.g. replay_detected) is not a completed payment — say so.
         setActionError(body?.error?.message ?? "Your payment could not be verified. Contact the merchant.");
+        logCheckoutDiagnostic({ stage: "verify", walletKind: kind, chainId: wallet.chainId, code: body?.error?.code });
       }
       await load();
     } catch (err) {
-      const code = (err as { code?: number })?.code;
-      if (code === 4001) setActionError("You declined the transaction in your wallet.");
-      else setActionError("The transaction could not be completed. You can try again.");
+      // Every failure is recoverable and must leave the checkout visible with a
+      // specific message — a thrown value error must never blank the page.
+      const info = classifyTransactionError(err);
+      setActionError(info.message);
+      logCheckoutDiagnostic({ stage: "sign", walletKind: kind, chainId: wallet.chainId, code: diagnosticCodeOf(err) ?? info.kind });
+      // Reflect any real state change (the intent may now be submitted/failed).
+      await load().catch(() => undefined);
     } finally {
       setBusy(false);
     }
-  }, [wallet.address, wallet.provider, wallet.network, token, load]);
+  }, [wallet.address, wallet.provider, wallet.network, wallet.chainId, wallet.kind, token, load]);
 
   /** Re-check settlement for a submitted payment (an explicit, safe retry). */
   const checkStatus = useCallback(async () => {
@@ -416,7 +447,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-function PhaseBanner({ phase, onMonad }: { phase: Phase; onMonad: boolean }) {
+function PhaseBanner({ phase, onMonad }: { phase: RenderPhase; onMonad: boolean }) {
   const map: Record<Phase, { tone: string; text: string }> = {
     awaiting_payment: { tone: "text-white/60", text: onMonad ? "Ready to pay" : "Connect a wallet to pay" },
     awaiting_wallet: { tone: "text-white/60", text: "Waiting for your wallet" },
@@ -427,6 +458,11 @@ function PhaseBanner({ phase, onMonad }: { phase: Phase; onMonad: boolean }) {
     expired: { tone: "text-amber-200/90", text: "This payment link has expired" },
     canceled: { tone: "text-amber-200/90", text: "This payment was canceled by the merchant" },
   };
-  const entry = map[phase];
+  // An unrecognised phase (a newer server than this bundle) is reported as
+  // "updating" rather than crashing — the page stays usable.
+  const entry = map[phase as Phase] ?? {
+    tone: "text-white/60",
+    text: "Updating your payment status…",
+  };
   return <p className={`text-sm ${entry.tone}`}>{entry.text}</p>;
 }

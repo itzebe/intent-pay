@@ -148,8 +148,14 @@ export class Wallet {
       throw new WalletError("wallet_not_found", "WalletConnect could not be started. Check your projectId and network access.");
     }
 
-    await provider.request({ method: "eth_requestAccounts" });
-    const accounts = await provider.request({ method: "eth_accounts" });
+    // `enable()` starts the pairing flow (QR / deep link) and returns the
+    // authorised accounts. A bare `eth_requestAccounts` is answered locally from
+    // the current session — with none, it returns empty and never prompts, which
+    // is why a mobile connection appeared to do nothing.
+    const enable = (provider as { enable?: () => Promise<unknown> }).enable;
+    const accounts = typeof enable === "function"
+      ? await enable.call(provider)
+      : await provider.request({ method: "eth_requestAccounts" });
     const address = firstAccount(accounts);
     if (!address) throw new WalletError("wallet_no_account", "The WalletConnect session returned no account.");
     const chainId = await Wallet.readChainId(provider);

@@ -34,14 +34,30 @@ export function walletConnectConfigured(): boolean {
 /** The chain WalletConnect is offered for — Monad Mainnet only. */
 const CHAIN_ID = NETWORKS.mainnet.chainId;
 
-let providerPromise: Promise<Eip1193Provider | null> | null = null;
+let providerPromise: Promise<WalletConnectProvider | null> | null = null;
+
+/**
+ * The WalletConnect EIP-1193 provider, plus the extra surface we rely on.
+ *
+ * `connect()` (not `request({method:"eth_requestAccounts"})`) is what actually
+ * starts the pairing flow and opens the QR modal. On the low-level
+ * UniversalProvider, `eth_requestAccounts` is answered locally from the
+ * *current* session — with no session it returns an empty list without ever
+ * prompting. That is the mobile defect: the connect button did nothing.
+ */
+export type WalletConnectProvider = Eip1193Provider & {
+  connect?: (opts?: { chains?: number[]; pairingTopic?: string }) => Promise<void>;
+  enable?: () => Promise<string[]>;
+  session?: unknown;
+  on?: (event: string, handler: (...args: any[]) => void) => void;
+};
 
 /**
  * Initialize (once) and return the WalletConnect EIP-1193 provider. Returns
  * `null` when WalletConnect is not configured or the SDK cannot load — the
  * caller must treat that as "unavailable", never as a connection.
  */
-export async function getWalletConnectProvider(): Promise<Eip1193Provider | null> {
+export async function getWalletConnectProvider(): Promise<WalletConnectProvider | null> {
   if (!walletConnectConfigured()) return null;
   if (typeof window === "undefined") return null;
   if (!providerPromise) {
@@ -69,9 +85,14 @@ export async function getWalletConnectProvider(): Promise<Eip1193Provider | null
             icons: [`${SITE_URL}/icon.svg`],
           },
         });
-        return provider as unknown as Eip1193Provider;
+        return provider as unknown as WalletConnectProvider;
       })
-      .catch(() => null);
+      .catch(() => {
+        // A failed init must not be cached as a permanent null, or a transient
+        // CDN/network failure would disable WalletConnect for the whole session.
+        providerPromise = null;
+        return null;
+      });
   }
   return providerPromise;
 }

@@ -65,6 +65,10 @@ function WalletPicker({ open, onClose }: { open: boolean; onClose: () => void })
   const choose = async (w: WalletOption) => {
     if (!w.available) return;
     setConnectingId(w.id);
+    // WalletConnect opens its own QR / deep-link dialog. Close this picker
+    // first, or the customer sees two stacked dialogs and the QR is hidden
+    // behind the picker — which on mobile read as "nothing happened".
+    if (w.kind === "walletconnect") onClose();
     await wallet.connect(w.id);
     setConnectingId(null);
     onClose();

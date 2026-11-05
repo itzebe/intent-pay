@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { apiError, apiOk, readJson } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
-import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
+import { canonicalParams, currentState, getIntent, submittedTxHashes } from "@/lib/developer/intents";
 import { checkoutPhase, checkoutStatus, getCheckoutByToken, recordCheckoutFailure, recordCheckoutVerified, verificationDestination } from "@/lib/developer/checkouts";
 import { drainDueSoon } from "@/lib/developer/webhooks";
-import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { checkTransactionSet, settlementToleranceBps } from "@/lib/developer/settlement";
 import { claimTransaction } from "@/lib/developer/claims";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 import { isValidCheckoutToken } from "@/lib/developer/checkoutToken";
@@ -48,15 +48,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
   const body = await readJson(req);
   const explicit = typeof body?.txHash === "string" && isValidTxHash(body.txHash) ? body.txHash : null;
-  const txHash = explicit ?? (await checkoutSubmittedHash(intent.id));
-  if (!txHash) return apiError("invalid_request", "No transaction hash to verify.", undefined, "txHash");
+  // A swap payment is several transactions (approve → swap → deliver); the one
+  // that pays the recipient is not necessarily the first. Verify across every
+  // hash the customer submitted, unless the caller named one explicitly.
+  const hashes = explicit ? [explicit] : await submittedTxHashes(intent.id);
+  if (hashes.length === 0) return apiError("invalid_request", "No transaction hash to verify.", undefined, "txHash");
 
   if (intent.authorizedParams && intent.authorizedParams !== canonicalParams(intent)) {
     return apiError("conflict", "The payment parameters changed after authorization.");
   }
 
-  const check = await verifySettlement({
-    txHash,
+  const check = await checkTransactionSet(hashes, {
     recipient: intent.recipient,
     destination: verificationDestination(checkout, intent),
     receiveTokenAddress: intent.receiveTokenAddress,
@@ -67,11 +69,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
   });
 
   if (check.verdict === "verified") {
-    // Take the durable claim *before* completing the order: a hash already consumed
-    // by another order is a replay and must not satisfy this one.
+    // The hash that actually delivered is the one to claim; a hash already
+    // consumed by another order is a replay and must not satisfy this one.
+    const settledHash = check.txHash ?? hashes[0];
     const claim = await claimTransaction({
       chainId: intent.chainId,
-      txHash,
+      txHash: settledHash,
       intentId: intent.id,
       developerId: intent.developerId,
       blockNumber: check.blockNumber,

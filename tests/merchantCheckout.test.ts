@@ -93,11 +93,28 @@ vi.mock("@/lib/execution/execute", async () => {
   };
 });
 
-vi.mock("@/lib/developer/settlement", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/developer/settlement")>()),
-  verifySettlement: vi.fn(),
-  receiveTokenFor: vi.fn(() => USDC),
-}));
+const { verifySettlementMock } = vi.hoisted(() => ({ verifySettlementMock: vi.fn() }));
+vi.mock("@/lib/developer/settlement", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/developer/settlement")>();
+  return {
+    ...real,
+    verifySettlement: verifySettlementMock,
+    receiveTokenFor: vi.fn(() => USDC),
+    // Delegate the multi-hash check to the mocked single-hash verifier, so a
+    // test that stubs `verifySettlement` also drives the real multi-transaction
+    // rule (a swap is several txs; the one that pays the recipient is not
+    // necessarily the first).
+    checkTransactionSet: vi.fn(async (hashes: string[], input: Record<string, unknown>) => {
+      const checks: Array<Record<string, unknown>> = [];
+      for (const h of hashes) {
+        const c = (await verifySettlementMock({ ...input, txHash: h })) as Record<string, unknown>;
+        if (c.verdict === "verified") return { ...c, txHash: h };
+        checks.push({ ...c, txHash: h });
+      }
+      return real.summarizeChecks(checks as never);
+    }),
+  };
+});
 
 import { verifySettlement } from "@/lib/developer/settlement";
 
@@ -284,6 +301,42 @@ describe("checkout lifecycle through the API", () => {
     status = await (await checkoutGET(req(`http://localhost/api/v1/checkouts/${checkoutId}`, { token }), { params: Promise.resolve({ id: checkoutId }) })).json();
     expect(status.checkout.status).toBe("completed");
     expect(status.checkout.phase).toBe("payment_verified");
+  });
+
+  it("verifies a multi-transaction (swap) payment from the delivering hash, not the first", async () => {
+    const token = await newKey();
+    const { checkoutId } = await createCheckoutViaApi(token);
+    const approveHash = `0x${"1".repeat(64)}`;
+    const swapHash = `0x${"2".repeat(64)}`;
+
+    // The customer's wallet broadcast the whole plan: approve first, then swap.
+    const sub = await checkoutSubmitPOST(
+      req(`http://localhost/api/v1/checkouts/${checkoutId}/submit`, { method: "POST", token, body: { txHashes: [approveHash, swapHash] } }),
+      { params: Promise.resolve({ id: checkoutId }) },
+    );
+    expect(sub.status).toBe(200);
+
+    // The approval transfers nothing to the recipient; the swap delivers. A
+    // verifier that only checked the first hash would report `short` and the
+    // order could never settle.
+    vi.mocked(verifySettlement).mockImplementation(async (input: { txHash: string }) =>
+      input.txHash === swapHash
+        ? { verdict: "verified" as const, delivered: "5", expected: "5", blockNumber: 123456, chainId: 143, message: "ok" }
+        : { verdict: "short" as const, delivered: "0", expected: "5", blockNumber: 123455, chainId: 143, message: "no transfer" },
+    );
+
+    const ver = await checkoutVerifyPOST(
+      req(`http://localhost/api/v1/checkouts/${checkoutId}/verify`, { method: "POST", token, body: {} }),
+      { params: Promise.resolve({ id: checkoutId }) },
+    );
+    expect(ver.status).toBe(200);
+    const verJson = await ver.json();
+    expect(verJson.verdict).toBe("verified");
+    expect(verJson.state).toBe("verified");
+
+    // The claim is held on the hash that actually delivered, not the approval.
+    const evidence = await (await checkoutEvidenceGET(req(`http://localhost/api/v1/checkouts/${checkoutId}/evidence`, { token }), { params: Promise.resolve({ id: checkoutId }) })).json();
+    expect(evidence.transactionClaim?.txHash).toBe(swapHash);
   });
 
   it("does not complete the order when settlement is not verified", async () => {

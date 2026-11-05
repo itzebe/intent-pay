@@ -168,7 +168,7 @@ npm install @walletconnect/ethereum-provider`}</pre>
       <DocSection title="Submit and verify settlement">
         <UL>
           <LI><Code>POST /intents/&#123;id&#125;/submit</Code> — body <Code>&#123; txHash &#125;</Code> or <Code>&#123; txHashes &#125;</Code>. Records the broadcast hash(es). Requires a prior authorize. A duplicate submit is refused.</LI>
-          <LI><Code>POST /intents/&#123;id&#125;/verify</Code> — reads the authoritative Monad receipt and proves the recipient received the asset. Body <Code>&#123; txHash? &#125;</Code> defaults to the submitted hash.</LI>
+          <LI><Code>POST /intents/&#123;id&#125;/verify</Code> — reads the authoritative Monad receipt and proves the recipient received the asset. Body <Code>&#123; txHash? &#125;</Code> defaults to every hash recorded at submit. A swap is several transactions (approve → swap → deliver) and the one that pays the recipient is not necessarily the first, so all submitted hashes are checked and the verdict names the transaction that delivered.</LI>
         </UL>
         <P>The verify verdict is specific:</P>
         <UL>

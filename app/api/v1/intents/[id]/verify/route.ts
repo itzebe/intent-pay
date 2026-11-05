@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
-import { canonicalParams, currentState, getIntent, intentEvents, transition } from "@/lib/developer/intents";
+import { canonicalParams, currentState, getIntent, intentEvents, submittedTxHashes, transition } from "@/lib/developer/intents";
 
-import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { checkTransactionSet, settlementToleranceBps } from "@/lib/developer/settlement";
 import { claimTransaction } from "@/lib/developer/claims";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 import { isTerminal } from "@/lib/developer/intentLifecycle";
@@ -50,18 +50,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
   if (isTerminal(state)) return apiError("invalid_state", `This intent is ${state}.`, auth.requestId);
 
-  // A hash is required: the one from submit, or an explicit one in the body.
+  // A hash is required: the ones from submit, or an explicit one in the body.
   const body = await readJson(req);
-  const submittedHash = (await intentEvents(record.id))
-    .map((e) => e.detail ?? "")
-    .filter((d) => d.startsWith("tx:"))
-    .pop()
-    ?.slice(3)
-    .split(",")
-    .filter(Boolean)[0];
   const explicit = typeof body?.txHash === "string" && isValidTxHash(body.txHash) ? body.txHash : null;
-  const txHash = explicit ?? submittedHash ?? null;
-  if (!txHash) {
+  // A swap payment is several transactions (approve → swap → deliver); the one
+  // that pays the recipient is not necessarily the first. Verify across every
+  // hash recorded at submit, unless the caller named one explicitly.
+  const hashes = explicit ? [explicit] : await submittedTxHashes(record.id);
+  if (hashes.length === 0) {
     return apiError("invalid_request", "No transaction hash to verify. Submit one, or pass `txHash`.", auth.requestId, "txHash");
   }
 
@@ -69,8 +65,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return apiError("conflict", "The intent's parameters changed after authorization.", auth.requestId);
   }
 
-  const check = await verifySettlement({
-    txHash,
+  const check = await checkTransactionSet(hashes, {
     recipient: record.recipient,
     receiveTokenAddress: record.receiveTokenAddress,
     receiveToken: record.receiveToken,
@@ -80,11 +75,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
 
   if (check.verdict === "verified") {
-    // Claim the transaction before it can satisfy this intent; a hash already used
-    // by another intent is a replay and is refused.
+    // Claim the transaction that actually delivered; a hash already used by
+    // another intent is a replay and is refused.
+    const settledHash = check.txHash ?? hashes[0];
     const claim = await claimTransaction({
       chainId: record.chainId,
-      txHash,
+      txHash: settledHash,
       intentId: record.id,
       developerId: record.developerId,
       blockNumber: check.blockNumber,

@@ -92,11 +92,24 @@ vi.mock("@/lib/execution/execute", async () => {
   };
 });
 
-vi.mock("@/lib/developer/settlement", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/developer/settlement")>()),
-  verifySettlement: vi.fn(),
-  receiveTokenFor: vi.fn(() => USDC),
-}));
+const { verifySettlementMock } = vi.hoisted(() => ({ verifySettlementMock: vi.fn() }));
+vi.mock("@/lib/developer/settlement", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/developer/settlement")>();
+  return {
+    ...real,
+    verifySettlement: verifySettlementMock,
+    receiveTokenFor: vi.fn(() => USDC),
+    checkTransactionSet: vi.fn(async (hashes: string[], input: Record<string, unknown>) => {
+      const checks: Array<Record<string, unknown>> = [];
+      for (const h of hashes) {
+        const c = (await verifySettlementMock({ ...input, txHash: h })) as Record<string, unknown>;
+        if (c.verdict === "verified") return { ...c, txHash: h };
+        checks.push({ ...c, txHash: h });
+      }
+      return real.summarizeChecks(checks as never);
+    }),
+  };
+});
 
 import { verifySettlement } from "@/lib/developer/settlement";
 

@@ -2,6 +2,7 @@ import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent, intentFingerprint } from "@/lib/developer/intents";
 import { checkoutLifecycle, checkoutTxHashes, expireCheckoutIfStale, getCheckout, publicCheckout, attributionInfo, verificationDestination } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
 import { intentClaim } from "@/lib/developer/claims";
 import { NextResponse } from "next/server";
@@ -43,6 +44,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!intent) return apiError("not_found", "The bound intent no longer exists.", auth.requestId);
 
   await expireCheckoutIfStale(checkout);
+  // Expiring a stale order emits `checkout.expired`; deliver it after the response.
+  await drainDueSoon();
   const state = await currentState(intent.id);
   const txHashes = await checkoutTxHashes(intent.id);
   const lifecycle = await checkoutLifecycle(intent.id);

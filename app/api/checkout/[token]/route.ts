@@ -9,6 +9,7 @@ import {
   getCheckoutByToken,
   publicCheckoutForCustomer,
 } from "@/lib/developer/checkouts";
+import { drainDueSoon } from "@/lib/developer/webhooks";
 import { isValidCheckoutToken } from "@/lib/developer/checkoutToken";
 
 export const dynamic = "force-dynamic";
@@ -45,6 +46,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
 
   const state = await currentState(intent.id);
   const txHashes = await checkoutTxHashes(intent.id);
+  // Expiring a stale order emits `checkout.expired`; deliver it after the
+  // response so the merchant is not left waiting on new traffic for the event.
+  await drainDueSoon();
   return apiOk({
     checkout: publicCheckoutForCustomer(checkout, intent, state),
     phase: checkoutPhase(checkout, state),

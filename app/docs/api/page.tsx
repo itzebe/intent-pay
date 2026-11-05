@@ -108,6 +108,11 @@ npm install @walletconnect/ethereum-provider`}</pre>
           <Code>examples/quickstart</Code>; the package README documents every method, the retry
           rules, and the error classes.
         </P>
+        <P>
+          For a full merchant integration — checkout-bound attribution, payment links, webhook
+          verification and settlement evidence, built against only the published SDK — see{" "}
+          <Code>examples/merchant</Code>.
+        </P>
       </DocSection>
 
       <DocSection title="Accounts and keys">

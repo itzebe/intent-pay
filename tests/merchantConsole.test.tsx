@@ -141,4 +141,53 @@ describe("merchant console", () => {
     expect(screen.getByText("Shared recipient")).toBeTruthy();
     expect(screen.getByText(/cannot be tied to one specific order/)).toBeTruthy();
   });
+
+  it("shows settlement evidence for an order, re-verified on-chain", async () => {
+    const calls: string[] = [];
+    global.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      if (url === "/api/v1/developers") {
+        return new Response(JSON.stringify({ ok: true, developer: { id: "dev_1", name: "shop", status: "active" }, keys: [] }), { status: 200 });
+      }
+      if (url === "/api/v1/attribution" && (init?.method ?? "GET") === "GET") {
+        return new Response(
+          JSON.stringify({ ok: true, attribution: { mode: "checkout_bound", checkoutBound: true, nextDerivationIndex: 1, preview: [] } }),
+          { status: 200 },
+        );
+      }
+      if (url === "/api/v1/checkouts" && (init?.method ?? "GET") === "GET") {
+        return new Response(
+          JSON.stringify({ ok: true, checkouts: [{ id: "chk_1", token: "chk_token", status: "completed", phase: "payment_verified", orderReference: "ORDER-9", expiresAt: "2099-01-01T00:30:00.000Z", createdAt: "2026-01-01T00:00:00.000Z" }] }),
+          { status: 200 },
+        );
+      }
+      if (url === "/api/v1/checkouts/chk_1/evidence") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            checkout: { status: "completed", phase: "payment_verified" },
+            intent: {},
+            txHashes: ["0xabc"],
+            settlement: { verdict: "verified", delivered: "5", expected: "5", blockNumber: 123 },
+            settled: true,
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as any;
+
+    render(<MerchantConsole />);
+    fireEvent.change(screen.getByPlaceholderText("ipk_live_…"), { target: { value: "ipk_live_ok" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await flush();
+
+    fireEvent.click(screen.getByRole("button", { name: "Evidence" }));
+    await flush();
+
+    // The evidence is fetched from the real endpoint and rendered as proof.
+    expect(calls).toContain("GET /api/v1/checkouts/chk_1/evidence");
+    expect(screen.getByText("Settled on-chain")).toBeTruthy();
+    expect(screen.getByText("verified")).toBeTruthy();
+  });
 });

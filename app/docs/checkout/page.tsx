@@ -90,10 +90,18 @@ curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/checkouts \\
         </P>
         <UL>
           <LI><Code>verified</Code> — the recipient was paid on-chain. The order is complete.</LI>
-          <LI><Code>pending</Code> — a transaction exists but is not yet confirmed. Retryable.</LI>
+          <LI><Code>pending</Code> / <Code>unconfirmed</Code> — a transaction exists but is not yet confirmed (or not yet past the finality policy). Retryable.</LI>
           <LI><Code>not_found</Code> / <Code>unavailable</Code> — retryable; never treated as success.</LI>
-          <LI><Code>contradictory</Code> — the transaction did not deliver what was promised.</LI>
+          <LI><Code>short</Code> — the recipient received less than intended. The order fails.</LI>
+          <LI><Code>reverted</Code> — the transaction failed on-chain. The order fails.</LI>
+          <LI><Code>historical</Code> — the transaction predates the order, so it is not this order&apos;s payment. The order fails.</LI>
         </UL>
+        <P>
+          One transaction pays one order: a hash is claimed durably on
+          <Code>(chainId, txHash)</Code> when settlement is proven, and a hash that already paid
+          another order is refused with <Code>409 replay_detected</Code>. A <Code>verified</Code>
+          order records the exact amount delivered; an overpayment is never refunded automatically.
+        </P>
       </DocSection>
 
       <DocSection title="Manage orders">

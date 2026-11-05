@@ -26,7 +26,7 @@ export const dynamic = "force-dynamic";
  * intent's real lifecycle, so the page can never show "paid" before the chain
  * proves it.
  */
-export async function GET(req: Request, { params }: { params: Promise<{ token: string }> }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!isValidCheckoutToken(token)) return apiError("not_found", "No such checkout.");
 

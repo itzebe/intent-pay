@@ -93,7 +93,8 @@ vi.mock("@/lib/execution/execute", async () => {
   };
 });
 
-vi.mock("@/lib/developer/settlement", () => ({
+vi.mock("@/lib/developer/settlement", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/developer/settlement")>()),
   verifySettlement: vi.fn(),
   receiveTokenFor: vi.fn(() => USDC),
 }));
@@ -236,7 +237,7 @@ describe("checkout tenant isolation", () => {
 describe("checkout lifecycle through the API", () => {
   it("prepare → submit → verify, and completes only after verification", async () => {
     const token = await newKey();
-    const { checkoutId, checkoutToken } = await createCheckoutViaApi(token);
+    const { checkoutId } = await createCheckoutViaApi(token);
 
     // Prepare for the customer's wallet (merchant-authenticated convenience).
     const prep = await checkoutPreparePOST(

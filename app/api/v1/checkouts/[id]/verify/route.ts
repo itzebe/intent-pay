@@ -4,7 +4,8 @@ import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutStatus, getCheckout, publicCheckout, recordCheckoutFailure, recordCheckoutVerified } from "@/lib/developer/checkouts";
 import { drainDueSoon } from "@/lib/developer/webhooks";
-import { verifySettlement } from "@/lib/developer/settlement";
+import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { claimTransaction } from "@/lib/developer/claims";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,11 @@ export const dynamic = "force-dynamic";
  * or short settlement emits `payment.failed`. `pending` / `not_found` /
  * `unavailable` leaves the order submitted and asks the caller to retry — the
  * order is never falsely completed.
+ *
+ * The same attribution guards as the public route apply: order binding (a
+ * transaction predating the order is `historical`) and the durable
+ * `(chainId, txHash)` claim (a hash already used by another order is
+ * `replay_detected`).
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireDeveloper(req);
@@ -61,9 +67,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     receiveTokenAddress: intent.receiveTokenAddress,
     receiveToken: intent.receiveToken,
     expectedAmount: intent.amount,
+    toleranceBps: settlementToleranceBps(intent.amountMode),
+    notBeforeMs: intent.createdAt,
   });
 
   if (check.verdict === "verified") {
+    const claim = await claimTransaction({
+      chainId: intent.chainId,
+      txHash,
+      intentId: intent.id,
+      developerId: intent.developerId,
+      blockNumber: check.blockNumber,
+      delivered: check.delivered,
+    });
+    if (!claim.ok) {
+      return apiError("replay_detected", "This transaction has already been used to pay another order.", auth.requestId, claim.claimedBy.intentId);
+    }
     const finalState = await recordCheckoutVerified(checkout, intent, check.delivered ?? "", check.blockNumber);
     await drainDueSoon();
     return apiOk({ verdict: check.verdict, state: finalState, checkout: publicCheckout(checkout, finalState), settlement: check });
@@ -74,6 +93,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     await drainDueSoon();
     return apiOk({ verdict: check.verdict, state: finalState, checkout: publicCheckout(checkout, finalState), settlement: check });
   }
-  // pending / not_found / unavailable / invalid_hash — the order stays where it is.
+  // pending / not_found / unavailable / historical / unconfirmed / invalid_hash —
+  // the order stays where it is.
   return apiOk({ verdict: check.verdict, state, status: checkoutStatus(checkout, state), settlement: check, retryable: true });
 }

@@ -299,6 +299,25 @@ export const SCHEMA: TableSchema[] = [
     checks: [`status IN ('open', 'completed', 'expired', 'canceled', 'failed')`],
     foreignKeys: ["FOREIGN KEY(intent_id) REFERENCES api_intents(id)"],
   },
+  {
+    name: "apiTxClaims",
+    primaryKeys: ["chainId", "txHash"],
+    columns: [
+      { field: "chainId", column: "chain_id", type: "int" },
+      { field: "txHash", column: "tx_hash", type: "text" },
+      { field: "intentId", column: "intent_id", type: "text" },
+      { field: "developerId", column: "developer_id", type: "text" },
+      { field: "blockNumber", column: "block_number", type: "int", nullable: true },
+      { field: "delivered", column: "delivered", type: "text", nullable: true },
+      { field: "claimedAt", column: "claimed_at", type: "int" },
+    ],
+    // The composite primary key (chainId, txHash) IS the replay guard: a single
+    // on-chain transaction can be claimed by at most one intent, so it can never
+    // become payment evidence for a second order. Enforced by the database, not
+    // by application memory, so two concurrent verifications cannot both win.
+    uniqueGroups: [],
+    foreignKeys: ["FOREIGN KEY(intent_id) REFERENCES api_intents(id)"],
+  },
 ];
 
 export function schemaFor(table: TableName): TableSchema {

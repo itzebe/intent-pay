@@ -42,6 +42,13 @@ describe("postgres migrations", () => {
     expect(all).toContain('UNIQUE ("idempotency_key")');
   });
 
+  it("guards transaction replay with a (chainId, txHash) primary key", () => {
+    // The replay guard is the composite primary key on api_tx_claims, so one
+    // on-chain transaction can be payment evidence for at most one intent.
+    expect(all).toContain('CREATE TABLE IF NOT EXISTS "api_tx_claims"');
+    expect(all).toContain('PRIMARY KEY ("chain_id", "tx_hash")');
+  });
+
   it("constrains the referral state to the known values", () => {
     expect(all).toContain("CHECK (state IN (");
     for (const state of ["clicked", "attributed", "qualified", "rejected"]) {

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
-import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
+import { canonicalParams, currentState, getIntent, submittedTxHashes } from "@/lib/developer/intents";
 import { checkoutStatus, getCheckout, publicCheckout, recordCheckoutFailure, recordCheckoutVerified, verificationDestination } from "@/lib/developer/checkouts";
 import { drainDueSoon } from "@/lib/developer/webhooks";
-import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { checkTransactionSet, settlementToleranceBps } from "@/lib/developer/settlement";
 import { claimTransaction } from "@/lib/developer/claims";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 
@@ -52,8 +52,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const body = await readJson(req);
   const explicit = typeof body?.txHash === "string" && isValidTxHash(body.txHash) ? body.txHash : null;
-  const txHash = explicit ?? (await checkoutSubmittedHash(intent.id));
-  if (!txHash) {
+  // A swap payment is several transactions (approve → swap → deliver); the one
+  // that pays the recipient is not necessarily the first. Verify across every
+  // hash the customer submitted, unless the caller named one explicitly.
+  const hashes = explicit ? [explicit] : await submittedTxHashes(intent.id);
+  if (hashes.length === 0) {
     return apiError("invalid_request", "No transaction hash to verify. Submit one, or pass `txHash`.", auth.requestId, "txHash");
   }
 
@@ -61,8 +64,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return apiError("conflict", "The intent's parameters changed after authorization.", auth.requestId);
   }
 
-  const check = await verifySettlement({
-    txHash,
+  const check = await checkTransactionSet(hashes, {
     recipient: intent.recipient,
     destination: verificationDestination(checkout, intent),
     receiveTokenAddress: intent.receiveTokenAddress,
@@ -73,9 +75,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
 
   if (check.verdict === "verified") {
+    const settledHash = check.txHash ?? hashes[0];
     const claim = await claimTransaction({
       chainId: intent.chainId,
-      txHash,
+      txHash: settledHash,
       intentId: intent.id,
       developerId: intent.developerId,
       blockNumber: check.blockNumber,

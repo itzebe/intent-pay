@@ -47,6 +47,12 @@ export type SettlementCheck = {
   /** The chain id the transaction is on. */
   chainId: number | null;
   message: string;
+  /**
+   * The transaction this verdict is about. Set by `checkTransactionSet` (which
+   * may examine several hashes), so a caller can attribute the winning hash — the
+   * one that actually delivered — rather than assuming the first submitted hash.
+   */
+  txHash?: string;
 };
 
 /**
@@ -269,4 +275,60 @@ export async function verifySettlement(input: {
     chainId,
     message: delivered === 0n ? "No matching transfer to the recipient was found." : "The recipient received less than intended.",
   };
+}
+
+/**
+ * Verify settlement across **every** transaction a multi-step plan broadcast.
+ *
+ * A swap payment is several sequential transactions (approve → swap → unwrap →
+ * deliver). The one that delivers to the recipient is not necessarily the first:
+ * the first is usually the ERC-20 approval, which transfers nothing to the
+ * recipient. Verifying only the first therefore reports `short` for a real,
+ * completed payment and the order can never settle.
+ *
+ * This runs the single-transaction check against each hash and takes the first
+ * `verified` — the hash that proves the destination was paid. Order is preserved
+ * so the caller can attribute the winning hash to the plan's primary step. When
+ * no transaction verifies, the most *informative* verdict is returned: a
+ * definitive failure (`reverted`/`short`/`historical`) is preferred over a
+ * transient one (`pending`/`unavailable`/`unconfirmed`), and a transient one over
+ * `not_found`/`invalid_hash`, so a genuine problem is never masked by an
+ * unrelated hash's state. An empty list is `not_found`.
+ */
+export async function checkTransactionSet(
+  hashes: string[],
+  input: Omit<Parameters<typeof verifySettlement>[0], "txHash">,
+): Promise<SettlementCheck> {
+  const expected = input.expectedAmount;
+  if (hashes.length === 0) {
+    return { verdict: "not_found", delivered: null, expected, blockNumber: null, chainId: null, message: "No transaction hash to verify." };
+  }
+  const checks: SettlementCheck[] = [];
+  for (const hash of hashes) {
+    const check = await verifySettlement({ ...input, txHash: hash });
+    if (check.verdict === "verified") return { ...check, txHash: hash };
+    checks.push({ ...check, txHash: hash });
+  }
+  return summarizeChecks(checks);
+}
+
+/** How authoritative a non-verified verdict is, highest first. */
+const VERDICT_PRECEDENCE: SettlementVerdict[] = [
+  "reverted",
+  "short",
+  "historical",
+  "unconfirmed",
+  "pending",
+  "unavailable",
+  "not_found",
+  "invalid_hash",
+];
+
+/** Pick the most informative of several non-verified checks. */
+export function summarizeChecks(checks: SettlementCheck[]): SettlementCheck {
+  let best = checks[0];
+  for (const check of checks) {
+    if (VERDICT_PRECEDENCE.indexOf(check.verdict) < VERDICT_PRECEDENCE.indexOf(best.verdict)) best = check;
+  }
+  return best;
 }

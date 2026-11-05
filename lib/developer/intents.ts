@@ -214,12 +214,6 @@ export async function submittedTxHashes(intentId: string): Promise<string[]> {
   return out;
 }
 
-/** The first (primary) transaction hash recorded at submit, or null. */
-export async function checkoutSubmittedHash(intentId: string): Promise<string | null> {
-  const hashes = await submittedTxHashes(intentId);
-  return hashes[0] ?? null;
-}
-
 /** The public data payload for an intent's state-change event. */
 export function intentEventData(intent: ApiIntentRecord, state: IntentState): Record<string, unknown> {
   return {

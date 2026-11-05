@@ -192,12 +192,14 @@ export type PublicCheckout = {
 
 /** The settlement verdict for a checkout's on-chain payment. */
 export type CheckoutSettlement = {
-  verdict: "verified" | "pending" | "reverted" | "short" | "not_found" | "unavailable" | "invalid_hash";
+  verdict: SettlementVerdict;
   delivered: string | null;
   expected: string;
   blockNumber: number | null;
   chainId: number | null;
   message: string;
+  /** The transaction that delivered (a swap is several txs). */
+  txHash?: string;
 };
 
 /** A registered webhook destination (never carries its signing secret). */
@@ -297,7 +299,11 @@ export type SettlementVerdict =
   | "not_found"
   | "short"
   | "unavailable"
-  | "invalid_hash";
+  | "invalid_hash"
+  /** The transaction predates the order — it cannot be this order's payment. */
+  | "historical"
+  /** The receipt is mined but not yet past the finality policy. */
+  | "unconfirmed";
 
 /** The evidence behind a settlement verdict. */
 export type SettlementCheck = {
@@ -309,6 +315,12 @@ export type SettlementCheck = {
   blockNumber: number | null;
   chainId: number | null;
   message: string;
+  /**
+   * The transaction this verdict is about. A swap is several transactions and the
+   * one that pays the recipient is not necessarily the first, so this names the
+   * hash that actually delivered.
+   */
+  txHash?: string;
 };
 
 /** The result of a settlement verification call. */

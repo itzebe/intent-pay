@@ -1,9 +1,9 @@
 import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
-import { canonicalParams, checkoutSubmittedHash, currentState, getIntent, intentFingerprint } from "@/lib/developer/intents";
+import { canonicalParams, currentState, getIntent, intentFingerprint, submittedTxHashes } from "@/lib/developer/intents";
 import { checkoutLifecycle, checkoutTxHashes, expireCheckoutIfStale, getCheckout, publicCheckout, attributionInfo, verificationDestination } from "@/lib/developer/checkouts";
 import { drainDueSoon } from "@/lib/developer/webhooks";
-import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { checkTransactionSet, settlementToleranceBps } from "@/lib/developer/settlement";
 import { intentClaim } from "@/lib/developer/claims";
 import { NextResponse } from "next/server";
 
@@ -18,7 +18,9 @@ export const dynamic = "force-dynamic";
  *   - the checkout and its derived status,
  *   - the bound intent's frozen parameters and fingerprint,
  *   - the recorded transaction hash(es),
- *   - a fresh `verifySettlement` verdict (the authoritative on-chain check),
+ *   - a fresh settlement verdict across all submitted transactions (the
+ *     authoritative on-chain check; a swap is several txs and the one that pays
+ *     the recipient is not necessarily the first),
  *   - the durable transaction claim the order holds (the replay guard), if any,
  *   - the intent lifecycle history.
  *
@@ -50,10 +52,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const txHashes = await checkoutTxHashes(intent.id);
   const lifecycle = await checkoutLifecycle(intent.id);
 
-  const txHash = (await checkoutSubmittedHash(intent.id)) ?? null;
-  const settlement = txHash
-    ? await verifySettlement({
-        txHash,
+  const txHashList = await submittedTxHashes(intent.id);
+  const settlement = txHashList.length
+    ? await checkTransactionSet(txHashList, {
         recipient: intent.recipient,
         destination: verificationDestination(checkout, intent),
         receiveTokenAddress: intent.receiveTokenAddress,

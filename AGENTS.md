@@ -494,6 +494,25 @@ and Retry / Back-to-edit. Nothing is ever resubmitted automatically.
 `SuccessScreen` only reads "delivered" when `delivery.verified` is true; an
 unverified delivery reads "sent / broadcast, delivery not yet proven".
 
+### The customer checkout confirms each step too
+
+`executePlan` is the composer's path. The hosted customer page
+(`components/checkout/CheckoutClient.tsx`) broadcasts through the raw provider
+(`eth_sendTransaction`) and had its **own** loop — which sent every call
+back-to-back with no receipt wait. A swap checkout (a merchant intent whose
+`payToken` differs from `receiveToken`) is several transactions
+(approve → swap → unwrap → deliver); the swap executed before its approval was
+mined and reverted, so the customer paid gas and the order could never settle.
+
+`lib/wallet/sendCalls.ts` (`sendCallsSequentially`, pure) is now the single rule
+for that path: send one call, wait for its receipt, and only then send the next.
+A rejected/failed/invalid-hash send, an unobserved receipt (`unconfirmed`) or a
+reverted receipt stops the run and returns **the hashes already broadcast**, so
+the page records them and offers a status check rather than losing the
+transaction. The page keeps its own `recordSubmitted` (best-effort submit +
+`load()`), mirroring `executePlan`'s "never resubmit automatically" rule. Do not
+collapse this back into a fire-and-forget loop.
+
 ## Actionable transaction errors
 
 `lib/domain/transactionError.ts` (`classifyTransactionError`, pure) maps any

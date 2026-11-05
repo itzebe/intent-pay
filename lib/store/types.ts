@@ -42,8 +42,10 @@ export type StoreKind = "postgres" | "sqlite" | "memory";
  * intent events, webhooks, webhook deliveries).
  * v3 adds merchant checkout sessions (`apiCheckouts`), which bind a payable
  * order to a developer-API intent.
+ * v4 adds `apiTxClaims`, the durable `(chainId, txHash)` replay guard: one
+ * on-chain transaction can be payment evidence for at most one intent.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** A unique-constraint violation, shared by both adapters. */
 export class StoreConflictError extends Error {
@@ -394,6 +396,36 @@ export type ApiCheckoutRecord = {
   updatedAt: number;
 };
 
+/**
+ * A durable claim on an on-chain transaction.
+ *
+ * This is the replay guard: the primary key is `(chainId, txHash)`, so a single
+ * Monad transaction can be claimed by exactly one intent, once. A successful
+ * payment therefore cannot become payment evidence for a second order, and two
+ * concurrent verifications of the same hash cannot both win — the database
+ * enforces it, not application memory.
+ *
+ * The claim is taken only at *verification* (after the chain proves the transfer),
+ * so an attacker cannot burn a victim's transaction hash by submitting it against
+ * a throwaway order: an unproven hash never becomes a claim.
+ */
+export type ApiTxClaimRecord = {
+  /** Monad chain id (143). Part of the identity, so a hash is chain-scoped. */
+  chainId: number;
+  /** The transaction hash (lower-cased). Part of the identity. */
+  txHash: string;
+  /** The intent that consumed this transaction as payment evidence. */
+  intentId: string;
+  /** The owning developer (tenant), for auditing. */
+  developerId: string;
+  /** The receipt block, when known. */
+  blockNumber: number | null;
+  /** The decimal amount proven delivered, when measurable. */
+  delivered: string | null;
+  /** Unix ms the claim was taken. */
+  claimedAt: number;
+};
+
 /** The row shapes each adapter must persist. */
 export type StoreTables = {
   referrals: ReferralRecord;
@@ -409,6 +441,7 @@ export type StoreTables = {
   apiWebhooks: ApiWebhookRecord;
   apiWebhookDeliveries: ApiWebhookDeliveryRecord;
   apiCheckouts: ApiCheckoutRecord;
+  apiTxClaims: ApiTxClaimRecord;
 };
 
 export type TableName = keyof StoreTables;

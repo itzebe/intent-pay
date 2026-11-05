@@ -186,7 +186,11 @@ export function CheckoutClient({ token }: { token: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      await ver.json().catch(() => null);
+      if (!ver.ok) {
+        const body = (await ver.json().catch(() => null)) as { error?: { message?: string } } | null;
+        // A non-OK verify (e.g. replay_detected) is not a completed payment — say so.
+        setActionError(body?.error?.message ?? "Your payment could not be verified. Contact the merchant.");
+      }
       await load();
     } catch (err) {
       const code = (err as { code?: number })?.code;

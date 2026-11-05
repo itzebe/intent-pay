@@ -3,7 +3,8 @@ import { apiError, apiOk, readJson, requireDeveloper } from "@/lib/developer/api
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, currentState, getIntent, intentEvents, transition } from "@/lib/developer/intents";
 
-import { verifySettlement } from "@/lib/developer/settlement";
+import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { claimTransaction } from "@/lib/developer/claims";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 import { isTerminal } from "@/lib/developer/intentLifecycle";
 
@@ -19,11 +20,13 @@ export const dynamic = "force-dynamic";
  *   - `verified`  → the recipient received at least the authorized minimum;
  *   - `reverted`  → the transaction failed on-chain (intent → failed);
  *   - `short`     → the recipient received less than intended (intent → failed);
- *   - `pending` / `not_found` / `unavailable` → the intent stays submitted and
- *     the caller is told to retry; nothing is falsely confirmed.
+ *   - `historical`→ the transaction predates the order (intent → failed);
+ *   - `pending` / `not_found` / `unavailable` / `unconfirmed` → the intent stays
+ *     submitted and the caller is told to retry; nothing is falsely confirmed.
  *
  * Only a `verified` verdict advances the intent to `verified`, and only then is
- * a `payment.verified` webhook emitted (inside the transition).
+ * a `payment.verified` webhook emitted (inside the transition). A transaction
+ * already consumed by another intent is refused with `replay_detected`.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireDeveloper(req);
@@ -72,9 +75,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     receiveTokenAddress: record.receiveTokenAddress,
     receiveToken: record.receiveToken,
     expectedAmount: record.amount,
+    toleranceBps: settlementToleranceBps(record.amountMode),
+    notBeforeMs: record.createdAt,
   });
 
   if (check.verdict === "verified") {
+    // Claim the transaction before it can satisfy this intent; a hash already used
+    // by another intent is a replay and is refused.
+    const claim = await claimTransaction({
+      chainId: record.chainId,
+      txHash,
+      intentId: record.id,
+      developerId: record.developerId,
+      blockNumber: check.blockNumber,
+      delivered: check.delivered,
+    });
+    if (!claim.ok) {
+      return apiError("replay_detected", "This transaction has already been used to pay another intent.", auth.requestId, claim.claimedBy.intentId);
+    }
     const current = await currentState(record.id);
     if (current === "submitted") await transition(record, "confirmed", `block:${check.blockNumber}`);
     const afterConfirm = await currentState(record.id);
@@ -83,7 +101,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return apiOk({ verdict: check.verdict, state: newState, settlement: check });
   }
 
-  if (check.verdict === "reverted" || check.verdict === "short") {
+  if (check.verdict === "reverted" || check.verdict === "short" || check.verdict === "historical") {
     const current = await currentState(record.id);
     if (current === "submitted" || current === "confirmed") {
       await transition(record, "failed", `${check.verdict}: ${check.message}`.slice(0, 300));
@@ -92,7 +110,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return apiOk({ verdict: check.verdict, state: newState, settlement: check });
   }
 
-  // pending / not_found / unavailable — the intent stays where it is.
+  // pending / not_found / unavailable / unconfirmed — the intent stays where it is.
   return apiOk({ verdict: check.verdict, state, settlement: check, retryable: true });
 }
 

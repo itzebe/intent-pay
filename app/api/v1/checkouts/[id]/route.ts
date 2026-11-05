@@ -1,7 +1,7 @@
 import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { currentState, getIntent } from "@/lib/developer/intents";
-import { checkoutLifecycle, checkoutStatus, expireCheckoutIfStale, getCheckout, publicCheckout } from "@/lib/developer/checkouts";
+import { checkoutLifecycle, expireCheckoutIfStale, getCheckout, publicCheckout } from "@/lib/developer/checkouts";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";

@@ -2,7 +2,8 @@ import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent, intentFingerprint } from "@/lib/developer/intents";
 import { checkoutLifecycle, checkoutTxHashes, expireCheckoutIfStale, getCheckout, publicCheckout } from "@/lib/developer/checkouts";
-import { verifySettlement } from "@/lib/developer/settlement";
+import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { intentClaim } from "@/lib/developer/claims";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
  *   - the bound intent's frozen parameters and fingerprint,
  *   - the recorded transaction hash(es),
  *   - a fresh `verifySettlement` verdict (the authoritative on-chain check),
+ *   - the durable transaction claim the order holds (the replay guard), if any,
  *   - the intent lifecycle history.
  *
  * The `settlement.verdict` is `verified` only when the recipient was actually
@@ -53,8 +55,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         receiveTokenAddress: intent.receiveTokenAddress,
         receiveToken: intent.receiveToken,
         expectedAmount: intent.amount,
+        toleranceBps: settlementToleranceBps(intent.amountMode),
+        notBeforeMs: intent.createdAt,
       })
     : null;
+
+  const claim = await intentClaim(intent.id);
 
   const frozen = intent.authorizedParams ? (JSON.parse(intent.authorizedParams) as Record<string, unknown>) : null;
   const matchesFrozen = intent.authorizedParams === null || intent.authorizedParams === canonicalParams(intent);
@@ -81,6 +87,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     txHashes,
     lifecycle,
     settlement,
+    /**
+     * The durable claim this order holds on its transaction. Its presence is the
+     * proof that the transaction is attributed to this order and cannot be
+     * reused by another.
+     */
+    transactionClaim: claim
+      ? { chainId: claim.chainId, txHash: claim.txHash, blockNumber: claim.blockNumber, delivered: claim.delivered, claimedAt: new Date(claim.claimedAt).toISOString() }
+      : null,
     /** The honest bottom line: true only when the chain proves the payment. */
     settled: settlement?.verdict === "verified",
   });

@@ -4,7 +4,8 @@ import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent } from "@/lib/developer/intents";
 import { checkoutPhase, checkoutStatus, getCheckoutByToken, recordCheckoutFailure, recordCheckoutVerified } from "@/lib/developer/checkouts";
 import { drainDueSoon } from "@/lib/developer/webhooks";
-import { verifySettlement } from "@/lib/developer/settlement";
+import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
+import { claimTransaction } from "@/lib/developer/claims";
 import { isValidTxHash } from "@/lib/server/referral/verify";
 import { isValidCheckoutToken } from "@/lib/developer/checkoutToken";
 
@@ -18,6 +19,11 @@ export const dynamic = "force-dynamic";
  * verdict completes the order; a reverted/short settlement fails it; `pending` /
  * `not_found` / `unavailable` leaves it submitted and asks the caller to retry.
  * The page therefore never shows "paid" before the chain confirms delivery.
+ *
+ * Two protections make the payment attributable to *this* order and not reusable:
+ *   - order binding — the transaction must not predate the order (`historical`);
+ *   - a durable `(chainId, txHash)` claim — a hash that already paid another order
+ *     is refused with `replay_detected` and can never satisfy a second one.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -55,9 +61,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
     receiveTokenAddress: intent.receiveTokenAddress,
     receiveToken: intent.receiveToken,
     expectedAmount: intent.amount,
+    toleranceBps: settlementToleranceBps(intent.amountMode),
+    notBeforeMs: intent.createdAt,
   });
 
   if (check.verdict === "verified") {
+    // Take the durable claim *before* completing the order: a hash already consumed
+    // by another order is a replay and must not satisfy this one.
+    const claim = await claimTransaction({
+      chainId: intent.chainId,
+      txHash,
+      intentId: intent.id,
+      developerId: intent.developerId,
+      blockNumber: check.blockNumber,
+      delivered: check.delivered,
+    });
+    if (!claim.ok) {
+      return apiError("replay_detected", "This transaction has already been used to pay another order.", undefined, claim.claimedBy.intentId);
+    }
     const finalState = await recordCheckoutVerified(checkout, intent, check.delivered ?? "", check.blockNumber);
     await drainDueSoon();
     return apiOk({

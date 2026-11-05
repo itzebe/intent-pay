@@ -92,7 +92,8 @@ vi.mock("@/lib/execution/execute", async () => {
   };
 });
 
-vi.mock("@/lib/developer/settlement", () => ({
+vi.mock("@/lib/developer/settlement", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/developer/settlement")>()),
   verifySettlement: vi.fn(),
   receiveTokenFor: vi.fn(() => USDC),
 }));

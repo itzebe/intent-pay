@@ -86,6 +86,15 @@ const CHECKOUT_INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_api_checkouts_intent ON ${qi("api_checkouts")} (${qi("intent_id")})`,
 ];
 
+/**
+ * Indexes for the transaction-claim guard: the primary key (chain_id, tx_hash)
+ * already makes the claim unique, and this index speeds the per-intent lookup
+ * used to describe an order's consumed transaction.
+ */
+const TX_CLAIM_INDEXES: string[] = [
+  `CREATE INDEX IF NOT EXISTS idx_api_tx_claims_intent ON ${qi("api_tx_claims")} (${qi("intent_id")})`,
+];
+
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
@@ -106,6 +115,11 @@ export const MIGRATIONS: Migration[] = [
     // v3 — merchant checkout sessions.
     id: 3,
     statements: [...TABLES, ...CHECKOUT_INDEXES],
+  },
+  {
+    // v4 — durable transaction claims (the (chainId, txHash) replay guard).
+    id: 4,
+    statements: [...TABLES, ...TX_CLAIM_INDEXES],
   },
 ];
 

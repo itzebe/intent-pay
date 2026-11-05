@@ -170,8 +170,19 @@ npm install @walletconnect/ethereum-provider`}</pre>
           <LI><Code>verified</Code> — the recipient received at least the authorized minimum. The intent becomes <Code>verified</Code>.</LI>
           <LI><Code>reverted</Code> — the transaction failed on-chain. The intent becomes <Code>failed</Code>.</LI>
           <LI><Code>short</Code> — the recipient received less than intended. The intent becomes <Code>failed</Code>.</LI>
+          <LI><Code>historical</Code> — the transaction was mined before this order existed, so it cannot be this order&apos;s payment. The intent becomes <Code>failed</Code>.</LI>
+          <LI><Code>unconfirmed</Code> — the receipt is mined but not yet past the finality policy (2 confirmations). Retryable; the intent stays <Code>submitted</Code>.</LI>
           <LI><Code>pending</Code> / <Code>not_found</Code> / <Code>unavailable</Code> — nothing is confirmed; the intent stays <Code>submitted</Code> and the response is <Code>retryable</Code>.</LI>
         </UL>
+        <P>
+          <strong>One transaction pays one order.</strong> A transaction hash is claimed durably on
+          <Code>(chainId, txHash)</Code> the moment settlement is proven. A hash that already paid
+          another order is refused with <Code>409 replay_detected</Code> and can never satisfy a
+          second one. The claim is taken only after the chain proves the transfer, so an unproven
+          hash cannot be used to block a real payment. <Code>recipient_receives</Code> intents are
+          held to the exact amount (0 bps); an overpayment is recorded as the exact delivered
+          amount and is never refunded automatically.
+        </P>
       </DocSection>
 
       <DocSection title="Webhooks">
@@ -221,7 +232,7 @@ function verify(secret, header, rawBody) {
           <LI><Code>400 invalid_request</Code> — a malformed body or field.</LI>
           <LI><Code>401 unauthorized</Code> / <Code>403 forbidden</Code> — a missing, wrong, revoked, expired or wrong-environment key.</LI>
           <LI><Code>404 not_found</Code> — no such intent, webhook or key (also used for another tenant&apos;s resource).</LI>
-          <LI><Code>409 conflict</Code> / <Code>idempotency_conflict</Code> / <Code>invalid_state</Code> / <Code>already_submitted</Code> — a state or idempotency clash.</LI>
+          <LI><Code>409 conflict</Code> / <Code>idempotency_conflict</Code> / <Code>invalid_state</Code> / <Code>already_submitted</Code> / <Code>replay_detected</Code> — a state, idempotency or transaction-reuse clash. <Code>replay_detected</Code> means the transaction was already used to pay another order.</LI>
           <LI><Code>410 expired</Code> — the intent aged out before submission.</LI>
           <LI><Code>422 invalid_chain</Code> / <Code>invalid_recipient</Code> / <Code>invalid_amount</Code> / <Code>unsupported_token</Code> / <Code>route_unavailable</Code> — a payment cannot be built as requested.</LI>
           <LI><Code>429 rate_limited</Code> — the per-tenant limit was reached.</LI>

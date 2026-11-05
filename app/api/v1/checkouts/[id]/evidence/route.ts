@@ -1,7 +1,7 @@
 import { apiError, apiOk, requireDeveloper } from "@/lib/developer/apiAuth";
 import { checkLimit, tooManyResponse } from "@/lib/developer/rateLimits";
 import { canonicalParams, checkoutSubmittedHash, currentState, getIntent, intentFingerprint } from "@/lib/developer/intents";
-import { checkoutLifecycle, checkoutTxHashes, expireCheckoutIfStale, getCheckout, publicCheckout } from "@/lib/developer/checkouts";
+import { checkoutLifecycle, checkoutTxHashes, expireCheckoutIfStale, getCheckout, publicCheckout, attributionInfo, verificationDestination } from "@/lib/developer/checkouts";
 import { settlementToleranceBps, verifySettlement } from "@/lib/developer/settlement";
 import { intentClaim } from "@/lib/developer/claims";
 import { NextResponse } from "next/server";
@@ -52,6 +52,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     ? await verifySettlement({
         txHash,
         recipient: intent.recipient,
+        destination: verificationDestination(checkout, intent),
         receiveTokenAddress: intent.receiveTokenAddress,
         receiveToken: intent.receiveToken,
         expectedAmount: intent.amount,
@@ -87,6 +88,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     txHashes,
     lifecycle,
     settlement,
+    /**
+     * How this order is attributed and the exact destination its payment must have
+     * reached. `checkout_bound` means the order has a unique derived destination,
+     * so no other transfer can settle it; `shared_recipient` is the honest,
+     * weaker fallback.
+     */
+    attribution: { ...attributionInfo(checkout), requiredDestination: verificationDestination(checkout, intent) },
     /**
      * The durable claim this order holds on its transaction. Its presence is the
      * proof that the transaction is attributed to this order and cannot be

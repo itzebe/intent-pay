@@ -136,6 +136,13 @@ export async function verifySettlement(input: {
    * not yet this deep is `unconfirmed`, never `verified`.
    */
   minConfirmations?: number;
+  /**
+   * The exact destination the transfer must reach. When omitted it defaults to
+   * `recipient`. A checkout-bound order passes its **unique derived address**
+   * here, so a transfer that reached any other destination (including the
+   * merchant's shared recipient) cannot settle it.
+   */
+  destination?: string;
 }): Promise<SettlementCheck> {
   const expected = input.expectedAmount;
   if (!isValidTxHash(input.txHash)) {
@@ -228,12 +235,17 @@ export async function verifySettlement(input: {
   }
 
   let delivered = 0n;
+  // The destination is where funds must land. It defaults to the recipient, but a
+  // checkout-bound order passes its unique derived address, so a transfer to any
+  // other destination (the merchant's shared recipient included) is not counted
+  // and cannot settle this order.
+  const destination = (input.destination ?? input.recipient).toLowerCase();
   if (token.native) {
     const tx = await client.getTransaction({ hash: input.txHash as Hash }).catch(() => null);
     const to = (tx?.to ?? receipt.to) as string | null;
-    if (to && to.toLowerCase() === input.recipient.toLowerCase() && tx?.value) delivered = tx.value;
+    if (to && to.toLowerCase() === destination && tx?.value) delivered = tx.value;
   } else {
-    delivered = sumTransfersTo(receipt as unknown as { logs: { address: string; topics: string[]; data: string }[] }, token.address, input.recipient);
+    delivered = sumTransfersTo(receipt as unknown as { logs: { address: string; topics: string[]; data: string }[] }, token.address, destination);
   }
 
   const toleranceBps = BigInt(input.toleranceBps ?? 50);

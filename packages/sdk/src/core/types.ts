@@ -130,6 +130,23 @@ export type LifecycleEntry = {
   detail: string | null;
 };
 
+/** How a checkout is attributed to its destination. */
+export type AttributionMode = "checkout_bound" | "shared_recipient";
+
+/**
+ * How a checkout is attributed. `checkout_bound` means the order is paid to a
+ * destination unique to it (derived from the merchant's watch-only payment xpub);
+ * `shared_recipient` means it falls back to the merchant's shared recipient and
+ * relies on the token/amount/time guards. Never presented as equivalent.
+ */
+export type CheckoutAttribution = {
+  mode: AttributionMode;
+  /** The unique destination, or null in shared-recipient mode. */
+  destination: string | null;
+  /** The derivation index this destination came from, or null. */
+  derivationIndex: number | null;
+};
+
 /**
  * A merchant checkout session — the payable *order* a merchant shares with a
  * customer. It binds a public payment token to an intent; the amount, asset and
@@ -145,6 +162,8 @@ export type Checkout = {
   /** The public payment-link handle (safe to share with the customer). */
   token: string;
   tokenHint: string;
+  /** Whether this order has a unique destination, or shares the recipient. */
+  attribution: CheckoutAttribution;
   expiresAt: string;
   completedAt: string | null;
   canceledAt: string | null;
@@ -161,6 +180,7 @@ export type PublicCheckout = {
   orderReference: string | null;
   chainId: number;
   recipient: string;
+  attribution: CheckoutAttribution;
   receiveToken: string;
   receiveTokenAddress: string;
   amountMode: AmountMode;
@@ -336,6 +356,12 @@ export type Capabilities = {
     merchantCheckouts?: boolean;
     /** The customer's own wallet authorizes every transaction; never the merchant. */
     customerAuthorizesPayment?: boolean;
+    /** Whether per-order (checkout-bound) attribution is available. */
+    checkoutAttribution?: {
+      checkoutBoundAvailable: boolean;
+      custodial: boolean;
+      defaultMode: "checkout_bound" | "shared_recipient";
+    };
   };
   storage: {
     kind: string;

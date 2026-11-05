@@ -30,6 +30,15 @@ type Checkout = {
   receiveToken?: string;
   expiresAt: string;
   createdAt: string;
+  attribution?: { mode: "checkout_bound" | "shared_recipient"; destination: string | null };
+};
+
+type Attribution = {
+  mode: "checkout_bound" | "shared_recipient";
+  checkoutBound: boolean;
+  nextDerivationIndex: number;
+  preview: string[];
+  note?: string;
 };
 
 const STORAGE_KEY = "intentpay.merchant.apiKey";
@@ -65,6 +74,10 @@ export function MerchantConsole() {
   const [created, setCreated] = useState<{ id: string; token: string; link: string } | null>(null);
   const [checkouts, setCheckouts] = useState<Checkout[]>([]);
   const [copied, setCopied] = useState(false);
+  const [attribution, setAttribution] = useState<Attribution | null>(null);
+  const [xpubInput, setXpubInput] = useState("");
+  const [savingXpub, setSavingXpub] = useState(false);
+  const [xpubError, setXpubError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -96,6 +109,8 @@ export function MerchantConsole() {
     }
     const list = await api(apiKey, "/checkouts");
     if (list.ok) setCheckouts((list.body.checkouts as Checkout[]) ?? []);
+    const attr = await api(apiKey, "/attribution");
+    if (attr.ok) setAttribution(attr.body.attribution as Attribution);
   }, [apiKey]);
 
   const refresh = useCallback(async () => {
@@ -151,6 +166,25 @@ export function MerchantConsole() {
     }
   }, [apiKey, recipient, receiveToken, amount, orderReference, refresh]);
 
+  const saveXpub = useCallback(
+    async (value: string | null) => {
+      setXpubError(null);
+      setSavingXpub(true);
+      try {
+        const res = await api(apiKey, "/attribution", { method: "POST", body: JSON.stringify({ paymentXpub: value }) });
+        if (!res.ok) {
+          setXpubError((res.body.error as { message?: string })?.message ?? "Could not save the payment xpub.");
+          return;
+        }
+        setAttribution(res.body.attribution as Attribution);
+        setXpubInput("");
+      } finally {
+        setSavingXpub(false);
+      }
+    },
+    [apiKey],
+  );
+
   const cancel = useCallback(
     async (id: string) => {
       await api(apiKey, `/checkouts/${id}/cancel`, { method: "POST" });
@@ -202,6 +236,68 @@ export function MerchantConsole() {
 
       {connected && (
         <>
+          <section className="card p-5">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-white/90">Payment attribution</h2>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  attribution?.checkoutBound ? "text-emerald-200 bg-emerald-400/10" : "text-amber-200 bg-amber-400/10"
+                }`}
+              >
+                {attribution?.checkoutBound ? "Per-order destination" : "Shared recipient"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-white/45">
+              {attribution?.checkoutBound
+                ? "Each order is paid to a unique address derived from your xpub. Only your wallet holds the keys; Intent Pay watches, and can never spend."
+                : "Without a payment xpub, orders share your recipient, so attribution relies on the token, amount and timing guards. Register an xpub to give every order its own destination."}
+            </p>
+            {attribution?.checkoutBound && attribution.preview.length > 0 && (
+              <div className="mt-3 rounded-xl bg-white/[0.03] p-3">
+                <div className="text-[10px] uppercase tracking-wide text-white/40">Next destinations</div>
+                <div className="mt-1 space-y-0.5 font-mono text-[11px] text-white/60">
+                  {attribution.preview.map((a) => (
+                    <div key={a} className="truncate">
+                      {a}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+              <input
+                value={xpubInput}
+                onChange={(e) => setXpubInput(e.target.value)}
+                placeholder={attribution?.checkoutBound ? "Replace xpub (xpub…)" : "xpub… (watch-only public key)"}
+                className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-[11px] text-white placeholder:text-white/25 focus:border-mono/50 focus:outline-none"
+              />
+              <button
+                onClick={() => void saveXpub(xpubInput.trim() || null)}
+                disabled={!xpubInput.trim() || savingXpub}
+                className="rounded-xl border border-white/10 px-4 py-2.5 text-xs font-semibold text-white/80 transition hover:bg-white/[0.04] disabled:opacity-40"
+              >
+                {savingXpub ? "Saving…" : attribution?.checkoutBound ? "Replace" : "Enable"}
+              </button>
+              {attribution?.checkoutBound && (
+                <button
+                  onClick={() => void saveXpub(null)}
+                  disabled={savingXpub}
+                  className="rounded-xl border border-white/10 px-3 py-2.5 text-xs text-white/50 transition hover:text-rose-200 disabled:opacity-40"
+                >
+                  Disable
+                </button>
+              )}
+            </div>
+            <p className="mt-2 text-[11px] text-white/35">
+              A public extended key only. A private key (xprv) or a seed phrase is refused.
+            </p>
+            {xpubError && (
+              <p className="mt-2 flex items-center gap-1.5 text-xs text-amber-200/90">
+                <Warning className="h-3.5 w-3.5" /> {xpubError}
+              </p>
+            )}
+          </section>
+
           <section className="card p-5">
             <h2 className="text-sm font-semibold text-white/90">Create a payment link</h2>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">

@@ -67,4 +67,24 @@ describe("postgres migrations", () => {
     expect(snake("referralCodes")).toBe("referral_codes");
     expect(snake("opsEvents")).toBe("ops_events");
   });
+
+  it("adds the v5 attribution columns with ALTER TABLE, not a re-create", () => {
+    // Existing tables already exist in production, so `CREATE TABLE IF NOT EXISTS`
+    // is a no-op for them; the new columns must arrive via ADD COLUMN IF NOT
+    // EXISTS, which is idempotent and keeps existing rows valid.
+    const v5 = MIGRATIONS.find((m) => m.id === 5);
+    expect(v5).toBeDefined();
+    const sql = v5!.statements.join("\n");
+    expect(sql).toContain('ALTER TABLE "api_developers" ADD COLUMN IF NOT EXISTS "payment_xpub" TEXT');
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS "next_derivation_index" BIGINT NOT NULL DEFAULT 0');
+    expect(sql).toContain('ALTER TABLE "api_checkouts" ADD COLUMN IF NOT EXISTS "attribution_address" TEXT');
+    expect(sql).toContain('ADD COLUMN IF NOT EXISTS "derivation_index" BIGINT');
+  });
+
+  it("enforces one attribution address per checkout (partial unique index)", () => {
+    const sql = MIGRATIONS.flatMap((m) => m.statements).join("\n");
+    expect(sql).toContain("idx_api_checkouts_attribution");
+    // The index is partial so the many NULL (fallback) rows do not collide.
+    expect(sql).toMatch(/attribution_address"\)\s+WHERE\s+"attribution_address" IS NOT NULL/);
+  });
 });

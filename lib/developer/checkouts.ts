@@ -2,6 +2,7 @@ import { getStore } from "@/lib/store";
 import type { ApiCheckoutRecord, ApiIntentRecord } from "@/lib/store/types";
 import { newCheckoutId, newCheckoutToken } from "./ids";
 import { isValidCheckoutToken } from "./checkoutToken";
+import { allocateAttributionAddress } from "./attribution";
 import { currentState, expireIfStale, intentEvents, submittedTxHashes } from "./intents";
 import type { IntentState } from "./intentLifecycle";
 
@@ -109,8 +110,22 @@ export type CreateCheckoutInput = {
  * merchant authorizing a transaction on the customer's behalf. The customer's
  * wallet signature is the transaction authorization (see `recordCheckoutSubmission`).
  */
-export async function bindIntentForCheckout(intent: ApiIntentRecord, now = Date.now()): Promise<IntentState> {
+export async function bindIntentForCheckout(
+  intent: ApiIntentRecord,
+  attributionAddress?: string | null,
+  now = Date.now(),
+): Promise<IntentState> {
   const { transition, freezeParams } = await import("./intents");
+  // With checkout-bound attribution the order's effective recipient is the
+  // checkout's unique derived address, not the merchant's shared recipient — that
+  // is the whole point: funds must land somewhere only this order can be paid to.
+  // The recipient is rewritten *before* freezing, so the frozen parameters (and
+  // every plan built from them) carry the unique destination.
+  const destination = attributionAddress?.trim() ? attributionAddress.trim().toLowerCase() : null;
+  if (destination && destination !== intent.recipient) {
+    await getStore().update("apiIntents", { id: intent.id }, { recipient: destination, updatedAt: now });
+    intent.recipient = destination;
+  }
   let state = await currentState(intent.id);
   if (state === "created") {
     await transition(intent, "validating", null, now, { silent: true });
@@ -169,6 +184,10 @@ export async function createCheckout(
   }
 
   const token = newCheckoutToken();
+  // Allocate this order's unique destination from the merchant's payment xpub, if
+  // one is registered. The allocation is a compare-and-swap, so two concurrent
+  // checkouts can never share an address, and the unique index backs it up.
+  const allocation = await allocateAttributionAddress(input.developerId, now);
   const record: ApiCheckoutRecord = {
     id: newCheckoutId(),
     developerId: input.developerId,
@@ -181,6 +200,8 @@ export async function createCheckout(
     completedAt: null,
     canceledAt: null,
     idempotencyKey: key,
+    attributionAddress: allocation ? allocation.address.toLowerCase() : null,
+    derivationIndex: allocation ? allocation.index : null,
     createdAt: now,
     updatedAt: now,
   };
@@ -297,7 +318,39 @@ export function checkoutEventData(record: ApiCheckoutRecord, intentState: Intent
     status: checkoutStatus(record, intentState),
     intentState,
     expiresAt: new Date(record.expiresAt).toISOString(),
+    attribution: attributionInfo(record),
   };
+}
+
+/**
+ * How a checkout is attributed. `checkout_bound` means the order is paid to a
+ * destination unique to it (strong); `shared_recipient` means it falls back to
+ * the merchant's shared recipient and relies on the token/amount/time guards
+ * (weaker). Reported honestly so an integrator is never told a weak order is
+ * strongly bound.
+ */
+export function attributionInfo(record: ApiCheckoutRecord): {
+  mode: "checkout_bound" | "shared_recipient";
+  destination: string | null;
+  derivationIndex: number | null;
+} {
+  const destination = record.attributionAddress ? record.attributionAddress.toLowerCase() : null;
+  return {
+    mode: destination ? "checkout_bound" : "shared_recipient",
+    destination,
+    derivationIndex: record.derivationIndex ?? null,
+  };
+}
+
+/**
+ * The destination a settlement for this checkout must have reached.
+ *
+ * A checkout-bound order requires its unique derived address. A fallback order
+ * requires the intent's recipient. This is what the verifier checks, so a payment
+ * is accepted only if it landed at the destination this exact order defined.
+ */
+export function verificationDestination(record: ApiCheckoutRecord, intent: ApiIntentRecord): string {
+  return (record.attributionAddress?.trim() || intent.recipient).toLowerCase();
 }
 
 /** The public representation of a checkout, for a merchant (includes the link). */
@@ -311,6 +364,7 @@ export function publicCheckout(record: ApiCheckoutRecord, intentState: IntentSta
     orderReference: record.orderReference,
     token: record.token,
     tokenHint: record.tokenHint,
+    attribution: attributionInfo(record),
     expiresAt: new Date(record.expiresAt).toISOString(),
     completedAt: record.completedAt ? new Date(record.completedAt).toISOString() : null,
     canceledAt: record.canceledAt ? new Date(record.canceledAt).toISOString() : null,
@@ -339,7 +393,12 @@ export function publicCheckoutForCustomer(
     phase: checkoutPhase(record, intentState, now),
     orderReference: record.orderReference,
     chainId: intent.chainId,
+    // The destination the customer must actually pay. With checkout-bound
+    // attribution this is the order's unique derived address; otherwise it is the
+    // intent's recipient. `intent.recipient` is already the effective destination
+    // (it is rewritten to the derived address at bind), so it is authoritative.
     recipient: intent.recipient,
+    attribution: attributionInfo(record),
     receiveToken: intent.receiveToken,
     receiveTokenAddress: intent.receiveTokenAddress,
     amountMode: intent.amountMode,

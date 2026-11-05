@@ -55,6 +55,8 @@ export async function GET() {
       { method: "POST", path: "/api/v1/checkouts/{id}/verify", description: "Independently verify settlement on-chain." },
       { method: "POST", path: "/api/v1/checkouts/{id}/cancel", description: "Cancel an eligible (unpaid) checkout." },
       { method: "GET", path: "/api/v1/checkouts/{id}/evidence", description: "Settlement evidence for a checkout (re-verified live)." },
+      { method: "GET", path: "/api/v1/attribution", description: "Read the checkout-attribution configuration." },
+      { method: "POST", path: "/api/v1/attribution", description: "Register or clear the watch-only payment xpub (per-checkout destinations)." },
       { method: "GET", path: "/api/v1/capabilities", description: "This document." },
       { method: "POST", path: "/api/v1/webhooks", description: "Register a webhook destination." },
       { method: "GET", path: "/api/v1/webhooks", description: "List webhook destinations." },
@@ -91,6 +93,21 @@ export async function GET() {
       merchantCheckouts: true,
       /** The customer's own wallet authorizes every transaction; never the merchant. */
       customerAuthorizesPayment: true,
+      /**
+       * Checkout-specific attribution. A merchant who registers a watch-only
+       * payment xpub gets a **unique destination per checkout**, so a transfer can
+       * only settle the order it was created for. Without one, checkouts share the
+       * merchant's recipient (weaker); that mode is reported per checkout, never
+       * presented as checkout-bound.
+       */
+      checkoutAttribution: {
+        /** Strong attribution is available by registering a payment xpub. */
+        checkoutBoundAvailable: true,
+        /** No spend key is ever held: derivation is watch-only from the merchant's xpub. */
+        custodial: false,
+        /** The mode used when a merchant has not registered an xpub. */
+        defaultMode: "shared_recipient",
+      },
     },
     storage: {
       kind: storage.kind,

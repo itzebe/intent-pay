@@ -71,7 +71,7 @@ export async function POST(req: Request) {
   // bound).
   let boundState = state;
   if (result.created) {
-    boundState = await bindIntentForCheckout(intent);
+    boundState = await bindIntentForCheckout(intent, result.checkout.attributionAddress);
     await enqueueEvent({
       developerId: developer.id,
       event: "checkout.created",

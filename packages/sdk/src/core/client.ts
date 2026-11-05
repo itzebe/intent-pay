@@ -265,6 +265,37 @@ export class IntentPay {
     return res.checkouts;
   }
 
+  // ── Checkout attribution (per-order destinations) ────────────────────────────
+
+  /**
+   * `GET /api/v1/attribution` — read the checkout-attribution configuration.
+   *
+   * Reports whether checkout-bound attribution is enabled and previews the next
+   * destinations. The registered xpub itself is never returned.
+   */
+  async getAttribution(): Promise<AttributionConfig> {
+    this.requireCredential();
+    const res = await this.transport.json<{ ok: true; attribution: AttributionConfig }>({ method: "GET", path: "/api/v1/attribution" });
+    return res.attribution;
+  }
+
+  /**
+   * `POST /api/v1/attribution` — register (or clear) the watch-only payment xpub.
+   *
+   * Pass a BIP32 **public** extended key (`xpub…`) to give every checkout a unique
+   * destination, or `null` to disable. A private key or seed phrase is refused by
+   * the server, so Intent Pay can never be handed a spending key.
+   */
+  async setAttribution(paymentXpub: string | null): Promise<AttributionConfig> {
+    this.requireCredential();
+    const res = await this.transport.json<{ ok: true; attribution: AttributionConfig }>({
+      method: "POST",
+      path: "/api/v1/attribution",
+      body: { paymentXpub },
+    });
+    return res.attribution;
+  }
+
   /**
    * `POST /api/v1/checkouts/:id/prepare` — build the calls for the customer's wallet.
    *
@@ -429,6 +460,16 @@ export type GetCheckoutResult = {
     authorized: boolean;
   } | null;
   lifecycle: LifecycleEntry[];
+};
+
+/** The merchant's checkout-attribution configuration (never the xpub itself). */
+export type AttributionConfig = {
+  mode: "checkout_bound" | "shared_recipient";
+  checkoutBound: boolean;
+  nextDerivationIndex: number;
+  /** A short preview of upcoming destinations (empty in shared-recipient mode). */
+  preview: string[];
+  note?: string;
 };
 
 export type CheckoutVerifyResult = {

@@ -15,6 +15,7 @@ function checkout(overrides: Record<string, unknown> = {}) {
     orderReference: "ORD-1001",
     token: `chk_${"a".repeat(64)}`,
     tokenHint: "aaaaaaaa",
+    attribution: { mode: "shared_recipient", destination: null, derivationIndex: null },
     expiresAt: "2026-01-01T00:30:00.000Z",
     completedAt: null,
     canceledAt: null,
@@ -70,6 +71,36 @@ describe("checkout lifecycle methods", () => {
     const list = await client(mock).listCheckouts();
     expect(list).toHaveLength(1);
     expect(list[0]!.object).toBe("checkout");
+  });
+
+  it("reads the attribution configuration without exposing the xpub", async () => {
+    const mock = new MockFetch().on("GET", "/api/v1/attribution", () =>
+      jsonResponse({
+        ok: true,
+        attribution: { mode: "checkout_bound", checkoutBound: true, nextDerivationIndex: 3, preview: ["0xaaa", "0xbbb", "0xccc"] },
+      }),
+    );
+    const attr = await client(mock).getAttribution();
+    expect(attr.checkoutBound).toBe(true);
+    expect(attr.preview).toHaveLength(3);
+    expect(mock.requests[0]!.url).toContain("/api/v1/attribution");
+  });
+
+  it("registers a watch-only xpub and can clear it", async () => {
+    const mock = new MockFetch().on("POST", "/api/v1/attribution", () =>
+      jsonResponse({ ok: true, attribution: { mode: "checkout_bound", checkoutBound: true, nextDerivationIndex: 0, preview: [] } }),
+    );
+    const attr = await client(mock).setAttribution("xpub6abc");
+    expect(attr.mode).toBe("checkout_bound");
+    const body = mock.requests[0]!.body as Record<string, unknown>;
+    expect(body).toEqual({ paymentXpub: "xpub6abc" });
+
+    const clear = new MockFetch().on("POST", "/api/v1/attribution", () =>
+      jsonResponse({ ok: true, attribution: { mode: "shared_recipient", checkoutBound: false, nextDerivationIndex: 0, preview: [] } }),
+    );
+    const cleared = await client(clear).setAttribution(null);
+    expect(cleared.checkoutBound).toBe(false);
+    expect((clear.requests[0]!.body as Record<string, unknown>).paymentXpub).toBeNull();
   });
 
   it("prepares a checkout for a customer wallet (builds only)", async () => {

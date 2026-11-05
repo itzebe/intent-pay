@@ -95,6 +95,29 @@ const TX_CLAIM_INDEXES: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_api_tx_claims_intent ON ${qi("api_tx_claims")} (${qi("intent_id")})`,
 ];
 
+/**
+ * v5 — checkout-specific attribution. The merchant may register a watch-only
+ * payment xpub; each checkout then derives a unique destination so a transfer can
+ * only settle the order it was created for.
+ *
+ * These are `ADD COLUMN IF NOT EXISTS` statements (not a re-`CREATE TABLE`),
+ * because the production tables already exist and `CREATE TABLE IF NOT EXISTS` is
+ * a no-op for them. The added columns are nullable (or defaulted) so existing
+ * rows — every checkout created before this version — remain valid and simply
+ * carry `attribution_address = NULL` (the shared-recipient fallback).
+ */
+const ATTRIBUTION_COLUMNS: string[] = [
+  `ALTER TABLE ${qi("api_developers")} ADD COLUMN IF NOT EXISTS ${qi("payment_xpub")} TEXT`,
+  `ALTER TABLE ${qi("api_developers")} ADD COLUMN IF NOT EXISTS ${qi("next_derivation_index")} BIGINT NOT NULL DEFAULT 0`,
+  `ALTER TABLE ${qi("api_checkouts")} ADD COLUMN IF NOT EXISTS ${qi("attribution_address")} TEXT`,
+  `ALTER TABLE ${qi("api_checkouts")} ADD COLUMN IF NOT EXISTS ${qi("derivation_index")} BIGINT`,
+];
+
+/** A unique destination per checkout: no two orders may share an address. */
+const ATTRIBUTION_INDEXES: string[] = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_checkouts_attribution ON ${qi("api_checkouts")} (${qi("attribution_address")}) WHERE ${qi("attribution_address")} IS NOT NULL`,
+];
+
 export const MIGRATIONS: Migration[] = [
   {
     id: 1,
@@ -120,6 +143,11 @@ export const MIGRATIONS: Migration[] = [
     // v4 — durable transaction claims (the (chainId, txHash) replay guard).
     id: 4,
     statements: [...TABLES, ...TX_CLAIM_INDEXES],
+  },
+  {
+    // v5 — checkout-specific attribution (per-checkout derived destination).
+    id: 5,
+    statements: [...ATTRIBUTION_COLUMNS, ...ATTRIBUTION_INDEXES],
   },
 ];
 

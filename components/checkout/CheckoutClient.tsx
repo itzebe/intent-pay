@@ -266,6 +266,12 @@ export function CheckoutClient({ token }: { token: string }) {
                 to: call.to,
                 data: call.data && call.data !== "0x" ? call.data : undefined,
                 value: call.value && call.value !== "0" ? `0x${BigInt(call.value).toString(16)}` : undefined,
+                // The chain identity travels with the request, so the wallet
+                // never has to answer `eth_chainId` itself. A page-world provider
+                // (Trust Wallet) proxies that read to its own node, which is
+                // unreachable on Monad — and a wallet-side failure must not be
+                // mistaken for Intent Pay's RPC being down.
+                chainId: `0x${(wallet.chainId ?? 143).toString(16)}`,
               },
             ],
           }),

@@ -271,6 +271,32 @@ describe("sendCalls", () => {
     provider.request = (() => Promise.reject(Object.assign(new Error("User rejected"), { code: 4001 }))) as never;
     await expect(wallet.sendCalls([{ to: ADDR, data: "0x", value: "0" }])).rejects.toMatchObject({ walletCode: "wallet_wrong_chain" });
   });
+
+  /**
+   * Trust Wallet RPC independence. A page-world provider answers `eth_chainId`
+   * by proxying to its own node (monad.twnodes.com); when that read fails the
+   * SDK must still send — the chain was not reported as *wrong*, it was
+   * *unknown*, and the request carries chainId 143 explicitly.
+   */
+  it("sends through a wallet whose own chain read fails (Trust Wallet)", async () => {
+    const provider = makeProvider({ failChainId: true });
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    const result = await wallet.sendCalls([{ to: ADDR, data: "0x", value: "0" }]);
+    expect(result.txHashes).toHaveLength(1);
+    const send = provider.calls.find((c) => c.method === "eth_sendTransaction")!;
+    const params = (send.params as unknown[])[0] as { chainId?: string };
+    // The chain identity travels with the request.
+    expect(params.chainId).toBe("0x8f");
+  });
+
+  it("does not treat an unreadable chain as the wrong chain", async () => {
+    const provider = makeProvider({ failChainId: true });
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    // No throw: an unreadable chain is unknown, not wrong.
+    await expect(wallet.ensureMonadChain()).resolves.toBeUndefined();
+  });
 });
 
 describe("account and chain change handling", () => {

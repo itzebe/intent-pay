@@ -1,16 +1,14 @@
 "use client";
 
-import type { Address, Hash, WalletClient } from "viem";
+import type { Hash, WalletClient } from "viem";
 import { getClientPublicClient } from "@/lib/wallet/clients";
+import { sendTransactionViaWallet } from "@/lib/wallet/sendTransaction";
 import type { MonadNetwork } from "@/lib/config/chains";
-import { ERC20_ABI, SWAP_ROUTER_ABI, WNATIVE_ABI } from "./abis";
-import { encodePath } from "./path";
 import type { PaymentPlan, PlanStep } from "./plan";
 import { encodeStep, type EncodedCall } from "./encode";
 
 export { encodeStep };
 export type { EncodedCall };
-import { UNISWAP, WMON_ADDRESS } from "@/lib/providers/constants";
 
 export type StepResult = {
   stepId: string;
@@ -79,131 +77,19 @@ async function submitStep(
   walletClient: WalletClient,
   network: MonadNetwork,
 ): Promise<Hash> {
-  const client = getClientPublicClient(network);
-  const account = walletClient.account!;
-  const wmon = WMON_ADDRESS as Address;
-
-  switch (step.kind) {
-    case "approve":
-      return walletClient.writeContract({
-        account,
-        chain: client.chain,
-        address: step.token.address,
-        abi: ERC20_ABI,
-        functionName: "approve",
-        args: [step.spender, step.amount],
-      });
-    case "wrap":
-      return walletClient.writeContract({
-        account,
-        chain: client.chain,
-        address: wmon,
-        abi: WNATIVE_ABI,
-        functionName: "deposit",
-        value: step.amount,
-      });
-    case "unwrap":
-      return walletClient.writeContract({
-        account,
-        chain: client.chain,
-        address: wmon,
-        abi: WNATIVE_ABI,
-        functionName: "withdraw",
-        args: [step.amount],
-      });
-    case "swap": {
-      const router = UNISWAP.swapRouter02 as Address;
-      if (step.tokens.length === 2) {
-        if (step.direction === "exact_in") {
-          return walletClient.writeContract({
-            account,
-            chain: client.chain,
-            address: router,
-            abi: SWAP_ROUTER_ABI,
-            functionName: "exactInputSingle",
-            args: [
-              {
-                tokenIn: step.tokens[0],
-                tokenOut: step.tokens[1],
-                fee: step.fees[0],
-                recipient: step.recipient,
-                amountIn: step.amountIn!,
-                amountOutMinimum: step.limit,
-                sqrtPriceLimitX96: 0n,
-              },
-            ],
-          });
-        }
-        return walletClient.writeContract({
-          account,
-          chain: client.chain,
-          address: router,
-          abi: SWAP_ROUTER_ABI,
-          functionName: "exactOutputSingle",
-          args: [
-            {
-              tokenIn: step.tokens[0],
-              tokenOut: step.tokens[1],
-              fee: step.fees[0],
-              recipient: step.recipient,
-              amountOut: step.amountOut!,
-              amountInMaximum: step.limit,
-              sqrtPriceLimitX96: 0n,
-            },
-          ],
-        });
-      }
-      if (step.direction === "exact_in") {
-        return walletClient.writeContract({
-          account,
-          chain: client.chain,
-          address: router,
-          abi: SWAP_ROUTER_ABI,
-          functionName: "exactInput",
-          args: [
-            {
-              path: encodePath(step.tokens, step.fees),
-              recipient: step.recipient,
-              amountIn: step.amountIn!,
-              amountOutMinimum: step.limit,
-            },
-          ],
-        });
-      }
-      return walletClient.writeContract({
-        account,
-        chain: client.chain,
-        address: router,
-        abi: SWAP_ROUTER_ABI,
-        functionName: "exactOutput",
-        args: [
-          {
-            path: encodePath(step.tokens, step.fees, true),
-            recipient: step.recipient,
-            amountOut: step.amountOut!,
-            amountInMaximum: step.limit,
-          },
-        ],
-      });
-    }
-    case "transfer":
-      if (!step.token) {
-        return walletClient.sendTransaction({
-          account,
-          chain: client.chain,
-          to: step.to,
-          value: step.amount,
-        });
-      }
-      return walletClient.writeContract({
-        account,
-        chain: client.chain,
-        address: step.token.address,
-        abi: ERC20_ABI,
-        functionName: "transfer",
-        args: [step.to, step.amount],
-      });
+  const account = walletClient.account!.address;
+  // The app owns the calldata (encodeStep) and submits a single raw
+  // `eth_sendTransaction` with an explicit chainId, so the wallet is never asked
+  // to answer `eth_chainId` / `eth_estimateGas` / `eth_getTransactionCount` —
+  // the reads a Trust Wallet provider proxies to its own (possibly blocked) node.
+  // See `lib/wallet/sendTransaction.ts`.
+  const call = encodeStep(step);
+  const result = await sendTransactionViaWallet(walletClient, account, call, network);
+  if (result.ok) return result.hash;
+  if (result.reason === "rejected") {
+    throw new ExecutionError("You rejected the transaction.", "rejected", step.id, result.error);
   }
+  throw new ExecutionError("The transaction could not be sent.", "unknown", step.id, result.error);
 }
 
 /**
@@ -242,6 +128,13 @@ export async function executePlan(
       report({ stepId: step.id, label: step.label, status: "submitted", hash });
       if (step.id === plan.primaryStepId) primaryHash = hash;
     } catch (err) {
+      // `submitStep` already raises a classified ExecutionError carrying the raw
+      // provider error on `cause` and the failing step id. Re-throw it unchanged
+      // so the real cause is not buried under a second wrapper.
+      if (err instanceof ExecutionError) {
+        report({ stepId: step.id, label: step.label, status: "failed", error: err.message });
+        throw err;
+      }
       const rejected = isUserRejection(err);
       report({ stepId: step.id, label: step.label, status: "failed", error: (err as Error)?.message });
       throw new ExecutionError(

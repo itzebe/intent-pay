@@ -379,32 +379,46 @@ export class UniswapV3Provider implements RoutingProvider {
     // emits (Monad's public RPC intermittently drops entries in a batch), and
     // it returns per-call success flags so a single bad call can't poison the
     // whole read.
+    let results: (T | null)[];
     try {
-      const results = await this.aggregate3<T>(calls);
-      const failed = results.filter((r) => r === null).length;
-      if (failed > 0 && failed === results.length) {
+      const aggregated = await this.aggregate3<T>(calls);
+      const failed = aggregated.filter((r) => r === null).length;
+      if (failed > 0 && failed === aggregated.length) {
         // Every call failed — fall back so a broken aggregate can't look like
         // "no pools exist".
         throw new Error("aggregate3 returned no successful calls");
       }
-      return results;
+      results = aggregated;
     } catch (err) {
       if (isRpcUnreachable(err)) this.rpcFailed = true;
       console.warn(
         `[routing] aggregate3 failed for ${calls.length} calls, falling back to sequential reads:`,
         (err as Error)?.message,
       );
-      const out: (T | null)[] = [];
+      results = [];
       for (const c of calls) {
         try {
-          out.push((await this.client().readContract(c as any)) as T);
+          results.push((await this.client().readContract(c as any)) as T);
         } catch (seqErr) {
           if (isRpcUnreachable(seqErr)) this.rpcFailed = true;
-          out.push(null);
+          results.push(null);
         }
       }
-      return out;
     }
+
+    // A node that answers HTTP 200 but returns *no usable data* — the production
+    // 429-with-an-empty-body — is not a thrown error: the aggregate call
+    // succeeds and every sub-call simply fails. Read as a market fact that is an
+    // empty pool graph ("no liquidity"), which the router reports as the
+    // *definitive* `route_unavailable`. The composer then clears the
+    // last-known-good quote and stops retrying, so a transient outage became a
+    // permanent, unrecoverable "no route". None of these reads can legitimately
+    // all-fail (`getPool` returns the zero address for a missing pool, never a
+    // revert), so zero successful reads out of N means the node is unreachable.
+    if (results.length > 0 && results.every((r) => r === null)) {
+      this.rpcFailed = true;
+    }
+    return results;
   }
 
   /** One eth_call to Multicall3.aggregate3, decoding each raw return. */
@@ -494,6 +508,7 @@ export class UniswapV3Provider implements RoutingProvider {
     const CHUNK = 300;
     for (let i = 0; i < calls.length; i += CHUNK) {
       const slice = calls.slice(i, i + CHUNK);
+      let aggregateOk = false;
       try {
         const res = (await this.client().readContract({
           address: MULTICALL3_ADDRESS,
@@ -501,30 +516,39 @@ export class UniswapV3Provider implements RoutingProvider {
           functionName: "aggregate3",
           args: [slice],
         })) as readonly { success: boolean; returnData: string }[];
+        let anyDecoded = false;
         for (const r of res) {
-          out.push(
-            r?.success && r.returnData && r.returnData !== "0x"
-              ? decodeReturn(r.returnData)
-              : null,
-          );
+          const decoded =
+            r?.success && r.returnData && r.returnData !== "0x" ? decodeReturn(r.returnData) : null;
+          if (decoded !== null) anyDecoded = true;
+          out.push(decoded);
         }
+        aggregateOk = true;
+        // The aggregate call itself succeeded but *nothing* decoded: the node
+        // answered HTTP 200 with no usable data (the production 429/empty body).
+        // A QuoterV2 call either returns an encoded quote or reverts with one;
+        // it never silently returns nothing for every candidate, so this is
+        // infrastructure, not "no liquidity".
+        if (slice.length > 0 && !anyDecoded) this.rpcFailed = true;
       } catch {
-        // Fallback: one call at a time. A revert here carries the encoded
-        // quote as revert data.
-        for (const c of slice) {
-          try {
-            const raw = (await this.client().call({ to: c.target, data: c.callData })) as {
-              data?: string;
-            };
-            out.push(raw?.data ? decodeReturn(raw.data) : null);
-          } catch (err: any) {
-            const revertData: string | undefined = err?.data ?? err?.cause?.data;
-            // A revert carrying encoded data is the QuoterV2 answer (a real
-            // on-chain "no liquidity here"); only a failure with no revert data
-            // is an unreachable RPC.
-            if (!revertData && isRpcUnreachable(err)) this.rpcFailed = true;
-            out.push(revertData ? decodeReturn(revertData) : null);
-          }
+        // fall through to the sequential path below
+      }
+      if (aggregateOk) continue;
+      // Fallback: one call at a time. A revert here carries the encoded
+      // quote as revert data.
+      for (const c of slice) {
+        try {
+          const raw = (await this.client().call({ to: c.target, data: c.callData })) as {
+            data?: string;
+          };
+          out.push(raw?.data ? decodeReturn(raw.data) : null);
+        } catch (err: any) {
+          const revertData: string | undefined = err?.data ?? err?.cause?.data;
+          // A revert carrying encoded data is the QuoterV2 answer (a real
+          // on-chain "no liquidity here"); only a failure with no revert data
+          // is an unreachable RPC.
+          if (!revertData && isRpcUnreachable(err)) this.rpcFailed = true;
+          out.push(revertData ? decodeReturn(revertData) : null);
         }
       }
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { shortAddress } from "@/lib/format";
 import { NETWORKS } from "@/lib/config/chains";
 import { useWallet, type WalletOption } from "@/lib/hooks/useWallet";
@@ -58,6 +58,15 @@ function WalletGlyph({ wallet, size = 28 }: { wallet: WalletOption; size?: numbe
 function WalletPicker({ open, onClose }: { open: boolean; onClose: () => void }) {
   const wallet = useWallet();
   const [connectingId, setConnectingId] = useState<string | null>(null);
+
+  // Re-scan every time the picker opens. A mobile in-app browser can inject its
+  // provider long after first paint, and the user only opens this to connect —
+  // so this is exactly when a missed late injection must be picked up.
+  useEffect(() => {
+    if (open) wallet.refresh();
+    // `refresh` is stable; only `open` should retrigger the scan.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const injected = wallet.wallets.filter((w) => w.kind === "injected");
   const walletConnect = wallet.wallets.find((w) => w.kind === "walletconnect");

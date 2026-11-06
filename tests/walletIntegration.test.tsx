@@ -202,6 +202,38 @@ describe("wallet connection (mocked injected provider)", () => {
     expect(screen.getByText(/0x7A91/)).toBeTruthy();
   });
 
+  it("discovers a provider that injects AFTER the fast poll window, when the picker opens", async () => {
+    // Defect A on a real device: Trust Wallet's Android in-app browser injected
+    // its legacy provider around 9s — after discovery's fast poll had stopped —
+    // so the picker showed "No browser wallet detected". Opening the picker must
+    // re-scan, so the wallet is offered at the moment the user asks to connect.
+    vi.useFakeTimers();
+    try {
+      render(
+        <WalletProvider>
+          <ConnectButton />
+        </WalletProvider>,
+      );
+      // Past the fast window, still nothing injected.
+      await act(async () => {
+        vi.advanceTimersByTime(7000);
+      });
+
+      // The wallet finally injects (Trust Wallet style: window.trustwallet only).
+      (window as any).trustwallet = { ethereum: makeProvider({ isTrust: true }) };
+
+      // The user opens the picker; the re-scan must find it.
+      fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+      await act(async () => {
+        vi.advanceTimersByTime(50);
+      });
+
+      expect(screen.getByText("Trust Wallet")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not resurrect a deliberately disconnected wallet when a late provider appears", async () => {
     const provider = makeProvider();
     (window as any).ethereum = provider;

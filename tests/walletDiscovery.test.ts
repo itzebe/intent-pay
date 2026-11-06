@@ -291,5 +291,34 @@ describe("watchWallets", () => {
         vi.useRealTimers();
       }
     });
+
+    it("discovers a provider that injects AFTER the fast poll window (real mobile timing)", () => {
+      // A Trust Wallet Android WebView was observed injecting around 9s — past
+      // the 6s fast window. The old implementation stopped polling at 6s, so the
+      // provider was never seen and the user was told "no browser wallet
+      // detected". The slow poll must keep the watcher alive.
+      vi.useFakeTimers();
+      try {
+        const win = fakeWindow(undefined);
+        const seen: number[] = [];
+        const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+
+        // Nothing yet at the old cut-off.
+        vi.advanceTimersByTime(6500);
+        expect(seen[seen.length - 1]).toBe(0);
+
+        // The provider finally injects at ~9s, exactly as on the device.
+        vi.advanceTimersByTime(2500);
+        (win as unknown as { trustwallet?: { ethereum: Eip1193Provider } }).trustwallet = {
+          ethereum: fakeProvider({ isTrust: true }),
+        };
+        vi.advanceTimersByTime(2000);
+
+        expect(seen[seen.length - 1]).toBe(1);
+        destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

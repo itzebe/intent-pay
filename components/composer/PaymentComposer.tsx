@@ -20,6 +20,7 @@ import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
 import { classifyTransactionError, INSUFFICIENT_MON_FOR_FEES_MESSAGE, isFeeShortfall, isWalletTransportFailure } from "@/lib/domain/transactionError";
+import { mayBeOnChain, stateForStep } from "@/lib/domain/txLifecycle";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { explorerTxUrl, type MonadNetwork } from "@/lib/config/chains";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
@@ -420,7 +421,10 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       // double-spend).
       let sawSubmission = false;
       const onStep = (r: StepResult) => {
-        if (r.status === "submitted" || r.hash) sawSubmission = true;
+        // The single rule for "may already be on-chain": a submitted/confirmed
+        // step, or a failed one that still carries a hash (a revert or an
+        // unresolved send). Never reimplemented here.
+        if (mayBeOnChain(stateForStep(r))) sawSubmission = true;
         setSteps((prev) => {
           const idx = prev.findIndex((x) => x.stepId === r.stepId);
           if (idx >= 0) {

@@ -105,7 +105,11 @@ export class Wallet {
     const address = firstAccount(accounts);
     if (!address) throw new WalletError("wallet_no_account", "The wallet returned no account. Unlock it and approve the connection.");
 
-    const chainId = await Wallet.readChainId(chosen.provider);
+    // Best-effort: a provider whose own node is unreachable cannot answer
+    // `eth_chainId`. The connection still succeeds; the chain is unknown (0)
+    // rather than treated as a hard failure — `ensureMonadChain`/`sendCalls`
+    // carry the chain identity explicitly.
+    const chainId = (await Wallet.readChainIdSafe(chosen.provider)) ?? 0;
     return new Wallet({
       provider: chosen.provider,
       address,
@@ -158,7 +162,7 @@ export class Wallet {
       : await provider.request({ method: "eth_requestAccounts" });
     const address = firstAccount(accounts);
     if (!address) throw new WalletError("wallet_no_account", "The WalletConnect session returned no account.");
-    const chainId = await Wallet.readChainId(provider);
+    const chainId = (await Wallet.readChainIdSafe(provider)) ?? 0;
 
     const disconnect = provider.disconnect as (() => Promise<void>) | undefined;
     return new Wallet({
@@ -186,7 +190,7 @@ export class Wallet {
       const accounts = await chosen.provider.request({ method: "eth_accounts" });
       const address = firstAccount(accounts);
       if (!address) return null;
-      const chainId = await Wallet.readChainId(chosen.provider);
+      const chainId = (await Wallet.readChainIdSafe(chosen.provider)) ?? 0;
       return new Wallet({
         provider: chosen.provider,
         address,
@@ -202,6 +206,23 @@ export class Wallet {
   private static async readChainId(provider: Eip1193Provider): Promise<number> {
     const hex = await provider.request({ method: "eth_chainId" });
     return chainIdFromHex(hex) ?? 0;
+  }
+
+  /**
+   * Read the chain id, or `undefined` when the read fails.
+   *
+   * A page-world injected provider (Trust Wallet) answers `eth_chainId` by
+   * proxying to its own node, so the read can fail for reasons unrelated to
+   * whether the wallet can pay. Callers that gate a payment on the chain must
+   * treat a failed read as *unknown* — never as "wrong chain" — and let the
+   * submission carry the chain identity explicitly.
+   */
+  private static async readChainIdSafe(provider: Eip1193Provider): Promise<number | undefined> {
+    try {
+      return await Wallet.readChainId(provider);
+    } catch {
+      return undefined;
+    }
   }
 
   // ── Accessors ───────────────────────────────────────────────────────────────
@@ -241,6 +262,15 @@ export class Wallet {
    */
   async ensureMonadChain(): Promise<void> {
     if (this.onMonad) return;
+    // Best-effort chain read: a provider that cannot answer `eth_chainId` (its
+    // own node is unreachable) leaves the chain *unknown*, not "wrong". Only a
+    // wallet genuinely reporting another chain is asked to switch — a failed
+    // read must never block a payment that carries its chainId explicitly.
+    const current = await Wallet.readChainIdSafe(this.provider);
+    if (current !== undefined && isMonadChainId(current)) {
+      this.currentChainId = current;
+      return;
+    }
     try {
       await this.provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + MONAD_CHAIN_ID.toString(16) }] });
     } catch (err) {
@@ -251,15 +281,15 @@ export class Wallet {
         await this.provider.request({ method: "wallet_addEthereumChain", params: [monadAddChainParams()] });
       } else if (isUserRejection(err)) {
         throw new WalletError("wallet_wrong_chain", "You declined to switch to Monad Mainnet.");
-      } else {
+      } else if (current !== undefined) {
+        // We know the wallet is on a different chain and the switch failed.
         throw new WalletError("wallet_wrong_chain", walletErrorMessage(err));
       }
+      // Otherwise the chain was unreadable and the switch could not be
+      // performed: proceed — the submission carries chainId 143 explicitly.
     }
-    const chainId = await Wallet.readChainId(this.provider);
-    this.currentChainId = chainId;
-    if (!isMonadChainId(chainId)) {
-      throw new WalletError("wallet_wrong_chain", `Your wallet is on chain ${chainId}. Switch to Monad Mainnet (143) to pay.`);
-    }
+    const chainId = await Wallet.readChainIdSafe(this.provider);
+    if (chainId !== undefined) this.currentChainId = chainId;
     this.emit();
   }
 
@@ -285,7 +315,10 @@ export class Wallet {
       try {
         const hash = await this.provider.request({
           method: "eth_sendTransaction",
-          params: [{ from, to: call.to, data: call.data && call.data !== "0x" ? call.data : undefined, value: normalizeValue(call.value) }],
+          // The chain identity travels with the request, so the wallet never has
+          // to answer `eth_chainId` itself — a page-world provider (Trust
+          // Wallet) may not be able to reach its own node to do so.
+          params: [{ from, to: call.to, data: call.data && call.data !== "0x" ? call.data : undefined, value: normalizeValue(call.value), chainId: "0x" + MONAD_CHAIN_ID.toString(16) }],
         });
         if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash)) {
           throw new WalletError("wallet_no_account", "The wallet did not return a transaction hash.");

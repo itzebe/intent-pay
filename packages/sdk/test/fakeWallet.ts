@@ -35,6 +35,12 @@ export type FakeProviderOptions = {
   rejectSwitch?: { code?: number; message?: string };
   /** The chain id `eth_chainId` reports after a successful switch. */
   chainAfterSwitch?: string;
+  /**
+   * Make `eth_chainId` throw a bare `TypeError: Failed to fetch`, modelling a
+   * page-world provider (Trust Wallet) that proxies the read to its own node and
+   * cannot reach it. The wallet can still send.
+   */
+  failChainId?: boolean;
   isMetaMask?: boolean;
   isRabby?: boolean;
   isCoinbaseWallet?: boolean;
@@ -67,6 +73,7 @@ export function makeProvider(options: FakeProviderOptions = {}): FakeProvider {
           }
           return [...accounts];
         case "eth_chainId":
+          if (options.failChainId) throw new TypeError("Failed to fetch");
           return chainId;
         case "wallet_switchEthereumChain": {
           if (options.rejectSwitch) {

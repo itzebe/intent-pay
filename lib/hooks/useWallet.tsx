@@ -506,9 +506,16 @@ export function WalletProvider({
       };
     }
     const target = NETWORKS[network].chainId;
+    // The chain read is best-effort for the SAME reason the connect path treats
+    // it that way: a page-world injected provider (Trust Wallet) answers
+    // `eth_chainId` by proxying to its own node, so the read can fail for
+    // reasons unrelated to whether the wallet can pay. A failed read leaves the
+    // chain *unknown*; it must not block a payment that is about to be submitted
+    // with an explicit chainId (see `lib/wallet/sendTransaction.ts`). Only a
+    // wallet that is genuinely on a DIFFERENT chain is asked to switch.
+    const current = await safeChainId(provider);
+    if (current === undefined || current === target) return { ok: true };
     try {
-      const chainIdHex = (await provider.request({ method: "eth_chainId" })) as string;
-      if (chainIdFromHex(chainIdHex) === target) return { ok: true };
       await provider.request({
         method: "wallet_switchEthereumChain",
         params: [{ chainId: "0x" + target.toString(16) }],

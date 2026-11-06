@@ -36,17 +36,41 @@ function directTransferPlan() {
   return buildPaymentPlan(quote, SENDER, RECIPIENT);
 }
 
-/** A rejecting wallet: writeContract throws the EIP-1193 user-rejection code. */
+/** A rejecting wallet: the submission throws the EIP-1193 user-rejection code. */
 function rejectingWallet(): WalletClient {
   const err: any = new Error("User rejected the request.");
   err.code = 4001;
+  return walletWith(async () => {
+    throw err;
+  });
+}
+
+/**
+ * A wallet client that models the ONE method `executePlan` uses: a raw
+ * `eth_sendTransaction` forwarded through `walletClient.request`.
+ *
+ * The execution layer deliberately does not call viem's high-level
+ * `writeContract`/`sendTransaction`, because those read `eth_chainId` through
+ * the wallet first — the read a Trust Wallet provider proxies to its own node
+ * and cannot complete on Monad. `send` receives the params object so a test can
+ * assert the calldata / `chainId` / `value` the wallet was actually handed.
+ */
+function walletWith(
+  send: (params: {
+    from?: string;
+    to?: string;
+    data?: string;
+    value?: string;
+    chainId?: string;
+  }) => Promise<unknown>,
+): WalletClient {
   return {
     account: { address: SENDER },
-    writeContract: async () => {
-      throw err;
-    },
-    sendTransaction: async () => {
-      throw err;
+    request: async ({ method, params }: any) => {
+      if (method !== "eth_sendTransaction") {
+        throw new Error(`unexpected wallet method ${method}`);
+      }
+      return send(params[0]);
     },
   } as unknown as WalletClient;
 }
@@ -87,12 +111,8 @@ describe("executePlan — transaction rejection handling", () => {
 
   // N. A reverted on-chain transaction is never reported as successful.
   it("reports a reverted receipt as failed with a `reverted` error (N)", async () => {
-    const hash = "0xreverted" as `0x${string}`;
-    const wallet = {
-      account: { address: SENDER },
-      writeContract: async () => hash,
-      sendTransaction: async () => hash,
-    } as unknown as WalletClient;
+    const hash = ("0x" + "11".repeat(32)) as `0x${string}`;
+    const wallet = walletWith(async () => hash);
 
     // Stub the receipt read to return a reverted receipt for our hash.
     const client = getClientPublicClient("mainnet");
@@ -118,19 +138,12 @@ describe("executePlan — transaction rejection handling", () => {
   //    success: the plan is unconfirmed, the hash is preserved, and the
   //    remaining steps are not run.
   it("reports an unobserved receipt as unconfirmed and stops the plan", async () => {
-    const hash = "0xpending" as `0x${string}`;
+    const hash = ("0x" + "22".repeat(32)) as `0x${string}`;
     const sent: string[] = [];
-    const wallet = {
-      account: { address: SENDER },
-      writeContract: async () => {
-        sent.push("writeContract");
-        return hash;
-      },
-      sendTransaction: async () => {
-        sent.push("sendTransaction");
-        return hash;
-      },
-    } as unknown as WalletClient;
+    const wallet = walletWith(async () => {
+      sent.push("send");
+      return hash;
+    });
 
     // Two steps: a second step must never be submitted once the first is
     // unconfirmed (it was built to follow a confirmed predecessor).
@@ -173,15 +186,9 @@ describe("executePlan — transaction rejection handling", () => {
     const underlying = Object.assign(new Error("insufficient funds for gas * price + value"), {
       code: -32000,
     });
-    const wallet = {
-      account: { address: SENDER },
-      writeContract: async () => {
-        throw underlying;
-      },
-      sendTransaction: async () => {
-        throw underlying;
-      },
-    } as unknown as WalletClient;
+    const wallet = walletWith(async () => {
+      throw underlying;
+    });
 
     try {
       await executePlan(directTransferPlan(), wallet, "mainnet");
@@ -200,15 +207,9 @@ describe("executePlan — transaction rejection handling", () => {
   //    ExecutionError is what lets the UI tell the two apart — our own chain
   //    reads are made through our HTTPS clients and never carry a step id.
   it("marks a wallet-provider transport failure as the wallet's, not ours (Q)", async () => {
-    const wallet = {
-      account: { address: SENDER },
-      writeContract: async () => {
-        throw new TypeError("Failed to fetch");
-      },
-      sendTransaction: async () => {
-        throw new TypeError("Failed to fetch");
-      },
-    } as unknown as WalletClient;
+    const wallet = walletWith(async () => {
+      throw new TypeError("Failed to fetch");
+    });
 
     try {
       await executePlan(directTransferPlan(), wallet, "mainnet");

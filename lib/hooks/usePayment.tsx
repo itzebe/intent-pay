@@ -15,7 +15,7 @@ import type { MonadNetwork } from "@/lib/config/chains";
 import { parseUnits } from "@/lib/domain/math";
 import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
 import { isQuoteStale, QUOTE_REFRESH_AFTER_MS, QUOTE_RETRY_AFTER_MS } from "@/lib/domain/freshness";
-import { applyQuoteFailure, applyQuoteSuccess } from "@/lib/domain/quoteState";
+import { applyQuoteFailure, applyQuoteSuccess, shouldRetryQuote } from "@/lib/domain/quoteState";
 import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
 import { withFeeShortfallMessage } from "@/lib/domain/transactionError";
 import {
@@ -655,16 +655,18 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, [state.quote, state.autoRefreshAt]);
 
-  // A refresh that failed while a usable quote is still held retries after a
-  // short backoff. This is what makes "expired quote → refresh failure" a
-  // recoverable state rather than a dead end. We only auto-retry while a quote
-  // is held: with no quote there is nothing to keep alive, and the readiness
-  // gate already surfaces a retryable error driven by user edits.
+  // A refresh that failed retries after a short backoff. While a usable quote is
+  // held this keeps "expired quote → refresh failure" recoverable. It also
+  // covers a *transient* failure with no held quote (a cold quote during an RPC
+  // blip): without that, the very first quote after a provider hiccup was a dead
+  // end — the composer showed "couldn't get a live quote" and never retried on
+  // its own. A definitive failure (no route, unsupported token) is a real state
+  // change and is still not retried. The rule lives in `shouldRetryQuote`.
   useEffect(() => {
-    if (!state.quoteRefreshFailedAt || !state.quote) return;
+    if (!shouldRetryQuote(state)) return;
     const timer = setTimeout(() => setNonce((n) => n + 1), QUOTE_RETRY_AFTER_MS);
     return () => clearTimeout(timer);
-  }, [state.quoteRefreshFailedAt, state.quote]);
+  }, [state.quoteRefreshFailedAt, state.quote, state.quoteError]);
 
   // ---- Balance sufficiency -------------------------------------------------
   const sufficiency = useMemo(() => {

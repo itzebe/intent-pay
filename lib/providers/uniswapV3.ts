@@ -18,6 +18,7 @@ import { FEE_TIERS, UNISWAP, WMON_ADDRESS } from "./constants";
 import { getMarketPriceUsd } from "@/lib/server/pricing/market";
 import type {
   RouteQuoteRequest,
+  RouteQuoteFailure,
   RouteQuoteResult,
   RoutingProvider,
   UsdPrice,
@@ -49,10 +50,60 @@ const MAX_BASIS_TOKENS = 24;
 
 type PoolInfo = { pool: Address; fee: number; liquidity: bigint; to: Address };
 
+/**
+ * True when a thrown value means "the RPC could not be reached", as opposed to
+ * a contract reverting. A `ContractFunctionRevertedError` is a *real* on-chain
+ * answer (the pool/function exists and refused); a transport error, a timeout,
+ * a malformed/empty HTTP body (a 429 with no JSON) or a JSON-RPC error is
+ * infrastructure and must not be read as "no liquidity exists".
+ *
+ * We classify on the viem error `name`/`walk` chain rather than importing viem
+ * error classes, because the provider is also exercised with plain `Error`
+ * doubles in tests and because a nested `cause` chain is what viem actually
+ * throws.
+ */
+function isRpcUnreachable(err: unknown): boolean {
+  let node: unknown = err;
+  for (let depth = 0; node && depth < 8; depth++) {
+    const e = node as { name?: string; code?: unknown; cause?: unknown; message?: string };
+    const name = typeof e.name === "string" ? e.name : "";
+    if (name === "ContractFunctionRevertedError" || name === "ContractFunctionZeroDataError") {
+      // The node answered; the call itself failed on chain.
+      return false;
+    }
+    if (
+      name === "HttpRequestError" ||
+      name === "TimeoutError" ||
+      name === "WebSocketRequestError" ||
+      name === "RpcRequestError" ||
+      name === "UnknownRpcError" ||
+      name === "SocketClosedError"
+    ) {
+      return true;
+    }
+    // A viem `HttpRequestError` for an empty/non-JSON body has no dedicated
+    // name on some paths; the message is the tell.
+    const msg = typeof e.message === "string" ? e.message.toLowerCase() : "";
+    if (
+      msg.includes("fetch failed") ||
+      msg.includes("unexpected end of json") ||
+      msg.includes("could not be resolved") ||
+      msg.includes("failed to fetch") ||
+      msg.includes("network error") ||
+      msg.includes("socket hang up") ||
+      msg.includes("econnrefused") ||
+      msg.includes("etimedout")
+    ) {
+      return true;
+    }
+    node = e.cause;
+  }
+  return false;
+}
+
 function eq(a: string, b: string) {
   return (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
 }
-
 /** The ERC-20 address used by pools for a token (native MON is pooled as WMON). */
 function poolAddress(token: TokenConfig): Address {
   return (token.native ? WMON_ADDRESS : token.address) as Address;
@@ -94,6 +145,14 @@ export class UniswapV3Provider implements RoutingProvider {
   private availCache = new Map<string, { value: string[]; at: number }>();
   /** Token keys with the deepest total liquidity, used to pick basis tokens. */
   private liquidityScore = new Map<string, bigint>();
+  /**
+   * Set when the most recent chain read failed because the RPC was unreachable
+   * (as opposed to a contract reverting). Reset at the start of every public
+   * entry point and consulted when a quote would otherwise report
+   * "no route" — an unreachable node is a transient `provider_error`, not a
+   * market fact.
+   */
+  private rpcFailed = false;
 
   constructor(private network: MonadNetwork = "mainnet") {}
 
@@ -270,6 +329,15 @@ export class UniswapV3Provider implements RoutingProvider {
       this.bumpScore(e.b.toLowerCase(), liq);
     });
 
+    // An unreachable RPC makes every pool read fail, so the result is an empty
+    // (or partial) graph. Caching that as "fresh" for `GRAPH_TTL_MS` would turn
+    // a one-second blip into five minutes of "no route". Return it for this
+    // call only; the next quote rebuilds from scratch. The flag is left set so
+    // the caller can classify the failure — `quote()` clears it at its start.
+    if (this.rpcFailed) {
+      return adjacency;
+    }
+
     // Merge into the existing graph so a later, narrower quote keeps the pools
     // discovered for a previous, wider one. Start from scratch when the catalog
     // itself changed, so stale tokens can't linger.
@@ -321,6 +389,7 @@ export class UniswapV3Provider implements RoutingProvider {
       }
       return results;
     } catch (err) {
+      if (isRpcUnreachable(err)) this.rpcFailed = true;
       console.warn(
         `[routing] aggregate3 failed for ${calls.length} calls, falling back to sequential reads:`,
         (err as Error)?.message,
@@ -329,7 +398,8 @@ export class UniswapV3Provider implements RoutingProvider {
       for (const c of calls) {
         try {
           out.push((await this.client().readContract(c as any)) as T);
-        } catch {
+        } catch (seqErr) {
+          if (isRpcUnreachable(seqErr)) this.rpcFailed = true;
           out.push(null);
         }
       }
@@ -449,6 +519,10 @@ export class UniswapV3Provider implements RoutingProvider {
             out.push(raw?.data ? decodeReturn(raw.data) : null);
           } catch (err: any) {
             const revertData: string | undefined = err?.data ?? err?.cause?.data;
+            // A revert carrying encoded data is the QuoterV2 answer (a real
+            // on-chain "no liquidity here"); only a failure with no revert data
+            // is an unreachable RPC.
+            if (!revertData && isRpcUnreachable(err)) this.rpcFailed = true;
             out.push(revertData ? decodeReturn(revertData) : null);
           }
         }
@@ -701,20 +775,54 @@ export class UniswapV3Provider implements RoutingProvider {
     return this.exactAmountIn(path, fees, amount);
   }
 
+  /**
+   * Build a route failure, upgrading it to a transient `provider_error` when the
+   * underlying chain read failed because the RPC was unreachable.
+   *
+   * This is the whole point of the classification: an unreachable node produces
+   * an empty pool graph, which looks exactly like "no liquidity". Reporting it
+   * as `route_unavailable` (a *definitive* answer) made the composer clear the
+   * last-known-good quote and stop retrying — a temporary infrastructure fault
+   * presented to the user as a permanent market fact. `provider_error` is the
+   * code the client treats as transient, so the held quote survives and the
+   * refresh retries.
+   */
+  private async routeFailure(
+    message: string,
+    payToken: TokenConfig,
+    receiveToken: TokenConfig,
+  ): Promise<RouteQuoteFailure> {
+    // Read the flag but do not clear it here: `quote()` clears it at its start,
+    // so every concurrent caller during the same outage sees the same cause.
+    if (this.rpcFailed) {
+      return {
+        ok: false,
+        code: "provider_error",
+        message: "We couldn't reach the Monad network just now. Retrying…",
+      };
+    }
+    return {
+      ok: false,
+      code: "route_unavailable",
+      message,
+      alternatives: await this.reachableSymbols(payToken, [receiveToken]),
+    };
+  }
+
   async quote(req: RouteQuoteRequest): Promise<RouteQuoteResult> {
     const { payToken, receiveToken, mode } = req;
+    this.rpcFailed = false;
 
     let amount = req.amount;
     if (req.usd === true) {
       const priceToken = mode === "i_spend" ? payToken : receiveToken;
       const price = await this.priceUsd(priceToken);
       if (!(price.usd > 0)) {
-        return {
-          ok: false,
-          code: "route_unavailable",
-          message: `We can't determine a price for ${priceToken.symbol}, so this payment can't be quoted.`,
-          alternatives: await this.reachableSymbols(payToken, [receiveToken]),
-        };
+        return this.routeFailure(
+          `We can't determine a price for ${priceToken.symbol}, so this payment can't be quoted.`,
+          payToken,
+          receiveToken,
+        );
       }
       const units = Number(req.amount) / price.usd;
       amount = formatUnits(
@@ -744,23 +852,21 @@ export class UniswapV3Provider implements RoutingProvider {
 
     const best = await this.findBestPath(payToken, receiveToken, fixed, exactOut);
     if (!best) {
-      return {
-        ok: false,
-        code: "route_unavailable",
-        message: "No supported liquidity route can currently satisfy this payment.",
-        alternatives: await this.reachableSymbols(payToken, [receiveToken]),
-      };
+      return this.routeFailure(
+        "No supported liquidity route can currently satisfy this payment.",
+        payToken,
+        receiveToken,
+      );
     }
 
     const hops = await this.resolveHops(best.path, best.fees);
     const quoted = await this.quotePath(best.path, best.fees, fixed, exactOut);
     if (!hops || quoted === null) {
-      return {
-        ok: false,
-        code: "route_unavailable",
-        message: "No supported liquidity route can currently satisfy this payment.",
-        alternatives: await this.reachableSymbols(payToken, [receiveToken]),
-      };
+      return this.routeFailure(
+        "No supported liquidity route can currently satisfy this payment.",
+        payToken,
+        receiveToken,
+      );
     }
 
     const payAmount = exactOut ? quoted : fixed;

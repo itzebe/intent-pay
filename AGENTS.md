@@ -235,6 +235,45 @@ metadata, a trustworthy price *and* a real route. `/api/tokens` exposes
   token against an 18-dp receive token otherwise reports a rate inflated by
   10^12. Regression covered in `tests/liveRouting.test.ts`.
 
+## RPC reliability (an unreachable node is never a market fact)
+
+Every chain read goes through a **fallback transport**, never a single
+endpoint. `serverRpcUrls()` / `browserRpcUrls()` (`lib/config/chains.ts`) list
+the keyed provider first and **always end at the key-free public Monad RPC**
+(`rpc.monad.xyz`). `getPublicClient` (`lib/server/rpc.ts`) and
+`getClientPublicClient` (`lib/wallet/clients.ts`) build on viem `fallback(..., {
+rank: false })`, so a 429 / timeout on the keyed endpoint degrades to the public
+node instead of failing every pool read and every receipt wait. Without this, a
+rate-limited Alchemy endpoint (observed: HTTP 429 with an empty body) made the
+whole server read layer fail.
+
+**An unreachable RPC is a transient `provider_error`, not `route_unavailable`.**
+`isRpcUnreachable` (`lib/providers/uniswapV3.ts`) walks the viem `cause` chain:
+`HttpRequestError` / `TimeoutError` / `RpcRequestError` and empty-body messages
+(`fetch failed`, `Unexpected end of JSON input`) are infrastructure; a
+`ContractFunctionRevertedError` — or a revert **carrying encoded data**, which is
+the QuoterV2 answer — is a real on-chain answer. When a read failed for
+infrastructure reasons, `routeFailure()` returns `provider_error` (and the quote
+skips the "no route" alternatives). `provider_error` is transient, so the
+composer keeps the last-known-good quote and retries; `route_unavailable` is
+definitive and clears the slot. Reporting an outage as `route_unavailable` was
+the reported "swap quote cannot be recovered" bug — a blip shown as a permanent
+market fact.
+
+A graph built while the RPC was failing is **not cached** for `GRAPH_TTL_MS`; it
+is returned for that call only, so a one-second blip cannot become five minutes
+of "no route".
+
+**Recovery is not limited to a held quote.** `shouldRetryQuote`
+(`lib/domain/quoteState.ts`) is the single rule for whether a failed quote slot
+auto-retries: true while a quote is held, and true for a *transient* failure with
+no held quote (a cold quote taken during a hiccup). A definitive failure is never
+auto-retried. `usePayment.tsx` keys its backoff effect off this function.
+
+Regression coverage: `tests/rpcResilience.test.ts` (candidate lists, fallback
+transport, recovery), `tests/routeDiscovery.test.ts` (an RPC outage surfaces as
+`provider_error`).
+
 ## Quote freshness (execution guard)
 
 `lib/domain/freshness.ts` (client-safe) owns the single definition of a
@@ -255,10 +294,11 @@ that quote and its timestamp** (so staleness keeps ageing honestly) and records
 `quoteRefreshFailedAt`; a backoff effect in `usePayment.tsx` re-quotes after
 `QUOTE_RETRY_AFTER_MS`. A **definitive** failure (`route_unavailable`,
 `unsupported_token`, …) is a real state change and clears the quote so the
-honest error shows. A failure with no usable quote for the current version also
-clears. `usePayment.tsx` routes the fetch success and both failure paths through
-`applyQuoteSuccess`/`applyQuoteFailure`; only `applyQuoteFailure` may keep or
-clear the slot, never a raw spread.
+honest error shows. A **transient** failure with no held quote also schedules a
+retry — see `shouldRetryQuote`, the single rule for this; a cold quote taken
+during an RPC blip used to be a dead end. `usePayment.tsx` routes the fetch
+success and both failure paths through `applyQuoteSuccess`/`applyQuoteFailure`;
+only `applyQuoteFailure` may keep or clear the slot, never a raw spread.
 
 ## Review stays inside the flow
 

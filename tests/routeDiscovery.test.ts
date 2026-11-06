@@ -142,7 +142,23 @@ beforeEach(() => {
   readContract.mockReset();
   call.mockReset();
   readContract.mockImplementation(async (c: { functionName?: string; args?: unknown[] }) => {
-    if (fixture.rpcFails) throw new Error("RPC unavailable");
+    if (fixture.rpcFails) {
+      // Mirrors the shape viem actually throws for a transport failure
+      // (429 / empty body): ContractFunctionExecutionError -> CallExecutionError
+      // -> HttpRequestError. A contract *revert* is a different chain and must
+      // stay classified as an on-chain answer.
+      const http = Object.assign(new Error("HTTP request failed. Status: 429"), {
+        name: "HttpRequestError",
+      });
+      const callErr = Object.assign(new Error("HTTP request failed."), {
+        name: "CallExecutionError",
+        cause: http,
+      });
+      throw Object.assign(new Error("HTTP request failed."), {
+        name: "ContractFunctionExecutionError",
+        cause: callErr,
+      });
+    }
     if (c.functionName === "aggregate3") {
       return handleAggregate(c.args![0] as { target: string; callData: string }[]);
     }
@@ -246,15 +262,16 @@ describe("a genuinely liquid multi-hop exact-output route still quotes", () => {
 });
 
 describe("an RPC failure is not misreported as a zero-liquidity outcome", () => {
-  it("degrades to route_unavailable instead of throwing", async () => {
-    // Discovery cannot read any pool. The provider must return its documented
-    // honest failure, never crash. (The live test separately treats a thrown RPC
-    // error as a test failure rather than skipping — see liveRouting.test.ts.)
+  it("reports a transient provider_error, not a definitive route_unavailable", async () => {
+    // Discovery cannot read any pool. The provider must return a *transient*
+    // failure: an unreachable node is not "no liquidity". Reporting
+    // `route_unavailable` made the composer clear the last-known-good quote and
+    // stop retrying — a blip presented as a permanent market fact.
     fixture.rpcFails = true;
 
     const res = await quoteFiveUsdc(provider());
     expect(res.ok).toBe(false);
     if (res.ok) return;
-    expect(res.code).toBe("route_unavailable");
+    expect(res.code).toBe("provider_error");
   });
 });

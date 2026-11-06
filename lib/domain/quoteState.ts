@@ -57,6 +57,21 @@ export function isTransientQuoteError(code: string | null | undefined): boolean 
 }
 
 /**
+ * Whether a failed quote slot should be retried automatically.
+ *
+ * True for a *transient* failure — an RPC blip — whether or not a usable quote
+ * is still held. The held-quote case keeps the payment alive; the no-held-quote
+ * case is what stops a cold quote taken during a provider hiccup from becoming a
+ * dead end (the composer said "couldn't get a live quote" and never retried).
+ * A definitive failure is a real state change and is never auto-retried.
+ */
+export function shouldRetryQuote<Q>(slot: QuoteSlot<Q>): boolean {
+  if (!slot.quoteRefreshFailedAt) return false;
+  if (slot.quote) return true;
+  return isTransientQuoteError(slot.quoteError?.code);
+}
+
+/**
  * Apply a refresh/initial-quote success. Clears any prior error and marks the
  * quote fresh; the retry flag is reset.
  */

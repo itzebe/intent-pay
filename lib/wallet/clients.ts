@@ -2,7 +2,7 @@
 
 import { createPublicClient, http, type PublicClient } from "viem";
 import { NETWORKS, browserRpcUrls, type MonadNetwork } from "@/lib/config/chains";
-import { receiptFailoverTransport } from "@/lib/rpc/receiptFailover";
+import { receiptFailoverTransport, ENDPOINT_TIMEOUT_MS } from "@/lib/rpc/receiptFailover";
 
 const cache = new Map<MonadNetwork, PublicClient>();
 
@@ -24,7 +24,7 @@ export function getClientPublicClient(network: MonadNetwork): PublicClient {
   const client = createPublicClient({
     chain: net.chain,
     transport: receiptFailoverTransport(
-      browserRpcUrls(network).map((url) => http(url, { timeout: 20_000, retryCount: 1 })),
+      browserRpcUrls(network).map((url) => http(url, { timeout: ENDPOINT_TIMEOUT_MS })),
     ),
   });
   cache.set(network, client);

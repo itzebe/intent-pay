@@ -1,6 +1,6 @@
 import { createPublicClient, http, type PublicClient } from "viem";
 import { monadMainnet, serverRpcUrls, type MonadNetwork } from "@/lib/config/chains";
-import { receiptFailoverTransport } from "@/lib/rpc/receiptFailover";
+import { receiptFailoverTransport, ENDPOINT_TIMEOUT_MS } from "@/lib/rpc/receiptFailover";
 
 const cache = new Map<string, PublicClient>();
 
@@ -25,7 +25,7 @@ export function getPublicClient(_network: MonadNetwork = "mainnet"): PublicClien
   const client = createPublicClient({
     chain: monadMainnet,
     transport: receiptFailoverTransport(
-      serverRpcUrls().map((url) => http(url, { timeout: 20_000, retryCount: 1 })),
+      serverRpcUrls().map((url) => http(url, { timeout: ENDPOINT_TIMEOUT_MS })),
     ),
   });
   cache.set("mainnet", client);

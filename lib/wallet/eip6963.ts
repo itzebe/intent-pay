@@ -110,10 +110,14 @@ const RDNS_NAMES: Record<string, string> = {
 
 /** Best-effort label for a legacy `window.ethereum` that did not announce. */
 export function legacyProviderName(provider: Eip1193Provider): string {
+  // Most-specific flag first. `isMetaMask` is set by several wallets for dapp
+  // compatibility — Trust Wallet included — so checking it before `isTrust`
+  // labelled a legacy-only Trust provider "MetaMask". A wallet's own flag is the
+  // authority; the generic MetaMask flag is the fallback.
   if (provider.isRabby) return "Rabby";
-  if (provider.isMetaMask) return "MetaMask";
   if (provider.isCoinbaseWallet) return "Coinbase Wallet";
   if (provider.isTrust || provider.isTrustWallet) return "Trust Wallet";
+  if (provider.isMetaMask) return "MetaMask";
   return "Browser wallet";
 }
 
@@ -130,9 +134,9 @@ function legacyWalletId(provider: Eip1193Provider, index: number): string {
   // Same priority order as `legacyProviderName`, so a provider's id and its
   // displayed name can never disagree.
   if (provider.isRabby) return "legacy:rabby";
-  if (provider.isMetaMask) return "legacy:metamask";
   if (provider.isCoinbaseWallet) return "legacy:coinbase";
   if (provider.isTrust || provider.isTrustWallet) return "legacy:trust";
+  if (provider.isMetaMask) return "legacy:metamask";
   return `legacy:${index}`;
 }
 

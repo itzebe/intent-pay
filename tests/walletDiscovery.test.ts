@@ -71,6 +71,18 @@ describe("legacyProviderName", () => {
   it("prefers Rabby over the MetaMask flag (Rabby sets isMetaMask too)", () => {
     expect(legacyProviderName(fakeProvider({ isMetaMask: true, isRabby: true }))).toBe("Rabby");
   });
+
+  it("labels a legacy Trust provider by its own flag, not the shared MetaMask flag", () => {
+    // Trust Wallet's provider sets `isMetaMask` for dapp compatibility, so
+    // checking that generic flag first labelled it "MetaMask" and hid the wallet
+    // the user actually had. The wallet's own flag must win.
+    expect(legacyProviderName(fakeProvider({ isMetaMask: true, isTrust: true }))).toBe(
+      "Trust Wallet",
+    );
+    expect(legacyProviderName(fakeProvider({ isMetaMask: true, isTrustWallet: true }))).toBe(
+      "Trust Wallet",
+    );
+  });
 });
 
 describe("walletDisplayName", () => {

@@ -82,6 +82,19 @@ export const LEGACY_INITIALIZED_EVENT = "ethereum#initialized";
 export const LEGACY_POLL_MS = 250;
 export const LEGACY_POLL_WINDOW_MS = 6000;
 
+/**
+ * The interval the watcher drops to once the fast window has closed.
+ *
+ * The fast poll is deliberately short, but a mobile in-app browser can inject
+ * much later than six seconds — Trust Wallet's Android WebView has been observed
+ * injecting after ~9s. Stopping at the fast window is what left the reported
+ * "no browser wallet detected" on a real device, so after the fast window the
+ * watcher keeps a low-frequency poll until `destroy`. Reading two window
+ * globals every couple of seconds is negligible, and the picker also re-scans
+ * when it opens.
+ */
+export const LEGACY_SLOW_POLL_MS = 2000;
+
 /** Known reverse-DNS → friendly name, used to label an announced provider. */
 const RDNS_NAMES: Record<string, string> = {
   "io.metamask": "MetaMask",
@@ -273,9 +286,15 @@ export function watchWallets(
     }, LEGACY_POLL_MS);
     // Do not hold the event loop open for the poll (Node/SSR safety).
     (poll as { unref?: () => void } | undefined)?.unref?.();
+    // After the fast window, drop to a slow poll rather than stopping. A mobile
+    // in-app browser (Trust Wallet on Android) can inject well after six
+    // seconds; stopping there was the "never detected" report.
     stopPoll = setTimeout(() => {
       if (poll) clearInterval(poll);
-      poll = undefined;
+      poll = setInterval(() => {
+        if (addLegacy()) snapshot();
+      }, LEGACY_SLOW_POLL_MS);
+      (poll as { unref?: () => void } | undefined)?.unref?.();
     }, LEGACY_POLL_WINDOW_MS);
     (stopPoll as { unref?: () => void } | undefined)?.unref?.();
   }

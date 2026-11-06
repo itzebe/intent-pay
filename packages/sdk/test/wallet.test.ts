@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Wallet, discoverWallets, watchWallets } from "../src/wallet/index.js";
-import { collectLegacyWallets } from "../src/wallet/eip6963.js";
+import { collectLegacyWallets, LEGACY_SLOW_POLL_MS } from "../src/wallet/eip6963.js";
 import { WalletError } from "../src/core/errors.js";
 import {
   chainIdFromHex,
@@ -105,6 +105,32 @@ describe("discovery (EIP-6963 + legacy)", () => {
     win.lateInject(trust, false);
     expect(seen[seen.length - 1]).toBe(1);
     watcher.destroy();
+  });
+
+  it("discovers a provider that injects after the fast poll window (real mobile timing)", () => {
+    // A Trust Wallet Android WebView was observed injecting around 9s, past the
+    // 6s fast window. The watcher must keep a slow poll instead of stopping, or
+    // the wallet is never seen.
+    vi.useFakeTimers();
+    try {
+      const trust = makeProvider({ isTrust: true });
+      cleanup = installWindow({});
+      const win = (globalThis as unknown as { window: { lateInject: (p: FakeProvider, onWindow?: boolean) => void } }).window;
+      const seen: number[] = [];
+      const watcher = watchWallets((globalThis as unknown as { window: Window }).window, (w) => seen.push(w.length));
+
+      vi.advanceTimersByTime(6500);
+      expect(seen[seen.length - 1]).toBe(0);
+
+      // Inject without firing `ethereum#initialized`: only the poll can find it.
+      (win as unknown as { trustwallet?: { ethereum: FakeProvider } }).trustwallet = { ethereum: trust };
+      vi.advanceTimersByTime(LEGACY_SLOW_POLL_MS * 2);
+
+      expect(seen[seen.length - 1]).toBe(1);
+      watcher.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

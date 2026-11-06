@@ -94,6 +94,15 @@ one account/chain/client the composer, header and referral panel all agree on.
   It is React-free so it can be unit-tested against a fake `window`. Never read
   `window.ethereum` anywhere else — a page with MetaMask + Rabby + Coinbase would
   otherwise see only whichever won the slot.
+- **Late legacy injection must survive past the fast poll.** `watchWallets` runs a
+  250 ms poll for 6 s (`LEGACY_POLL_WINDOW_MS`) for a wallet that injects after
+  first paint, then **drops to a 2 s slow poll (`LEGACY_SLOW_POLL_MS`) until
+  `destroy`** rather than stopping. A Trust Wallet Android in-app browser was
+  observed injecting its legacy-only provider ~9 s after boot; stopping at 6 s is
+  exactly the reported "no browser wallet detected" on a real device. The
+  `WalletPicker` also re-scans on open, so a provider that arrives while the app
+  is idle is offered at the moment the user asks to connect. `destroy` clears
+  both the fast timer and the slow poll.
 - **WalletConnect** is `lib/wallet/walletconnect.ts`, a lazy-loaded connector
   behind `getWalletConnectProvider()`. The SDK (`@walletconnect/ethereum-provider`)
   is imported on demand, so it is code-split out of the main bundle. It is
@@ -214,6 +223,17 @@ metadata, a trustworthy price *and* a real route. `/api/tokens` exposes
   revert data, so it reports every quote as a failure. `quoteMany` calls
   Multicall3 `aggregate3` directly (`MULTICALL3_ADDRESS`) and decodes each raw
   return; the single-call fallback must read `err.data` / `err.cause.data`.
+- **An empty read is `provider_error`, not `route_unavailable`.** The Monad public
+  RPC intermittently answers HTTP 200 with **no usable data** (an observed
+  429-with-an-empty-body) instead of throwing. A batch whose every sub-call
+  succeeds-but-decodes-to-null is infrastructure, not "no liquidity". `multicall`
+  and `quoteMany` therefore set `this.rpcFailed = true` when a non-empty batch
+  yields zero successful reads, so `routeFailure` classifies it as the
+  *transient* `provider_error`. Without this the client treated the outage as a
+  definitive `route_unavailable`, cleared its last-known-good quote and stopped
+  retrying — a transient outage became a permanent dead end. Regression:
+  `tests/rpcEmptyResponse.test.ts` (which also asserts that a genuinely cold
+  graph against a *responsive* node still reports `route_unavailable`).
 - **Every fee tier must be quoted.** A token can have a `fee=100` pool that
   reverts while the `fee=3000` pool holds the real liquidity. Collapsing a
   neighbour to one arbitrary fee tier silently kills the route.

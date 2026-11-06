@@ -65,6 +65,15 @@ export const LEGACY_INITIALIZED_EVENT = "ethereum#initialized";
 export const LEGACY_POLL_MS = 250;
 export const LEGACY_POLL_WINDOW_MS = 6000;
 
+/**
+ * The interval the watcher drops to once the fast window has closed.
+ *
+ * A mobile in-app browser (Trust Wallet on Android) can inject well after six
+ * seconds, so the watcher keeps a low-frequency poll until `destroy` instead of
+ * stopping — stopping there was the "no browser wallet detected" report.
+ */
+export const LEGACY_SLOW_POLL_MS = 2000;
+
 /** Known reverse-DNS → friendly name. */
 const RDNS_NAMES: Record<string, string> = {
   "io.metamask": "MetaMask",
@@ -221,7 +230,12 @@ export function watchWallets(
     (poll as { unref?: () => void } | undefined)?.unref?.();
     stopPoll = setTimeout(() => {
       if (poll) clearInterval(poll);
-      poll = undefined;
+      // Drop to a slow poll rather than stopping: a mobile in-app browser can
+      // inject well after the fast window has closed.
+      poll = setInterval(() => {
+        if (addLegacy()) snapshot();
+      }, LEGACY_SLOW_POLL_MS);
+      (poll as { unref?: () => void } | undefined)?.unref?.();
     }, LEGACY_POLL_WINDOW_MS);
     (stopPoll as { unref?: () => void } | undefined)?.unref?.();
   }

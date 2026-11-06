@@ -27,7 +27,8 @@
     "viem": "^2.21.55"
   },
   "overrides": {
-    "postcss": "$postcss"
+    "postcss": "$postcss",
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",

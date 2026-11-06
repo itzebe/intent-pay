@@ -32,7 +32,19 @@ export type SendFailureReason =
 
 export type SendOutcome =
   | { ok: true; hashes: string[] }
-  | { ok: false; hashes: string[]; reason: SendFailureReason; message: string };
+  | {
+      ok: false;
+      hashes: string[];
+      reason: SendFailureReason;
+      message: string;
+      /**
+       * The value thrown by `send`/`waitForReceipt`, when there was one. Kept so
+       * the caller can classify the *real* cause (a wallet transport failure, a
+       * gas shortfall, …) instead of only the generic sentence — the same rule
+       * `executePlan` follows for the composer.
+       */
+      cause?: unknown;
+    };
 
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
 
@@ -69,6 +81,7 @@ export async function sendCallsSequentially(input: {
         message: isUserRejection(err)
           ? "You declined the transaction in your wallet."
           : "The transaction could not be sent.",
+        cause: err,
       };
     }
 

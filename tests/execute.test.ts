@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WalletClient } from "viem";
 import { executePlan, ExecutionError } from "@/lib/execution/execute";
-import { classifyTransactionError } from "@/lib/domain/transactionError";
+import { classifyTransactionError, isWalletTransportFailure } from "@/lib/domain/transactionError";
 import { buildPaymentPlan } from "@/lib/execution/plan";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { getToken } from "@/lib/config/tokens";
@@ -192,6 +192,37 @@ describe("executePlan — transaction rejection handling", () => {
       // And the classifier now reads the real reason straight off the wrapper.
       const info = classifyTransactionError(err);
       expect(info.kind).toBe("insufficient_gas");
+    }
+  });
+
+  // Q. A transport failure raised by the *wallet's* provider while it submits is
+  //    the wallet's problem, not Intent Pay's RPC being down. The step id on the
+  //    ExecutionError is what lets the UI tell the two apart — our own chain
+  //    reads are made through our HTTPS clients and never carry a step id.
+  it("marks a wallet-provider transport failure as the wallet's, not ours (Q)", async () => {
+    const wallet = {
+      account: { address: SENDER },
+      writeContract: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+      sendTransaction: async () => {
+        throw new TypeError("Failed to fetch");
+      },
+    } as unknown as WalletClient;
+
+    try {
+      await executePlan(directTransferPlan(), wallet, "mainnet");
+      throw new Error("expected executePlan to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExecutionError);
+      // The execution layer tags the failing step, so the boundary is knowable.
+      expect((err as ExecutionError).stepId).toBeTruthy();
+      expect(isWalletTransportFailure(err)).toBe(true);
+      const info = classifyTransactionError(err, { source: "wallet" });
+      expect(info.kind).toBe("wallet_rpc");
+      expect(info.mayHaveSubmitted).toBe(false);
+      // It must never be reported as our RPC being unavailable.
+      expect(info.kind).not.toBe("rpc_unavailable");
     }
   });
 });

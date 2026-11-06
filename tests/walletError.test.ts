@@ -55,7 +55,8 @@ describe("classifyWalletError", () => {
    * to the wallet's own node. When the page CSP blocks that origin the browser
    * throws a bare `TypeError: Failed to fetch` with no EIP-1193 code, so the
    * generic "check the connection in Monad" copy sent the user to the wrong
-   * place. The blocked-fetch shape must be recognised and explained.
+   * place. The blocked-fetch shape must be recognised and explained — and, now,
+   * told apart from a failure of Intent Pay's *own* chain reads.
    */
   it("recognises a blocked/failed network fetch (the CSP-blocked wallet RPC)", () => {
     for (const err of [
@@ -66,9 +67,13 @@ describe("classifyWalletError", () => {
       { cause: { message: "Load failed" } },
     ]) {
       const info = classifyWalletError(err);
-      expect(info.kind).toBe("unknown");
+      expect(info.kind).toBe("rpc_transport");
       expect(info.rejected).toBe(false);
-      expect(info.message).toMatch(/couldn't reach the Monad network/i);
+      // Names the wallet as the failing side and never claims our reads failed.
+      expect(info.message).toMatch(/wallet couldn't complete its network request/i);
+      expect(info.message).toMatch(/Intent Pay's own chain reads are unaffected/i);
+      // It must not instruct the user to change an RPC URL — that is not their job.
+      expect(info.message).not.toMatch(/rpc url|change your rpc|settings/i);
     }
   });
 

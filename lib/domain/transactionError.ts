@@ -20,6 +20,7 @@ export type TxErrorKind =
   | "slippage" // the swap could not meet the minimum output within tolerance
   | "reverted" // the transaction reverted on-chain
   | "rpc_unavailable" // the node could not be reached / timed out
+  | "wallet_rpc" // the wallet's own provider could not complete its network call
   | "unknown_outcome" // submitted, but the outcome could not be established
   | "unknown"; // any other definite pre-submission failure
 
@@ -129,11 +130,50 @@ function numericCode(err: unknown): number | undefined {
   return undefined;
 }
 
+/** True when any message along the `cause` chain looks like a transport failure. */
+export function isTransportError(err: unknown): boolean {
+  const text = textOf(err).toLowerCase();
+  return (
+    /failed to fetch/.test(text) ||
+    /networkerror/.test(text) ||
+    /network request failed/.test(text) ||
+    /load failed/.test(text) ||
+    /fetch failed/.test(text) ||
+    /timed out|timeout/.test(text)
+  );
+}
+
+/**
+ * True when a thrown value is the *wallet's* provider failing its own network
+ * request — not an Intent Pay RPC read.
+ *
+ * The execution layer marks a **submission** failure with the step id and keeps
+ * the wallet's original thrown value on `cause` (`lib/execution/execute.ts`).
+ * Our own chain reads (quote, balances, gas, receipt wait) are made through our
+ * HTTPS clients and are either handled internally or fail without a step id.
+ * So a transport-shaped failure that carries a step id is the wallet provider,
+ * and the copy must say the transaction was not sent — never that our RPC is
+ * down, and never that a payment failed when nothing was submitted.
+ */
+export function isWalletTransportFailure(err: unknown): boolean {
+  const e = err as { stepId?: unknown; cause?: unknown } | undefined;
+  if (!e || typeof e !== "object" || !e.stepId) return false;
+  return isTransportError(e.cause ?? e);
+}
+
 /** Classify any thrown value into a small, honest set of outcomes. */
-export function classifyTransactionError(err: unknown): TxErrorInfo {
+export function classifyTransactionError(
+  err: unknown,
+  options: { source?: "app" | "wallet" } = {},
+): TxErrorInfo {
   const code = numericCode(err);
   const text = textOf(err).toLowerCase();
   const executionCode = (err as ExecutionErrorLike)?.code;
+  // A transport failure raised while the *wallet's* provider was doing its own
+  // network work is a different fact from our own RPC being unreachable: our
+  // chain reads (quote, balances, gas, receipts) are independent of it and keep
+  // working. The caller that knows which side failed passes `source: "wallet"`.
+  const walletSource = options.source === "wallet";
 
   // The execution layer's own codes are authoritative when present.
   if (executionCode === "rejected" || code === 4001 || /user rejected|denied transaction/.test(text)) {
@@ -237,6 +277,18 @@ export function classifyTransactionError(err: unknown): TxErrorInfo {
     code === -32000 ||
     code === -32603
   ) {
+    // A transport failure the *wallet* hit is not our RPC being down: our own
+    // quote, balance, gas and receipt reads are independent and keep working.
+    // Say so plainly and never imply a payment failed when nothing was sent.
+    if (walletSource) {
+      return {
+        kind: "wallet_rpc",
+        message:
+          "Your wallet couldn't complete its network request to Monad, so the transaction was not sent. Intent Pay's own chain reads are unaffected — try again, and if it keeps happening use another wallet or WalletConnect.",
+        mayHaveSubmitted: false,
+        action: "Try again",
+      };
+    }
     return {
       kind: "rpc_unavailable",
       message:

@@ -168,6 +168,40 @@ describe("checkout resilience", () => {
     expect(screen.getByText(/declined the transaction in your wallet/i)).toBeTruthy();
     expect(screen.getByText("$25.00 in USDC")).toBeTruthy();
   });
+
+  /**
+   * The reported "Continue Payment" symptom: after preparing, the customer's
+   * wallet provider throws while broadcasting (its own RPC unreachable — a CSP
+   * block or a dead node). That must be a specific, non-blank, *wallet*-side
+   * message, never a generic failure and never a claim that Intent Pay's own
+   * network is down. Nothing was submitted, so the page must stay usable.
+   */
+  it("shows a wallet-side network message (not blank) when the wallet provider fails to broadcast", async () => {
+    wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    global.fetch = mockFetch({
+      "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
+      "POST /api/checkout/chk_token/prepare": () => ({
+        calls: [{ to: "0x0000000000000000000000000000000000000001", data: "0x", value: "0" }],
+        quote: { payToken: "USDC", payAmount: "25", receiveToken: "USDC", receiveAmount: "25", minimumReceived: "25", slippageBps: 50, networkCostUsd: 0.01 },
+      }),
+    }) as any;
+    render(
+      <ErrorBoundary scope="app">
+        <CheckoutClient token="chk_token" />
+      </ErrorBoundary>,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$25\.00/ }));
+    await flush();
+    await flush();
+    expect(screen.getByText(/wallet couldn't complete its network request/i)).toBeTruthy();
+    // Our own reads are explicitly not the problem, and nothing was submitted.
+    expect(screen.getByText(/Intent Pay's own chain reads are unaffected/i)).toBeTruthy();
+    expect(screen.queryByText(/network provider is temporarily unavailable/i)).toBeNull();
+    // The page is still usable: the customer can retry, not a blank screen.
+    expect(screen.getByRole("button", { name: /Pay \$25\.00/ })).toBeTruthy();
+    expect(screen.getByText("$25.00 in USDC")).toBeTruthy();
+  });
 });
 
 /**

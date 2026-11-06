@@ -15,6 +15,7 @@ export type WalletErrorKind =
   | "rejected"
   | "unsupported"
   | "disconnected"
+  | "rpc_transport"
   | "unknown";
 
 export type WalletErrorInfo = {
@@ -109,11 +110,11 @@ export function classifyWalletError(err: unknown): WalletErrorInfo {
   }
   if (isNetworkFailure(err)) {
     return {
-      kind: "unknown",
+      kind: "rpc_transport",
       code,
       rejected: false,
       message:
-        "Your wallet couldn't reach the Monad network from this page. Check your connection and try again.",
+        "Your wallet couldn't complete its network request to Monad. Intent Pay's own chain reads are unaffected — try again, and if it keeps happening use another wallet or WalletConnect.",
     };
   }
   return {

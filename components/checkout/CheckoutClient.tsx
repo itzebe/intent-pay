@@ -5,7 +5,7 @@ import { useBalances, useWallet } from "@/lib/hooks/useWallet";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { sendCallsSequentially } from "@/lib/wallet/sendCalls";
 import { logCheckoutDiagnostic, diagnosticCodeOf } from "@/lib/wallet/checkoutDiagnostics";
-import { classifyTransactionError } from "@/lib/domain/transactionError";
+import { classifyTransactionError, isTransportError } from "@/lib/domain/transactionError";
 import { NETWORKS, explorerTxUrl } from "@/lib/config/chains";
 import { shortAddress } from "@/lib/format";
 import { Copy, ExternalLink, Shield, Spinner, Warning } from "@/components/ui/Icons";
@@ -280,12 +280,20 @@ export function CheckoutClient({ token }: { token: string }) {
       if (!outcome.ok) {
         // Record whatever already broadcast so the order reflects it, then stop.
         await recordSubmitted(outcome.hashes);
-        setActionError(outcome.message);
+        // A transport failure the *wallet's* provider hit is not our RPC being
+        // down: say so plainly and never imply a payment failed when nothing was
+        // sent. Any other failure keeps the honest, cause-specific copy.
+        const walletTransport = outcome.reason === "send_failed" && isTransportError(outcome.cause);
+        setActionError(
+          walletTransport
+            ? classifyTransactionError(outcome.cause, { source: "wallet" }).message
+            : outcome.message,
+        );
         logCheckoutDiagnostic({
           stage: outcome.reason === "unconfirmed" ? "receipt" : "broadcast",
           walletKind: kind,
           chainId: wallet.chainId,
-          code: outcome.reason,
+          code: walletTransport ? "wallet_rpc" : outcome.reason,
         });
         return;
       }

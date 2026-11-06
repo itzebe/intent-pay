@@ -19,7 +19,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { normalizeTokenConfig, type TokenConfig } from "@/lib/config/tokens";
 import { verifyDelivery } from "@/lib/execution/verify";
 import { resolveExecutionProtection, type ExecutionProtection } from "@/lib/domain/protection";
-import { classifyTransactionError, INSUFFICIENT_MON_FOR_FEES_MESSAGE, isFeeShortfall } from "@/lib/domain/transactionError";
+import { classifyTransactionError, INSUFFICIENT_MON_FOR_FEES_MESSAGE, isFeeShortfall, isWalletTransportFailure } from "@/lib/domain/transactionError";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { explorerTxUrl, type MonadNetwork } from "@/lib/config/chains";
 import type { Balance, Quote, QuoteResult } from "@/lib/domain/intent";
@@ -585,7 +585,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       } catch (err) {
         // Map any thrown value (a raw provider/RPC error or an ExecutionError)
         // to an accurate, actionable, user-safe message. Never a stack trace.
-        const info = classifyTransactionError(err);
+        // A transport failure the *wallet's* provider hit is told apart from our
+        // own RPC being unreachable: our chain reads are independent, and the
+        // copy must not claim our network is down or that a payment failed when
+        // nothing was submitted.
+        const info = classifyTransactionError(err, {
+          source: isWalletTransportFailure(err) ? "wallet" : "app",
+        });
         setError(info.message);
         // A definite pre-submission outcome (rejection/revert) or an ambiguous
         // post-submission one both return to Review — never silently to compose.

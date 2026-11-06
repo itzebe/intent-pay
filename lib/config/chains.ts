@@ -1,6 +1,13 @@
 import { defineChain } from "viem";
 
 /**
+ * The public Monad Mainnet RPC. It needs no key and is the last-resort
+ * endpoint for every chain read, so a rate-limited or unavailable keyed
+ * provider can never make the app unable to read Monad.
+ */
+export const PUBLIC_MONAD_RPC = "https://rpc.monad.xyz";
+
+/**
  * Monad Mainnet.
  *
  * Intent Pay is mainnet-only. There is no testnet configuration and no
@@ -14,9 +21,9 @@ export const monadMainnet = defineChain({
   nativeCurrency: { name: "Monad", symbol: "MON", decimals: 18 },
   rpcUrls: {
     default: {
-      http: [
-        process.env.NEXT_PUBLIC_MONAD_RPC_URL ?? "https://rpc.monad.xyz",
-      ],
+      // A list, most-preferred first, so a wallet's `wallet_addEthereumChain`
+      // has a working endpoint even when the keyed provider is rate limited.
+      http: browserRpcUrls(),
     },
   },
   blockExplorers: {
@@ -45,16 +52,51 @@ export function alchemyRpcUrl(_network: MonadNetwork = "mainnet"): string | null
   return `https://monad-mainnet.g.alchemy.com/v2/${key}`;
 }
 
+function dedupe(urls: (string | null | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const u of urls) {
+    if (u && !out.includes(u)) out.push(u);
+  }
+  return out;
+}
+
+/**
+ * Browser RPC endpoints, most-preferred first.
+ *
+ * A keyed provider is tried first when configured, but the public RPC is always
+ * appended. A browser client built on `fallback(...)` (see `lib/wallet/clients`)
+ * then survives a rate-limited or unavailable keyed endpoint instead of failing
+ * every chain read — which is what a receipt wait or a balance read would
+ * otherwise do on a mobile connection.
+ */
+export function browserRpcUrls(_network: MonadNetwork = "mainnet"): string[] {
+  const pub = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
+  return dedupe([
+    pub ? `https://monad-mainnet.g.alchemy.com/v2/${pub}` : null,
+    process.env.NEXT_PUBLIC_MONAD_RPC_URL,
+    PUBLIC_MONAD_RPC,
+  ]);
+}
+
+/**
+ * Server-side RPC endpoints, most-preferred first.
+ *
+ * The keyed Alchemy node is preferred, but the public RPC is always appended so
+ * a 429 / outage on the keyed endpoint degrades to the public node rather than
+ * producing an empty routing graph (which would be misread as "no route").
+ */
+export function serverRpcUrls(_network: MonadNetwork = "mainnet"): string[] {
+  return dedupe([alchemyRpcUrl(), process.env.MONAD_RPC_URL, PUBLIC_MONAD_RPC]);
+}
+
 /** Server-side RPC: Alchemy when configured, else the configured/public RPC. */
 export function serverRpcUrl(_network: MonadNetwork = "mainnet"): string {
-  return alchemyRpcUrl() ?? process.env.MONAD_RPC_URL ?? "https://rpc.monad.xyz";
+  return serverRpcUrls()[0];
 }
 
 /** Browser-visible RPC (public keys only). */
 export function browserRpcUrl(_network: MonadNetwork = "mainnet"): string {
-  const pub = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
-  if (pub) return `https://monad-mainnet.g.alchemy.com/v2/${pub}`;
-  return process.env.NEXT_PUBLIC_MONAD_RPC_URL ?? "https://rpc.monad.xyz";
+  return browserRpcUrls()[0];
 }
 
 export const NETWORKS = {

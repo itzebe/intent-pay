@@ -8,6 +8,7 @@ import {
   parseAnnouncement,
   walletDisplayName,
   watchWallets,
+  type DiscoveredWallet,
   type Eip1193Provider,
 } from "@/lib/wallet/eip6963";
 
@@ -202,6 +203,36 @@ describe("watchWallets", () => {
     win._announce(detail("uuid-mm", "io.metamask", "MetaMask", legacyProvider));
     const after = watchWallets(win as unknown as Window).wallets;
     expect(after).toHaveLength(1);
+  });
+
+  it("does not list a wallet twice when it announces on the SAME watcher it was read from the legacy slot", () => {
+    // The production defect: a wallet present on `window.ethereum` before the app
+    // boots is read from the legacy slot, then answers `eip6963:requestProvider`
+    // with the SAME provider object. The announcement must not add a second row.
+    const provider = fakeProvider({ isMetaMask: true });
+    const win = fakeWindow(provider);
+    const seen: DiscoveredWallet[][] = [];
+    const watcher = watchWallets(win as unknown as Window, (w) => seen.push(w));
+    expect(watcher.wallets).toHaveLength(1);
+    win._announce(detail("uuid-mm", "io.metamask", "MetaMask", provider));
+    // onChange fires only when the set actually grows; the last snapshot is the
+    // current list, which must still hold a single entry.
+    expect(seen[seen.length - 1]).toHaveLength(1);
+    watcher.destroy();
+  });
+
+  it("still lists two genuinely different providers that share a name", () => {
+    // De-duplication is by provider identity, never by name/id: two distinct
+    // provider objects must both be selectable.
+    const a = fakeProvider({ isMetaMask: true });
+    const b = fakeProvider({ isMetaMask: true });
+    const win = fakeWindow(a);
+    const seen: DiscoveredWallet[][] = [];
+    const watcher = watchWallets(win as unknown as Window, (w) => seen.push(w));
+    expect(watcher.wallets).toHaveLength(1);
+    win._announce(detail("uuid-b", "io.metamask", "MetaMask", b));
+    expect(seen[seen.length - 1]).toHaveLength(2);
+    watcher.destroy();
   });
 
   it("ignores a duplicate uuid", () => {

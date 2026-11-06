@@ -261,6 +261,13 @@ export function watchWallets(
   const onAnnounce = (event: Event) => {
     const wallet = parseAnnouncement(event);
     if (!wallet || byId.has(wallet.id)) return;
+    // A wallet that also occupies the legacy slot (or `window.trustwallet.ethereum`)
+    // may already be listed from there — it was injected before the app asked it
+    // to announce, so the legacy read added it first. Adding the announcement too
+    // lists the same wallet twice (the picker showed two "MetaMask" rows). The
+    // provider object is the identity, so an announcement for an already-known
+    // provider is ignored and the existing entry is kept.
+    if ([...byId.values()].some((existing) => existing.provider === wallet.provider)) return;
     byId.set(wallet.id, wallet);
     snapshot();
   };

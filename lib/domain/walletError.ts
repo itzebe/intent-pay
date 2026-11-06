@@ -45,6 +45,41 @@ function numericCode(err: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * True when the failure is the page (or the wallet's page-world provider) being
+ * unable to *reach a network endpoint* — a CSP block, a DNS/TLS failure, or an
+ * offline device — rather than a wallet-level refusal.
+ *
+ * This is the shape a blocked `connect-src` takes: the browser throws a bare
+ * `TypeError: Failed to fetch` with no EIP-1193 code, so the generic "check the
+ * connection in Monad" copy pointed the user at the wrong thing. A page-world
+ * provider that proxies reads to the wallet's own node surfaces exactly this.
+ */
+function isNetworkFailure(err: unknown): boolean {
+  if (!err) return false;
+  const parts: string[] = [];
+  let node: unknown = err;
+  for (let depth = 0; node && depth < 6; depth++) {
+    if (typeof node === "string") {
+      parts.push(node);
+      break;
+    }
+    if (typeof node !== "object") break;
+    const n = node as { message?: unknown; cause?: unknown; error?: unknown };
+    if (typeof n.message === "string") parts.push(n.message);
+    node = n.cause ?? n.error;
+  }
+  const text = parts.join(" ").toLowerCase();
+  return (
+    /failed to fetch/.test(text) ||
+    /networkerror/.test(text) ||
+    /network request failed/.test(text) ||
+    /load failed/.test(text) ||
+    /refused to connect/.test(text) ||
+    /violates the following content security policy/.test(text)
+  );
+}
+
 export function classifyWalletError(err: unknown): WalletErrorInfo {
   const code = numericCode(err);
   if (code !== undefined && USER_REJECTED.has(code)) {
@@ -70,6 +105,15 @@ export function classifyWalletError(err: unknown): WalletErrorInfo {
       code,
       rejected: false,
       message: "Your wallet is disconnected from Monad. Reconnect it and try again.",
+    };
+  }
+  if (isNetworkFailure(err)) {
+    return {
+      kind: "unknown",
+      code,
+      rejected: false,
+      message:
+        "Your wallet couldn't reach the Monad network from this page. Check your connection and try again.",
     };
   }
   return {

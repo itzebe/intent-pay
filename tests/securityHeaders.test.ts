@@ -96,6 +96,29 @@ describe("security headers (production)", () => {
     expect(csp).toMatch(/img-src[^;]*https:\/\/api\.web3modal\.org/);
     expect(csp).toMatch(/font-src[^;]*https:\/\/fonts\.reown\.com/);
   });
+
+  /**
+   * Defect A. A page-world injected wallet (Trust Wallet's Android in-app
+   * browser) answers `eth_chainId`/`eth_call` by proxying to its own node. That
+   * fetch runs in our page's context, so `connect-src` governs it: without the
+   * origin the browser refuses the request and the connection can never
+   * complete ("Couldn't connect to the wallet"). The wallet's own Monad RPC must
+   * therefore be reachable — and, crucially, reachable *without* WalletConnect
+   * being configured, because direct injected connection must not depend on it.
+   */
+  it("allows an injected wallet's own RPC origin even with no WalletConnect configured", async () => {
+    delete process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+    const config = await loadConfig("production");
+    const csp = headerMap(await config.headers(), "/:path*").get("Content-Security-Policy")!;
+    const connectSrc = csp.split(";").find((d) => d.trim().startsWith("connect-src")) ?? "";
+    // Trust Wallet's Node-as-a-Service Monad RPC — the reported failing endpoint.
+    expect(connectSrc).toContain("https://monad.twnodes.com");
+    // ...and this relaxation does not smuggle in WalletConnect or any script origin.
+    expect(csp).not.toContain("walletconnect.com");
+    expect(csp).not.toContain("secure.walletconnect.org");
+    const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src")) ?? "";
+    expect(scriptSrc).not.toContain("monad.twnodes.com");
+  });
 });
 
 describe("security headers (development)", () => {

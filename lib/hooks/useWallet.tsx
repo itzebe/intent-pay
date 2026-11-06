@@ -113,6 +113,25 @@ type WalletContextValue = WalletState & {
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 /**
+ * Read a provider's current chain id, or `undefined` when the read fails.
+ *
+ * A page-world injected provider answers `eth_chainId` by proxying to the
+ * wallet's own node, so the read can fail for reasons that have nothing to do
+ * with whether the wallet is connected (a CSP-blocked RPC, an offline device).
+ * Failing the whole connection on that would leave a genuinely authorised
+ * wallet unable to connect, so the read is best-effort: an unreadable chain is
+ * reported as *unknown* (undefined) — never silently coerced to Monad, which
+ * would be a false "you're on Monad" claim.
+ */
+async function safeChainId(provider: Eip1193Provider): Promise<number | undefined> {
+  try {
+    return chainIdFromHex(await provider.request({ method: "eth_chainId" }));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The single owner of wallet connectivity for the app.
  *
  * One provider instance is shared by the header, the composer and the referral
@@ -263,14 +282,12 @@ export function WalletProvider({
           const accounts = await provider.request({ method: "eth_accounts" });
           if (cancelled()) return;
           const address = firstAccount(accounts);
-          const chainIdHex = address
-            ? ((await provider.request({ method: "eth_chainId" })) as string)
-            : undefined;
+          const chainId = address ? await safeChainId(provider) : undefined;
           setState((s) => ({
             ...s,
             restoring: false,
             address,
-            chainId: chainIdFromHex(chainIdHex),
+            chainId,
             status: address ? "connected" : "disconnected",
             connectorId: address ? WALLETCONNECT_ID : undefined,
             kind: address ? "walletconnect" : undefined,
@@ -299,14 +316,12 @@ export function WalletProvider({
         const accounts = await wallet.provider.request({ method: "eth_accounts" });
         if (cancelled()) return;
         const address = firstAccount(accounts);
-        const chainIdHex = address
-          ? ((await wallet.provider.request({ method: "eth_chainId" })) as string)
-          : undefined;
+        const chainId = address ? await safeChainId(wallet.provider) : undefined;
         setState((s) => ({
           ...s,
           restoring: false,
           address,
-          chainId: chainIdFromHex(chainIdHex),
+          chainId,
           status: address ? "connected" : "disconnected",
           connectorId: address ? wallet.id : undefined,
           kind: address ? "injected" : undefined,
@@ -413,14 +428,32 @@ export function WalletProvider({
         }
         attach(wallet.provider, "injected", wallet.id);
         const accounts = await wallet.provider.request({ method: "eth_requestAccounts" });
-        const chainIdHex = (await wallet.provider.request({ method: "eth_chainId" })) as string;
         const address = firstAccount(accounts);
+        if (!address) {
+          // The wallet answered but shared no account. Say so — do not fall
+          // through to a "connected" state with no address, and do not treat
+          // this as a WalletConnect prompt.
+          setState((s) => ({
+            ...s,
+            status: "disconnected",
+            address: undefined,
+            connectorId: undefined,
+            kind: undefined,
+            restoring: false,
+            error:
+              "Your wallet didn't share an account. Approve the connection request in your wallet, then try again.",
+          }));
+          return;
+        }
+        // Best-effort chain read: a failing read leaves the chain *unknown*
+        // rather than blocking a wallet that did authorise the connection.
+        const chainId = await safeChainId(wallet.provider);
         writeStoredConnector(wallet.id);
         setState((s) => ({
           ...s,
-          status: address ? "connected" : "disconnected",
+          status: "connected",
           address,
-          chainId: chainIdFromHex(chainIdHex),
+          chainId,
           connectorId: wallet.id,
           kind: "injected",
           restoring: false,

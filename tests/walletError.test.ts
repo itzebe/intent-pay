@@ -49,4 +49,32 @@ describe("classifyWalletError", () => {
       expect(info.message.length).toBeGreaterThan(0);
     }
   });
+
+  /**
+   * Defect A. A page-world injected provider answers `eth_chainId` by proxying
+   * to the wallet's own node. When the page CSP blocks that origin the browser
+   * throws a bare `TypeError: Failed to fetch` with no EIP-1193 code, so the
+   * generic "check the connection in Monad" copy sent the user to the wrong
+   * place. The blocked-fetch shape must be recognised and explained.
+   */
+  it("recognises a blocked/failed network fetch (the CSP-blocked wallet RPC)", () => {
+    for (const err of [
+      new TypeError("Failed to fetch"),
+      { message: "Failed to fetch" },
+      new Error("NetworkError when attempting to fetch resource."),
+      { message: "Fetch API cannot load https://monad.twnodes.com/. Refused to connect because it violates the document's Content Security Policy." },
+      { cause: { message: "Load failed" } },
+    ]) {
+      const info = classifyWalletError(err);
+      expect(info.kind).toBe("unknown");
+      expect(info.rejected).toBe(false);
+      expect(info.message).toMatch(/couldn't reach the Monad network/i);
+    }
+  });
+
+  it("keeps a user rejection distinct from a network failure", () => {
+    // A rejection must never be re-labelled as a network problem.
+    const info = classifyWalletError({ code: 4001, message: "Failed to fetch" });
+    expect(info.kind).toBe("rejected");
+  });
 });

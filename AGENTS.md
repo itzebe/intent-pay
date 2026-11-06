@@ -115,6 +115,36 @@ one account/chain/client the composer, header and referral panel all agree on.
   `isMonadChainId`, `firstAccount`, `statusForAccounts`, `pickRestorableWallet`,
   `connectionErrorMessage`. An empty account list is a disconnect, never a half
   state; a raw provider error string is never echoed to the user.
+- **A page-world provider's chain read is best-effort, and its RPC must be in
+  `connect-src`.** An injected EIP-1193 wallet (Trust Wallet's Android in-app
+  browser is the concrete case) answers `eth_chainId`/`eth_call` by *proxying to
+  its own node from our page context*, so our `connect-src` governs that fetch.
+  With the wallet's origin omitted the browser refuses the request before it
+  leaves the device: the wallet is discovered and selectable, but `connect()`
+  throws a bare `TypeError: Failed to fetch` (no EIP-1193 code) and the user saw
+  "Couldn't connect to the wallet" — the reported "Connect Wallet depends on
+  WalletConnect" regression. Two rules follow:
+  - `next.config.mjs` `connect-src` includes `injectedWalletRpcOrigins`
+    (`https://monad.twnodes.com` — Trust Wallet's Node-as-a-Service Monad RPC).
+    It is a `connect-src` relaxation only; no `script-src` origin is added. Never
+    remove it: it is what lets a direct injected connection work **without**
+    WalletConnect being configured.
+  - `connect()` reads the chain with `safeChainId()` and never lets a failed
+    chain read fail the connection: an unreadable chain is reported as *unknown*
+    (`undefined`), never silently coerced to Monad. A wallet that returns no
+    account is an honest "didn't share an account" message, not a phantom
+    connection — and a failed injected attempt never falls back to WalletConnect.
+- **`monad.twnodes.com` is Trust Wallet's own RPC, not ours.** The endpoint a
+  user sees in "Failed to connect to `http://monad.twnodes.com/` …:443" comes
+  from the *wallet's* built-in Monad network entry (`x-tw-naas-request-id`
+  header = Trust Wallet NaaS, Alchemy-backed); it appears in no repo file and no
+  Vercel env var. The `http://` + `:443` shape is the wallet's own upgrade path:
+  `http://monad.twnodes.com/` answers `301 → https://monad.twnodes.com:443/`. We
+  never supply it — `monadAddChainParams` hands the wallet `https://rpc.monad.xyz`
+  (`tests/monadChain.test.ts` pins this). A stale custom Monad entry already
+  stored in a user's wallet is the wallet's to fix; we do not silently rewrite it.
+- **`isMonadChain` accepts both chain-id forms** (`0x8f` and `143`), so a
+  provider's hex quantity and a WalletConnect decimal are judged the same chain.
 - **UI** is `components/wallet/WalletBar.tsx`: `ConnectButton` (picker + connected
   menu) and `BalanceOverview`. The picker shows every discovered injected wallet,
   WalletConnect (when configured), and an honest "no browser wallet detected"
@@ -123,14 +153,19 @@ one account/chain/client the composer, header and referral panel all agree on.
   MON. No paymaster, bundler or AA path was reintroduced.
 - **CSP** (`next.config.mjs`) lists the WalletConnect relay/verify origins and
   relaxes `frame-src` for `secure.walletconnect.org` **only when the project id
-  is set**; an unconfigured deploy keeps `frame-src 'none'`. `img-src` stays
-  tight (`'self' data: blob:` + the GitHub token-logo host).
+  is set**; an unconfigured deploy keeps `frame-src 'none'`. `connect-src` also
+  always includes the injected-wallet RPC origins (`injectedWalletRpcOrigins` —
+  Trust Wallet's `monad.twnodes.com`), because a page-world provider's chain read
+  is subject to our CSP and blocking it breaks direct injected connection. `img-src`
+  stays tight (`'self' data: blob:` + the GitHub token-logo host).
 - `/api/capabilities.wallets` reports injected discovery as always-on and
   WalletConnect as `configured: false` unless keyed; `IntegrationStack` renders it.
 
 Regression coverage: `tests/walletDiscovery.test.ts`, `tests/walletConnection.test.ts`,
 `tests/walletConnect.test.ts`, `tests/walletIntegration.test.tsx` (jsdom, mocked
-EIP-1193 provider), plus the WalletConnect CSP cases in `tests/securityHeaders.test.ts`.
+EIP-1193 provider), `tests/walletError.test.ts` (network-failure classification),
+`tests/monadChain.test.ts` (EIP-3085 params + chain-id forms), plus the
+WalletConnect and injected-wallet-RPC CSP cases in `tests/securityHeaders.test.ts`.
 
 ## Ecosystem integrations (T10)
 

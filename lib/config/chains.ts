@@ -1,4 +1,5 @@
 import { defineChain } from "viem";
+import { httpsEndpoints } from "@/lib/rpc/endpoints";
 
 /**
  * The public Monad Mainnet RPC. It needs no key and is the last-resort
@@ -52,14 +53,6 @@ export function alchemyRpcUrl(_network: MonadNetwork = "mainnet"): string | null
   return `https://monad-mainnet.g.alchemy.com/v2/${key}`;
 }
 
-function dedupe(urls: (string | null | undefined)[]): string[] {
-  const out: string[] = [];
-  for (const u of urls) {
-    if (u && !out.includes(u)) out.push(u);
-  }
-  return out;
-}
-
 /**
  * Browser RPC endpoints, most-preferred first.
  *
@@ -71,7 +64,7 @@ function dedupe(urls: (string | null | undefined)[]): string[] {
  */
 export function browserRpcUrls(_network: MonadNetwork = "mainnet"): string[] {
   const pub = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY;
-  return dedupe([
+  return httpsEndpoints([
     pub ? `https://monad-mainnet.g.alchemy.com/v2/${pub}` : null,
     process.env.NEXT_PUBLIC_MONAD_RPC_URL,
     PUBLIC_MONAD_RPC,
@@ -86,7 +79,7 @@ export function browserRpcUrls(_network: MonadNetwork = "mainnet"): string[] {
  * producing an empty routing graph (which would be misread as "no route").
  */
 export function serverRpcUrls(_network: MonadNetwork = "mainnet"): string[] {
-  return dedupe([alchemyRpcUrl(), process.env.MONAD_RPC_URL, PUBLIC_MONAD_RPC]);
+  return httpsEndpoints([alchemyRpcUrl(), process.env.MONAD_RPC_URL, PUBLIC_MONAD_RPC]);
 }
 
 /** Server-side RPC: Alchemy when configured, else the configured/public RPC. */

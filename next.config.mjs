@@ -24,6 +24,28 @@ const browserRpcOrigins = [
 ].filter(Boolean);
 
 /**
+ * Origins an *injected* wallet's own provider may talk to from the page.
+ *
+ * A page-world EIP-1193 provider (Trust Wallet's Android in-app browser is the
+ * concrete case) does not just sign — it answers `eth_chainId`/`eth_call` by
+ * proxying to the wallet's own node. That fetch runs in our page's context, so
+ * our `connect-src` governs it. With the origin omitted, the browser refuses the
+ * request before it leaves the device: the user sees "Couldn't connect to the
+ * wallet" and, when the wallet reports it, "Failed to connect to
+ * http://<wallet-rpc>". Discovery and selection worked; the *chain read* was
+ * blocked, so the connection could never complete — the reported regression.
+ *
+ * These are read-only public JSON-RPC endpoints of wallets the app advertises
+ * support for; allowing the page to reach them restores direct injected-wallet
+ * connection without re-enabling WalletConnect. It is a `connect-src` relaxation
+ * only — no script origin is added.
+ */
+const injectedWalletRpcOrigins = [
+  // Trust Wallet "Node-as-a-Service" Monad Mainnet RPC (returns chain id 0x8f).
+  "https://monad.twnodes.com",
+];
+
+/**
  * WalletConnect (Reown) v2 is opt-in. Only when a project id is configured do
  * we relax the CSP for the relay websocket, the verify/explorer APIs and the
  * QR modal iframe (`secure.walletconnect.org`). A deployment without
@@ -61,6 +83,7 @@ const walletConnectFontSrc = ["https://fonts.reown.com"];
 const connectSrc = [
   "'self'",
   ...browserRpcOrigins,
+  ...injectedWalletRpcOrigins,
   ...(wcEnabled ? walletConnectConnectSrc : []),
   // Wallet extension bridges that a page-world provider may talk through.
   "chrome-extension:",

@@ -25,8 +25,14 @@ vi.mock("framer-motion", () => {
   };
 });
 
-import { WalletProvider } from "@/lib/hooks/useWallet";
+import { WalletProvider, useWallet } from "@/lib/hooks/useWallet";
 import { ConnectButton } from "@/components/wallet/WalletBar";
+
+/** Surfaces the shared wallet error so a test can assert the honest message. */
+function ErrorProbe() {
+  const w = useWallet();
+  return <div data-testid="wallet-error">{w.error ?? ""}</div>;
+}
 
 /**
  * Integration test for the shared wallet connection + connect UX.
@@ -259,5 +265,110 @@ describe("wallet connection (mocked injected provider)", () => {
       await new Promise((r) => setTimeout(r, 600));
     });
     expect(screen.getByRole("button", { name: /connect wallet/i })).toBeTruthy();
+  });
+
+  /**
+   * Defect A. A page-world injected wallet answers `eth_chainId` by proxying to
+   * its own node; when that read is blocked or the node is unreachable the call
+   * throws a bare `TypeError: Failed to fetch` (no EIP-1193 code). The wallet is
+   * still authorised, so the connection must complete — the chain is simply
+   * reported as unknown rather than failing the whole connect, and no
+   * WalletConnect is involved.
+   */
+  it("connects an injected wallet directly even when its chain read fails", async () => {
+    const ADDR2 = "0x7A91c4b8E2d9F04aB3c6E81d5F72a0C9e4Bd92F4";
+    const provider = {
+      isMetaMask: true,
+      request: vi.fn(async ({ method }: { method: string }) => {
+        if (method === "eth_requestAccounts" || method === "eth_accounts") return [ADDR2];
+        // Simulate the CSP-blocked / unreachable wallet RPC.
+        if (method === "eth_chainId") throw new TypeError("Failed to fetch");
+        return null;
+      }),
+      on: () => {},
+      removeListener: () => {},
+    };
+    (window as any).ethereum = provider;
+
+    render(
+      <WalletProvider>
+        <ConnectButton />
+      </WalletProvider>,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    fireEvent.click(screen.getByText("MetaMask"));
+    await flush();
+
+    // Connected directly: the real address is shown...
+    expect(screen.getByText(/0x7A91/)).toBeTruthy();
+    // ...and the blocked chain read is NOT misreported as a failed connection.
+    expect(screen.queryByText(/Couldn't connect to the wallet/i)).toBeNull();
+    expect(provider.request).toHaveBeenCalledWith({ method: "eth_requestAccounts" });
+  });
+
+  it("surfaces an honest message and stays disconnected when the wallet shares no account", async () => {
+    const provider = {
+      isMetaMask: true,
+      request: vi.fn(async ({ method }: { method: string }) => {
+        // The wallet is present but the user approved nothing.
+        if (method === "eth_requestAccounts" || method === "eth_accounts") return [];
+        if (method === "eth_chainId") return "0x8f";
+        return null;
+      }),
+      on: () => {},
+      removeListener: () => {},
+    };
+    (window as any).ethereum = provider;
+
+    render(
+      <WalletProvider>
+        <ConnectButton />
+        <ErrorProbe />
+      </WalletProvider>,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    fireEvent.click(screen.getByText("MetaMask"));
+    await flush();
+
+    // Not a phantom connection: still the connect control, with the real reason.
+    expect(screen.getByRole("button", { name: /connect wallet/i })).toBeTruthy();
+    expect(screen.getByTestId("wallet-error").textContent).toMatch(/didn't share an account/i);
+    // A failed injected attempt must not leave a WalletConnect session behind.
+    expect(window.localStorage.getItem("intentpay.wallet.connector")).not.toBe("walletconnect");
+  });
+
+  it("does not silently fall back to WalletConnect when an injected connect fails", async () => {
+    // WalletConnect is unconfigured, so a silent substitution is impossible —
+    // and the injected failure must still surface as its own error.
+    const provider = {
+      isMetaMask: true,
+      request: vi.fn(async ({ method }: { method: string }) => {
+        if (method === "eth_requestAccounts" || method === "eth_accounts") return [];
+        if (method === "eth_chainId") return "0x8f";
+        return null;
+      }),
+      on: () => {},
+      removeListener: () => {},
+    };
+    (window as any).ethereum = provider;
+
+    render(
+      <WalletProvider>
+        <ConnectButton />
+      </WalletProvider>,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    fireEvent.click(screen.getByText("MetaMask"));
+    await flush();
+
+    // Still disconnected, WalletConnect still honestly "Off" (no project id).
+    expect(screen.getByRole("button", { name: /connect wallet/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /connect wallet/i }));
+    await flush();
+    expect(screen.getByText("WalletConnect")).toBeTruthy();
+    expect(screen.getByText("Off")).toBeTruthy();
   });
 });

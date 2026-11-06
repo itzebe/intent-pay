@@ -13,13 +13,16 @@ export function monadAddChainParams(network: MonadNetwork = "mainnet") {
 }
 
 export function isMonadChain(
-  chainIdHex: string | undefined,
+  chainIdHex: string | number | undefined,
   network: MonadNetwork = "mainnet",
 ) {
-  if (!chainIdHex) return false;
-  try {
-    return parseInt(chainIdHex, 16) === NETWORKS[network].chainId;
-  } catch {
-    return false;
-  }
+  const target = NETWORKS[network].chainId;
+  if (chainIdHex === undefined || chainIdHex === null) return false;
+  // Accept the EIP-1193 hex quantity (`0x8f`) and the decimal form a
+  // WalletConnect UniversalProvider returns (143 / "143"), so the same chain is
+  // never judged "wrong" depending on which provider answered.
+  if (typeof chainIdHex === "number") return chainIdHex === target;
+  if (/^0x[0-9a-fA-F]+$/.test(chainIdHex)) return parseInt(chainIdHex, 16) === target;
+  if (/^[0-9]+$/.test(chainIdHex)) return parseInt(chainIdHex, 10) === target;
+  return false;
 }

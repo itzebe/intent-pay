@@ -96,6 +96,19 @@ describe("discovery (EIP-6963 + legacy)", () => {
     watcher.destroy();
   });
 
+  it("does not list a wallet twice when the same provider both announces and is on window.ethereum", async () => {
+    // The production defect: a wallet present on `window.ethereum` before the app
+    // boots is read from the legacy slot, then answers `eip6963:requestProvider`
+    // with the SAME provider object — which used to produce two picker rows.
+    const provider = makeProvider({ isMetaMask: true });
+    cleanup = installWindow({
+      legacy: provider,
+      providers: [{ info: { uuid: "u-mm", name: "MetaMask", icon: "", rdns: "io.metamask" }, provider }],
+    });
+    const wallets = await discoverWallets();
+    expect(wallets).toHaveLength(1);
+  });
+
   it("discovers a Trust Wallet provider that injects late on window.trustwallet only", () => {
     const trust = makeProvider({ isTrust: true });
     cleanup = installWindow({});

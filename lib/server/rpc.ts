@@ -1,5 +1,6 @@
-import { createPublicClient, fallback, http, type PublicClient } from "viem";
+import { createPublicClient, http, type PublicClient } from "viem";
 import { monadMainnet, serverRpcUrls, type MonadNetwork } from "@/lib/config/chains";
+import { receiptFailoverTransport } from "@/lib/rpc/receiptFailover";
 
 const cache = new Map<string, PublicClient>();
 
@@ -11,9 +12,11 @@ const cache = new Map<string, PublicClient>();
  * keyed endpoint made every pool read fail, which the router then reported as
  * "no route" — a transient infrastructure fault disguised as a market fact.
  *
- * `rank: false` keeps the configured order (Alchemy first); viem still fails
- * over to the public node on an error and then sticks with the transport that
- * last succeeded.
+ * `receiptFailoverTransport` keeps the configured order (Alchemy first) and the
+ * normal fail-over-on-error behaviour, and additionally reads a transaction
+ * receipt from whichever endpoint actually has it. A keyed endpoint that answers
+ * `eth_getTransactionReceipt` with `null` (not indexed yet) must not make
+ * settlement verification give up while the public node already holds it.
  */
 export function getPublicClient(_network: MonadNetwork = "mainnet"): PublicClient {
   const existing = cache.get("mainnet");
@@ -21,9 +24,8 @@ export function getPublicClient(_network: MonadNetwork = "mainnet"): PublicClien
 
   const client = createPublicClient({
     chain: monadMainnet,
-    transport: fallback(
+    transport: receiptFailoverTransport(
       serverRpcUrls().map((url) => http(url, { timeout: 20_000, retryCount: 1 })),
-      { rank: false, retryCount: 1 },
     ),
   });
   cache.set("mainnet", client);

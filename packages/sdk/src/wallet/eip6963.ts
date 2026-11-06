@@ -210,6 +210,9 @@ export function watchWallets(
   const onAnnounce = (event: Event) => {
     const wallet = parseAnnouncement(event);
     if (!wallet || byId.has(wallet.id)) return;
+    // A wallet that also sits in the legacy slot was already listed from there;
+    // the provider object is the identity, so do not add the same wallet twice.
+    if ([...byId.values()].some((existing) => existing.provider === wallet.provider)) return;
     byId.set(wallet.id, wallet);
     snapshot();
   };

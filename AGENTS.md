@@ -167,6 +167,29 @@ EIP-1193 provider), `tests/walletError.test.ts` (network-failure classification)
 `tests/monadChain.test.ts` (EIP-3085 params + chain-id forms), plus the
 WalletConnect and injected-wallet-RPC CSP cases in `tests/securityHeaders.test.ts`.
 
+### A wallet's own flag wins over the shared `isMetaMask`
+
+Trust Wallet sets `isMetaMask` for dapp compatibility, so `legacyProviderName` /
+`legacyWalletId` (`lib/wallet/eip6963.ts`) check the most specific flag first
+(`isRabby` → `isCoinbaseWallet` → `isTrust`/`isTrustWallet` → `isMetaMask`). A
+legacy-only Trust provider was otherwise labelled "MetaMask", hiding the wallet
+the user actually had. The id and the display name share the order so they can
+never disagree.
+
+### The wallet picker must portal to `document.body`
+
+`position: fixed` is resolved against the nearest ancestor that establishes a
+containing block, and a `backdrop-filter` (the sticky header's `backdrop-blur-xl`)
+is one. A `Modal` rendered where its trigger lives — inside that header — was
+therefore laid out against the ~69px header instead of the viewport: the picker's
+rows landed off-screen and could not be tapped, so the user could open "Connect a
+wallet" but never connect. `components/ui/Modal.tsx` renders through
+`createPortal(..., document.body)` (after a `mounted` guard, for SSR), so the
+overlay is always the real viewport regardless of any ancestor's
+filter/transform. Do not move a `Modal` back into a filtered/transformed
+ancestor. Reproduction: `scripts/mission23/modalGeometry.mjs`; regression:
+`tests/modalPortal.test.tsx`.
+
 ## Ecosystem integrations (T10)
 
 Three external providers are wired in, all config-driven and honest about
@@ -328,6 +351,45 @@ auto-retried. `usePayment.tsx` keys its backoff effect off this function.
 Regression coverage: `tests/rpcResilience.test.ts` (candidate lists, fallback
 transport, recovery), `tests/routeDiscovery.test.ts` (an RPC outage surfaces as
 `provider_error`).
+
+### A stalled endpoint must fail over — viem `fallback` does not
+
+`fallback` advances to the next endpoint only when a call **throws**. A node that
+accepts the TCP connection and then never replies throws nothing until its own
+timeout, so a stalled *preferred* endpoint made every read pay that timeout
+(`lib/server/rpc.ts` used 20 s, `lib/wallet/clients.ts` the same). On the
+deployed app that was the production outage: `/api/balances`, `/api/tokens` and
+`/api/quote` each blocked past the serverless limit, balances looked empty and a
+payment could never be prepared. This is distinct from the 429 case above —
+there the endpoint *answers*, here it never does.
+
+`lib/rpc/receiptFailover.ts` therefore owns the failover itself, built with
+viem's `createTransport` so it carries a real `type` and `retryCount: 0`:
+
+- Every application-owned endpoint is instantiated with `retryCount: 0`. The
+  transport owns failover; a viem-level retry would re-run the whole ordered
+  attempt and re-hit an endpoint the breaker is cooling down, multiplying every
+  attempt (`1 + retryCount`) against a stalled node. **Do not pass `retryCount`
+  to `http(...)`** in the client builders: viem resolves it as
+  `config.retryCount ?? transport.retryCount`, so an endpoint-level value silently
+  overrides the transport's `0` and the stalled endpoint is hit twice.
+- `ENDPOINT_TIMEOUT_MS` (5 s) is the *only* bound on a stalled read. A healthy
+  Monad node answers a read in well under a second.
+- A failed endpoint is skipped for `ENDPOINT_COOLDOWN_MS` (15 s) so only the
+  first read in a request pays the stall; the next endpoint is used directly.
+  If every endpoint is cooling down they are still tried, never dropped.
+- A receipt read still fails over on a `null` (the original behaviour): only a
+  non-null answer is authoritative.
+
+Failover stays **sequential on purpose**. viem's `http` transport coalesces
+concurrent requests to one endpoint into a single batched POST, so a 125-call
+`multicall` is one request per endpoint; racing the endpoints (a hedge) would
+instead send 125 concurrent POSTs to the fallback and overrun it.
+
+Regression coverage: `tests/receiptFailover.test.ts` (a stalled endpoint is
+skipped after one timeout and a later endpoint answers; a receipt `null` fails
+over), plus the candidate-list cases in `tests/rpcResilience.test.ts`. The
+end-to-end reproduction is `scripts/mission23/rpcStallProbe.mjs`.
 
 ## Quote freshness (execution guard)
 

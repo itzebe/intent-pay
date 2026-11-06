@@ -1,7 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 export function Modal({
   open,
@@ -16,6 +17,18 @@ export function Modal({
   children: React.ReactNode;
   maxWidth?: number;
 }) {
+  // Render into `document.body`, not where the trigger lives.
+  //
+  // `position: fixed` is resolved against the nearest ancestor that establishes
+  // a containing block — and a `backdrop-filter` (the sticky header's
+  // `backdrop-blur-xl`) is one. A modal nested inside that header was therefore
+  // laid out against the 69px header instead of the viewport: the wallet-picker
+  // rows rendered off-screen and could not be clicked, so the user could open
+  // "Connect a wallet" but never actually connect. Portalling to `body` puts the
+  // overlay in the real viewport regardless of any ancestor's filter/transform.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -27,7 +40,9 @@ export function Modal({
     };
   }, [open, onClose]);
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <AnimatePresence>
       {open && (
         <motion.div
@@ -71,6 +86,7 @@ export function Modal({
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

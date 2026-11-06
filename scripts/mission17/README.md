@@ -38,3 +38,32 @@ FAIL_FROM_MS=1000 FAIL_TO_MS=32000 FAIL_MODE=route_unavailable \
 ```
 
 Reports are written to the given output directory as `report.json`.
+
+## Defect: direct injected-wallet connect (Mission 18)
+
+Injects a Trust-Wallet-style provider whose account methods are answered locally
+but whose **chain reads are proxied to `https://monad.twnodes.com`** from the
+page context — exactly how the Android in-app browser behaves. Reports whether a
+page-context fetch to that origin is allowed by the deployed CSP and whether the
+wallet connects.
+
+```bash
+node scripts/mission17/reproConnect.mjs https://intent-pay-roan.vercel.app /tmp/m18
+```
+
+On the pre-fix build (`connect-src` without the wallet's origin) the probe is
+`error: TypeError: Failed to fetch` and `connectedAddressShown` is false; after
+the fix both are healthy. The harness uses no application mocks — only the
+wallet is stubbed.
+
+## Defect: Continue Payment does not blank the checkout (Mission 18)
+
+Drives the real deployed composer with a stub EIP-6963 wallet: connects, fills
+recipient + amount (every balances/quote/optimize call is live), then activates
+the composer's own CTA and asserts the page is not blank and no page error was
+thrown. An unfunded wallet is expected to be blocked *honestly* ("No executable
+payment asset"), never with a blank screen.
+
+```bash
+node scripts/mission17/reproComposer.mjs https://intent-pay-roan.vercel.app
+```

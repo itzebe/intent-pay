@@ -55,7 +55,7 @@ export function SiteHeader({
           </span>
           <span className="leading-tight">
             <span className="block text-sm font-semibold tracking-tight text-white">Intent Pay</span>
-            <span className="hidden text-[10px] uppercase tracking-[0.16em] text-white/35 sm:block">
+            <span className="hidden text-[10px] uppercase tracking-[0.16em] text-white/55 sm:block">
               {subtitle}
             </span>
           </span>

@@ -5,9 +5,10 @@ import { motion } from "framer-motion";
 import { ArrowRight, Bolt } from "@/components/ui/Icons";
 
 /**
- * Hero. One idea, stated once: state the payment, review the route, send on
- * Monad. Restrained — a single accent, no gradient headline, no decorative
- * graphics — so the working composer below is the visual centre of the page.
+ * Hero. One idea, stated plainly: say who gets what, and Intent Pay works out
+ * how — then you approve it in your own wallet. Restrained: a single accent, no
+ * gradient headline, no decorative graphics, so the working composer below is
+ * the visual centre of the page.
  */
 export function Hero({ onTry }: { onTry: () => void }) {
   return (
@@ -28,17 +29,18 @@ export function Hero({ onTry }: { onTry: () => void }) {
         transition={{ duration: 0.45, delay: 0.05 }}
         className="text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-white sm:text-5xl"
       >
-        Payment infrastructure connecting payment intentions with blockchain execution.
+        Pay anyone the token they asked for, from whatever you already hold.
       </motion.h1>
 
       <motion.p
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45, delay: 0.1 }}
-        className="mx-auto mt-5 max-w-xl text-pretty text-base leading-relaxed text-white/55 sm:text-lg"
+        className="mx-auto mt-5 max-w-xl text-pretty text-base leading-relaxed text-white/60 sm:text-lg"
       >
-        State what the recipient should receive. Intent Pay determines which asset you spend, the
-        route, and the transaction — then you approve it in your own wallet.
+        State the payment — who receives, how much, which token. Intent Pay finds the route on
+        Monad, prepares one transaction, and you approve it in your own wallet. You keep your keys;
+        settlement is verified on-chain.
       </motion.p>
 
       <motion.div
@@ -58,31 +60,3 @@ export function Hero({ onTry }: { onTry: () => void }) {
   );
 }
 
-/** Three plain-language steps, used as the supporting explanation. */
-export function HowItWorks() {
-  const items = [
-    { t: "You choose what they receive", d: "Recipient, exact amount, and token — that is your intent." },
-    { t: "We find the route", d: "The system picks a funded asset you hold and the best route it can quote." },
-    { t: "You confirm once", d: "You authorize a single prepared transaction; the recipient receives the token you asked for." },
-  ];
-  return (
-    <section id="how" className="mx-auto max-w-4xl scroll-mt-24 px-5 pt-16">
-      <div className="grid gap-3 sm:grid-cols-3">
-        {items.map((it, i) => (
-          <motion.div
-            key={it.t}
-            initial={{ opacity: 0, y: 8 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: "-60px" }}
-            transition={{ duration: 0.35, delay: i * 0.05 }}
-            className="card-flat p-4"
-          >
-            <span className="num text-xs font-bold text-mono-soft">0{i + 1}</span>
-            <h3 className="mt-2 text-sm font-semibold text-white">{it.t}</h3>
-            <p className="mt-1 text-xs leading-relaxed text-white/45">{it.d}</p>
-          </motion.div>
-        ))}
-      </div>
-    </section>
-  );
-}

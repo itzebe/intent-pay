@@ -11,9 +11,9 @@ export const SITE_URL = (
 );
 
 export const SITE_NAME = "Intent Pay";
-export const SITE_TITLE = "Intent Pay — Review the route. Send on Monad.";
+export const SITE_TITLE = "Intent Pay — Pay anyone the token they asked for";
 export const SITE_DESCRIPTION =
-  "Intent-based payments on Monad. Tell Intent Pay what you want to pay, review the route, and confirm your payment from one simple interface.";
+  "Intent-based payments on Monad. Say who receives, how much and which token; Intent Pay finds the route and prepares one transaction you approve in your own wallet. You keep your keys; settlement is verified on-chain.";
 
 /** Every indexable route. Kept in one place so the sitemap cannot drift. */
 export const PUBLIC_ROUTES: { path: string; priority: number }[] = [

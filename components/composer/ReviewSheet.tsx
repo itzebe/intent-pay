@@ -113,7 +113,7 @@ export function ReviewSheet({
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto px-5 pb-4 pt-5 sm:px-6">
-        <p className="text-center text-xs font-medium uppercase tracking-[0.14em] text-white/40">
+        <p className="text-center text-xs font-medium uppercase tracking-[0.14em] text-white/55">
           Review payment
         </p>
 
@@ -154,7 +154,7 @@ export function ReviewSheet({
           <h2 className="num text-3xl font-semibold tracking-tight text-white sm:text-4xl">
             You are sending {usdTokenLabel(quote.receiveUsd, receiveToken.symbol)}
           </h2>
-          <p className="mt-1.5 text-sm text-white/45">
+          <p className="mt-1.5 text-sm text-white/55">
             to <span className="font-mono text-white/70">{shortAddress(recipient, 6)}</span>
           </p>
         </div>
@@ -280,47 +280,47 @@ export function ReviewSheet({
             >
               <div className="space-y-2 rounded-2xl border border-white/[0.06] bg-ink-900/60 p-4 text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-white/40">Routing provider</span>
+                  <span className="text-white/55">Routing provider</span>
                   <span className="font-mono text-white/70">
                     Uniswap V3 · Monad
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-white/40">Swap mode</span>
+                  <span className="text-white/55">Swap mode</span>
                   <span className="font-mono text-white/70">
                     {quote.exactOutput ? "Exact output" : "Exact input"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-white/40">On-chain bound</span>
+                  <span className="text-white/55">On-chain bound</span>
                   <span className="font-mono text-white/70">
                     {quote.exactOutput ? "amountInMaximum" : "amountOutMinimum"}
                   </span>
                 </div>
                 {protection && (
                   <div className="flex items-center justify-between">
-                    <span className="text-white/40">MEV protection</span>
+                    <span className="text-white/55">MEV protection</span>
                     <span className="font-mono text-white/70">
                       {protection.mev.active ? "Private submission" : "Unavailable"}
                     </span>
                   </div>
                 )}
                 <div className="flex items-center justify-between">
-                  <span className="text-white/40">Gas</span>
+                  <span className="text-white/55">Gas</span>
                   <span className="font-mono text-white/70">Paid in MON</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-white/40">Price source</span>
+                  <span className="text-white/55">Price source</span>
                   <span className="font-mono text-white/70">
                     {`Pay: ${quote.payPriceSource ?? "—"} · Receive: ${quote.receivePriceSource ?? "—"}`}
                   </span>
                 </div>
                 <div className="hairline my-1" />
-                <p className="text-white/40">Steps your wallet will sign</p>
+                <p className="text-white/55">Steps your wallet will sign</p>
                 <ol className="mt-1 space-y-1.5">
                   {planSteps.map((s, i) => (
                     <li key={i} className="flex gap-2 text-white/70">
-                      <span className="num text-white/35">{i + 1}.</span>
+                      <span className="num text-white/55">{i + 1}.</span>
                       <span>{s}</span>
                     </li>
                   ))}
@@ -402,12 +402,12 @@ function SummaryRow({
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-white/45">{label}</span>
+      <span className="text-xs text-white/55">{label}</span>
       <span className="flex items-baseline gap-2 text-right">
         <span className={`num ${strong ? "text-sm font-semibold text-white" : "text-sm text-white/85"} ${mono ? "font-mono text-[12px]" : ""}`}>
           {value}
         </span>
-        {sub && <span className="num text-[11px] text-white/35">{sub}</span>}
+        {sub && <span className="num text-[11px] text-white/55">{sub}</span>}
       </span>
     </div>
   );
@@ -433,10 +433,10 @@ function SafetyRow({
     tone === "bad" ? "text-red-300" : tone === "warn" ? "text-amber-200" : "text-emerald-200";
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-white/45">{label}</span>
+      <span className="text-xs text-white/55">{label}</span>
       <span className="flex items-baseline gap-2 text-right">
         <span className={`num text-sm font-medium ${toneClass}`}>{value}</span>
-        {sub && <span className="text-[11px] text-white/35">{sub}</span>}
+        {sub && <span className="text-[11px] text-white/55">{sub}</span>}
       </span>
     </div>
   );

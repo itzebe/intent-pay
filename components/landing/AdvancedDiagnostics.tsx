@@ -46,7 +46,7 @@ export function AdvancedDiagnostics({ network }: { network: MonadNetwork }) {
     >
       <summary className="cursor-pointer list-none px-4 py-3 text-xs font-medium text-white/50 hover:text-white/70">
         Advanced diagnostics
-        <span className="ml-1 text-white/30">{open ? "▾" : "▸"}</span>
+        <span className="ml-1 text-white/55">{open ? "▾" : "▸"}</span>
       </summary>
 
       <div className="border-t border-white/[0.06] px-4 pb-4 pt-3">
@@ -55,8 +55,8 @@ export function AdvancedDiagnostics({ network }: { network: MonadNetwork }) {
         {rows.length > 0 && (
           <dl className="mt-3 grid grid-cols-1 gap-1 font-mono text-[10px] leading-relaxed sm:grid-cols-2">
             {rows.map((r) => (
-              <div key={r.label} className={r.warn ? "text-amber-200/60" : "text-white/35"}>
-                <dt className="inline text-white/25">{r.label}: </dt>
+              <div key={r.label} className={r.warn ? "text-amber-200/60" : "text-white/55"}>
+                <dt className="inline text-white/50">{r.label}: </dt>
                 <dd className="inline break-all">{r.value}</dd>
               </div>
             ))}

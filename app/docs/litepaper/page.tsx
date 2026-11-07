@@ -39,7 +39,7 @@ export default function Litepaper() {
       />
 
       <nav className="card-flat p-4">
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/35">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
           Contents
         </div>
         <ol className="grid gap-x-6 gap-y-1 text-sm text-white/55 sm:grid-cols-2">

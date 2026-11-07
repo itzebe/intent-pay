@@ -32,11 +32,11 @@ export function MismatchAlert({
               Payment exceeds your intended amount
             </p>
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-              <span className="text-white/45">Intended</span>
+              <span className="text-white/55">Intended</span>
               <span className="num text-right text-white/80">{intended}</span>
-              <span className="text-white/45">Current</span>
+              <span className="text-white/55">Current</span>
               <span className="num text-right text-white/80">{current}</span>
-              <span className="text-white/45">Difference</span>
+              <span className="text-white/55">Difference</span>
               <span className="num text-right font-semibold text-amber-200">{difference}</span>
             </div>
             <button onClick={onCorrect} className="btn-ghost mt-3 w-full py-2.5 text-xs">

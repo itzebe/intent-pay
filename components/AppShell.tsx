@@ -3,8 +3,8 @@
 import { useEffect, useRef } from "react";
 import { PaymentProvider, usePaymentFlow } from "@/lib/hooks/usePayment";
 import { useWallet, WalletProvider } from "@/lib/hooks/useWallet";
-import { Hero, HowItWorks } from "@/components/landing/Hero";
-import { Lifecycle, Pathways } from "@/components/landing/HomeSections";
+import { Hero } from "@/components/landing/Hero";
+import { Lifecycle, Pathways, WhyMonad } from "@/components/landing/HomeSections";
 import { AdvancedDiagnostics } from "@/components/landing/AdvancedDiagnostics";
 import { SiteHeader } from "@/components/landing/SiteHeader";
 import { SiteFooter } from "@/components/landing/SiteFooter";
@@ -51,7 +51,7 @@ function Shell() {
 
         <Lifecycle />
 
-        <HowItWorks />
+        <WhyMonad />
 
         <ReferralPanel address={wallet.address} walletClient={wallet.walletClient} />
 

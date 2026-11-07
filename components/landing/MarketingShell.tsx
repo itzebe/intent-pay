@@ -98,7 +98,7 @@ export function NextStep({ href, label, body }: { href: string; label: string; b
     >
       <span>
         <span className="block text-sm font-semibold text-white">{label}</span>
-        <span className="mt-0.5 block text-xs text-white/45">{body}</span>
+        <span className="mt-0.5 block text-xs text-white/55">{body}</span>
       </span>
       <ArrowRight className="h-4 w-4 shrink-0 text-mono-soft transition-transform group-hover:translate-x-0.5" />
     </Link>

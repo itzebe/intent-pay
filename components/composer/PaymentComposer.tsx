@@ -792,7 +792,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           <span className="chip text-emerald-200/80">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Live · {networkLabel}
           </span>
-          <span className="chip text-white/45" title="Canonical intent version">
+          <span className="chip text-white/55" title="Canonical intent version">
             v{flow.intent.version}
           </span>
         </div>
@@ -879,7 +879,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
                       className="flex w-full items-center justify-between rounded-2xl border border-white/[0.08] bg-ink-900/40 px-3 py-2.5 transition hover:border-white/20 hover:bg-white/[0.04]"
                       aria-label="Choose receive token"
                     >
-                      <span className="text-xs text-white/45">They receive</span>
+                      <span className="text-xs text-white/55">They receive</span>
                       <span className="flex items-center gap-2">
                         <TokenBadge token={flow.receiveTokenConfig} size={22} />
                         <span className="text-sm font-semibold text-white">
@@ -1084,7 +1084,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               <Spinner className="h-10 w-10 animate-spin text-mono-soft" />
             </div>
             <h3 className="text-lg font-semibold text-white">Waiting for confirmation…</h3>
-            <p className="mt-1 max-w-xs text-sm text-white/45">
+            <p className="mt-1 max-w-xs text-sm text-white/55">
               Approve each step in your wallet. Confirmation usually takes under a second on Monad.
             </p>
             {steps.length > 0 && (
@@ -1218,12 +1218,12 @@ function UnresolvedPanel({
                 className="flex items-center gap-2 rounded-2xl border border-white/[0.07] bg-ink-900/60 px-3 py-2.5 transition hover:border-white/20"
               >
                 <span className="min-w-0 flex-1 truncate font-mono text-xs text-white/70">{h}</span>
-                <ExternalLink className="h-4 w-4 shrink-0 text-white/45" />
+                <ExternalLink className="h-4 w-4 shrink-0 text-white/55" />
               </a>
             ))}
           </div>
         ) : (
-          <p className="mt-5 text-center text-xs text-white/45">
+          <p className="mt-5 text-center text-xs text-white/55">
             Your wallet did not return a transaction hash. Use the check below to see whether it
             broadcast a transaction anyway.
           </p>
@@ -1285,7 +1285,7 @@ function Step({
         <span className="num flex h-5 w-5 items-center justify-center rounded-full bg-white/[0.06] text-[10px] font-bold text-white/60">
           {n}
         </span>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/35">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-white/55">
           {title ?? (n === 1 ? "Recipient" : n === 2 ? "What should they receive?" : "How will you pay?")}
         </span>
       </div>

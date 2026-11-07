@@ -491,11 +491,11 @@ export function CheckoutClient({ token }: { token: string }) {
       <div className="border-b border-white/[0.06] px-5 py-4">
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.16em] text-white/40">Pay with Intent Pay</div>
+            <div className="text-[10px] uppercase tracking-[0.16em] text-white/55">Pay with Intent Pay</div>
             <div className="mt-0.5 text-lg font-semibold text-white">{amountLabel}</div>
           </div>
           {view.orderReference && (
-            <div className="text-right text-xs text-white/45">
+            <div className="text-right text-xs text-white/55">
               Order
               <div className="font-mono text-white/70">{view.orderReference}</div>
             </div>
@@ -528,7 +528,7 @@ export function CheckoutClient({ token }: { token: string }) {
 
         {txHashes.length > 0 && (
           <div className="rounded-xl bg-white/[0.03] p-3">
-            <div className="text-[10px] uppercase tracking-wide text-white/40">Transaction</div>
+            <div className="text-[10px] uppercase tracking-wide text-white/55">Transaction</div>
             {txHashes.map((h) => (
               <a
                 key={h}
@@ -562,7 +562,7 @@ export function CheckoutClient({ token }: { token: string }) {
 
         {statusNote && !unknownOutcome && (
           <div className="flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2 text-xs text-white/70">
-            <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/45" />
+            <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/55" />
             <span>{statusNote}</span>
           </div>
         )}
@@ -611,7 +611,7 @@ export function CheckoutClient({ token }: { token: string }) {
           </div>
         )}
 
-        <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-white/35">
+        <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-white/55">
           <Shield className="mt-0.5 h-3 w-3 shrink-0" />
           You sign in your own wallet. Intent Pay never sees your key, and the amount, asset and
           recipient are fixed by the merchant before you pay.
@@ -623,7 +623,7 @@ export function CheckoutClient({ token }: { token: string }) {
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
           }}
-          className="flex items-center gap-1.5 text-[11px] text-white/40 hover:text-white/70"
+          className="flex items-center gap-1.5 text-[11px] text-white/55 hover:text-white/70"
         >
           <Copy className="h-3 w-3" /> {copied ? "Link copied" : "Copy payment link"}
         </button>
@@ -635,7 +635,7 @@ export function CheckoutClient({ token }: { token: string }) {
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-xs text-white/45">{label}</span>
+      <span className="text-xs text-white/55">{label}</span>
       {children}
     </div>
   );

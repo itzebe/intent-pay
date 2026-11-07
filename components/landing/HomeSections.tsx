@@ -40,9 +40,9 @@ export function Pathways() {
         <h2 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
           One payment layer, three ways in
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-white/55">
-          Intent Pay is payment infrastructure: an intent describes the outcome, and the system
-          resolves the asset, the route and the transaction. Choose the path that fits you.
+        <p className="mt-2 text-sm leading-relaxed text-white/60">
+          The same intent — who receives, how much, which token — powers all three. Pick the path
+          that fits you; each one leads to the surface that already exists.
         </p>
       </header>
 
@@ -55,7 +55,7 @@ export function Pathways() {
               <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-mono-soft">
                 <Icon className="h-4 w-4" />
               </span>
-              <div className="mt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/40">
+              <div className="mt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
                 {p.audience}
               </div>
               <h3 className="mt-1 text-base font-semibold tracking-tight text-white">{p.title}</h3>
@@ -89,8 +89,8 @@ export function Pathways() {
  * → authorization → submission → verification. No invented stages.
  */
 const LIFECYCLE = [
-  { n: "01", t: "Payment intent", d: "The recipient, the amount and the token they should receive — stated as an outcome." },
-  { n: "02", t: "Transaction preparation", d: "The app resolves the source asset, the route and the envelope (gas, fees, nonce)." },
+  { n: "01", t: "Payment intent", d: "You say who receives, how much and which token — an outcome, not a trade." },
+  { n: "02", t: "Transaction preparation", d: "Intent Pay resolves the source asset, the route and the envelope (gas, fees, nonce)." },
   { n: "03", t: "User authorization", d: "You review the exact transaction and approve it in your own wallet. Keys never leave the wallet." },
   { n: "04", t: "Transaction submission", d: "Submitted once, never retried. A single approval maps to a single broadcast." },
   { n: "05", t: "Settlement verification", d: "The recipient's real transfer is proven from the confirmed receipt — not assumed." },
@@ -103,7 +103,7 @@ export function Lifecycle() {
         <h2 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">
           The payment lifecycle
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-white/55">
+        <p className="mt-2 text-sm leading-relaxed text-white/60">
           You keep control of wallet authorization. Intent Pay prepares and verifies; it never
           holds your keys and never signs on your behalf.
         </p>
@@ -114,10 +114,48 @@ export function Lifecycle() {
           <li key={s.n} className="card-flat flex flex-col p-4">
             <span className="num text-xs font-bold text-mono-soft">{s.n}</span>
             <h3 className="mt-2 text-sm font-semibold text-white">{s.t}</h3>
-            <p className="mt-1.5 text-xs leading-relaxed text-white/50">{s.d}</p>
+            <p className="mt-1.5 text-xs leading-relaxed text-white/55">{s.d}</p>
           </li>
         ))}
       </ol>
     </section>
   );
 }
+
+/**
+ * Why Monad. Answers "why this chain?" honestly: what the product actually uses
+ * and what it does not claim. Every point maps to a real property of the
+ * deployment (chain id 143, low fees, Uniswap V3 routing, EVM tooling) — no
+ * endorsement, partnership or performance claim is implied.
+ */
+const MONAD_POINTS = [
+  { t: "Low, predictable fees", d: "A payment is one or a few transactions. Monad's low network cost keeps a small payment worth making." },
+  { t: "Fast confirmation", d: "Payments settle quickly, so a merchant checkout confirms in seconds rather than minutes." },
+  { t: "EVM, so real tooling", d: "Intent Pay routes through Uniswap V3 and reads receipts with standard EVM clients — no bespoke chain integration." },
+  { t: "A payment-shaped network", d: "A high-throughput EVM chain is a natural home for payments that resolve routing behind a simple intent." },
+] as const;
+
+export function WhyMonad() {
+  return (
+    <section id="why-monad" className="mx-auto max-w-6xl scroll-mt-24 px-5 pt-16">
+      <header className="max-w-2xl">
+        <h2 className="text-xl font-semibold tracking-tight text-white sm:text-2xl">Why Monad</h2>
+        <p className="mt-2 text-sm leading-relaxed text-white/60">
+          Intent Pay runs on Monad Mainnet (chain id 143) because a payment wants low fees and fast
+          finality. It is independent infrastructure — not affiliated with, endorsed by or sponsored
+          by the Monad Foundation.
+        </p>
+      </header>
+
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {MONAD_POINTS.map((p) => (
+          <div key={p.t} className="card-flat p-4">
+            <h3 className="text-sm font-semibold text-white">{p.t}</h3>
+            <p className="mt-1.5 text-xs leading-relaxed text-white/55">{p.d}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+

@@ -27,7 +27,7 @@ export function AmountField({
       <div className="label mb-2">{label}</div>
       <div className="flex items-center gap-3">
         <div className="flex min-w-0 flex-1 items-center">
-          <span className="num mr-1 text-3xl font-semibold text-white/45">{prefix}</span>
+          <span className="num mr-1 text-3xl font-semibold text-white/55">{prefix}</span>
           <input
             value={amount}
             onChange={(e) => {
@@ -38,7 +38,7 @@ export function AmountField({
             inputMode="decimal"
             placeholder="0.00"
             aria-label={label}
-            className="num w-full bg-transparent text-3xl font-semibold text-white outline-none placeholder:text-white/20"
+            className="num w-full bg-transparent text-3xl font-semibold text-white outline-none placeholder:text-white/50"
           />
         </div>
         <button
@@ -52,7 +52,7 @@ export function AmountField({
         </button>
       </div>
       <div className="mt-1.5 flex items-center justify-between">
-        <span className="text-xs text-white/35">
+        <span className="text-xs text-white/55">
           {usdHint ? usdHint : "Recipient gets exactly this amount"}
         </span>
       </div>

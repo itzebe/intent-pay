@@ -50,7 +50,7 @@ export function LiveCalculation({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="inline-flex items-center gap-1.5 text-[11px] text-white/45"
+              className="inline-flex items-center gap-1.5 text-[11px] text-white/55"
             >
               <Spinner className="h-3.5 w-3.5 animate-spin" /> Pricing…
             </motion.span>
@@ -132,7 +132,7 @@ export function LiveCalculation({
             key="empty"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="py-3 text-center text-sm text-white/35"
+            className="py-3 text-center text-sm text-white/55"
           >
             Enter a valid recipient and amount to see the payment.
           </motion.p>
@@ -155,12 +155,12 @@ function Row({
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-white/45">{label}</span>
+      <span className="text-xs text-white/55">{label}</span>
       <span className="flex items-baseline gap-2 text-right">
         <span className={`num text-sm text-white/85 ${mono ? "font-mono text-[12px]" : ""}`}>
           {value}
         </span>
-        {sub && <span className="num text-[11px] text-white/35">{sub}</span>}
+        {sub && <span className="num text-[11px] text-white/55">{sub}</span>}
       </span>
     </div>
   );

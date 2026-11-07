@@ -101,7 +101,7 @@ function WalletPicker({ open, onClose }: { open: boolean; onClose: () => void })
             <WalletGlyph wallet={w} />
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium text-white">{w.name}</span>
-              <span className="block text-[11px] text-white/40">Detected in this browser</span>
+              <span className="block text-[11px] text-white/55">Detected in this browser</span>
             </span>
             {connectingId === w.id ? (
               <span className="text-[11px] text-white/50">Connecting…</span>
@@ -122,7 +122,7 @@ function WalletPicker({ open, onClose }: { open: boolean; onClose: () => void })
             <WalletGlyph wallet={walletConnect} />
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium text-white">{walletConnect.name}</span>
-              <span className="block text-[11px] text-white/40">
+              <span className="block text-[11px] text-white/55">
                 {walletConnect.available
                   ? "Scan a QR code with a mobile wallet"
                   : "Mobile & QR wallets"}
@@ -156,12 +156,12 @@ function WalletPicker({ open, onClose }: { open: boolean; onClose: () => void })
         </p>
       )}
       {walletConnect && !walletConnect.available && (
-        <p className="mt-3 text-[11px] leading-relaxed text-white/40">{walletConnect.reason}</p>
+        <p className="mt-3 text-[11px] leading-relaxed text-white/55">{walletConnect.reason}</p>
       )}
 
       <button
         onClick={() => wallet.refresh()}
-        className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-[11px] text-white/45 transition hover:bg-white/[0.04] hover:text-white/70"
+        className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-[11px] text-white/55 transition hover:bg-white/[0.04] hover:text-white/70"
       >
         Installed a wallet? Rescan
       </button>
@@ -197,7 +197,7 @@ export function ConnectButton() {
             }`}
           />
           <span className="num font-mono text-xs text-white/85">{shortAddress(wallet.address)}</span>
-          <ChevronDown className="h-3.5 w-3.5 text-white/45" />
+          <ChevronDown className="h-3.5 w-3.5 text-white/55" />
         </button>
         {menuOpen && (
           <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-2xl border border-white/10 bg-ink-800/95 p-1.5 shadow-2xl backdrop-blur-xl">
@@ -248,7 +248,7 @@ export function ConnectButton() {
               className="flex w-full items-center gap-1.5 rounded-xl px-3 py-2 text-left text-sm text-white/75 transition hover:bg-white/[0.06]"
             >
               View on explorer
-              <ExternalLink className="h-3.5 w-3.5 text-white/40" />
+              <ExternalLink className="h-3.5 w-3.5 text-white/55" />
             </a>
 
             <button
@@ -317,16 +317,16 @@ export function BalanceOverview({
             ${total.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </span>
         ) : (
-          <span className="text-xs text-white/35">—</span>
+          <span className="text-xs text-white/55">—</span>
         )}
       </div>
       <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
         {!connected ? (
-          <span className="text-xs text-white/40">Connect your wallet to see balances</span>
+          <span className="text-xs text-white/55">Connect your wallet to see balances</span>
         ) : loading ? (
-          <span className="text-xs text-white/40">Reading balances…</span>
+          <span className="text-xs text-white/55">Reading balances…</span>
         ) : funded.length === 0 ? (
-          <span className="text-xs text-white/40">No supported balances</span>
+          <span className="text-xs text-white/55">No supported balances</span>
         ) : (
           funded.map((b, i) => (
             <span key={b.token.symbol || b.token.address || i} className="flex items-center gap-2">

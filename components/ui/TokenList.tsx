@@ -173,9 +173,9 @@ export function TokenList({
           </div>
           <div className="mt-1.5 text-sm text-white/85">
             {paste.token.name}{" "}
-            <span className="text-white/45">({paste.token.symbol})</span>
+            <span className="text-white/55">({paste.token.symbol})</span>
           </div>
-          <div className="mt-0.5 font-mono text-[11px] text-white/35">
+          <div className="mt-0.5 font-mono text-[11px] text-white/55">
             {shortAddress(paste.token.address, 6)}
           </div>
           {paste.price && (
@@ -183,7 +183,7 @@ export function TokenList({
               <span className="text-white/70">
                 {paste.price.usd !== null ? formatUsd(paste.price.usd) : "Price unavailable"}
               </span>
-              <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/45">
+              <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] text-white/55">
                 {paste.price.label}
               </span>
               {paste.price.usd !== null && paste.price.status && (
@@ -234,7 +234,7 @@ export function TokenList({
                     {unknown ? "Unknown token" : t.symbol}
                   </span>
                   {!t.seed && !unknown && (
-                    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium text-white/45">
+                    <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium text-white/55">
                       {t.source === "onchain" ? "imported" : "listed"}
                     </span>
                   )}
@@ -244,14 +244,14 @@ export function TokenList({
                     </span>
                   )}
                 </div>
-                <div className="truncate text-xs text-white/40">
+                <div className="truncate text-xs text-white/55">
                   {unknown ? shortAddress(t.address, 6) : t.name}
                 </div>
               </div>
               {showBalances && bal && (
                 <div className="text-right">
                   <div className="num text-sm text-white/85">{formatUsd(bal.usd)}</div>
-                  <div className="num text-[11px] text-white/35">
+                  <div className="num text-[11px] text-white/55">
                     {Number(bal.amount).toLocaleString("en-US", { maximumFractionDigits: 4 })}
                   </div>
                 </div>
@@ -262,13 +262,13 @@ export function TokenList({
         })}
 
         {filtered.length === 0 && paste.status !== "loading" && (
-          <div className="py-8 text-center text-sm text-white/40">
+          <div className="py-8 text-center text-sm text-white/55">
             {isAddress ? (
               "No token found at that address."
             ) : (
               <>
                 No tokens match “{q}”.
-                <div className="mt-1 text-xs text-white/30">
+                <div className="mt-1 text-xs text-white/55">
                   Paste a contract address to import any Monad token.
                 </div>
               </>
@@ -297,7 +297,7 @@ function RouteState({ routable }: { routable: boolean | null }) {
     );
   }
   return (
-    <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/45">
+    <div className="mt-2 flex items-center gap-1.5 text-[11px] text-white/55">
       <Spinner className="h-3 w-3 animate-spin" /> Checking payment route… select to price it
     </div>
   );

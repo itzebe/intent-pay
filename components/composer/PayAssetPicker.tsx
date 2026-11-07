@@ -66,16 +66,16 @@ export function PayAssetPicker({
     <div>
       <div className="mb-2 flex items-center justify-between">
         <span className="label">How will you pay?</span>
-        <span className="text-[11px] text-white/35">
+        <span className="text-[11px] text-white/55">
           Your wallet · {formatUsd(balances.reduce((s, b) => s + b.usd, 0))}
         </span>
       </div>
 
-      {reason && <p className="mb-2 text-xs text-white/45">{reason}</p>}
+      {reason && <p className="mb-2 text-xs text-white/55">{reason}</p>}
 
       <div className="rounded-2xl border border-white/[0.08] bg-ink-900/50 p-3">
         {funded.length === 0 ? (
-          <div className="px-1 py-2 text-sm text-white/45">
+          <div className="px-1 py-2 text-sm text-white/55">
             No supported balances found in this wallet.
           </div>
         ) : (
@@ -108,7 +108,7 @@ export function PayAssetPicker({
                     <span className="block text-sm font-semibold text-white">{b.token.symbol}</span>
                     <span
                       className={`num block text-[11px] ${
-                        insufficient ? "text-amber-300/80" : "text-white/45"
+                        insufficient ? "text-amber-300/80" : "text-white/55"
                       }`}
                     >
                       {sub}
@@ -131,7 +131,7 @@ export function PayAssetPicker({
         )}
 
         {optimizerLoading && (
-          <p className="mt-2 px-1 text-[11px] text-white/35">Finding the best way to pay…</p>
+          <p className="mt-2 px-1 text-[11px] text-white/55">Finding the best way to pay…</p>
         )}
 
         <button

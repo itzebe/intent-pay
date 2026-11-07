@@ -39,7 +39,7 @@ export default function DocsIndex() {
             className="card-flat group p-4 transition hover:border-mono/30 hover:bg-white/[0.04]"
           >
             <div className="text-sm font-semibold text-white group-hover:text-mono-soft">{c.t}</div>
-            <p className="mt-1 text-xs leading-relaxed text-white/45">{c.d}</p>
+            <p className="mt-1 text-xs leading-relaxed text-white/55">{c.d}</p>
           </Link>
         ))}
       </div>

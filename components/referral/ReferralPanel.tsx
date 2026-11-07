@@ -67,7 +67,7 @@ export function ReferralPanel({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold text-white">Refer a friend</h3>
-            <p className="mt-0.5 text-xs text-white/45">
+            <p className="mt-0.5 text-xs text-white/55">
               Share Intent Pay. A referral is only marked qualified once a referred wallet makes a verified on-chain payment. This dashboard tracks referrals — it does not pay a reward.
             </p>
           </div>
@@ -132,7 +132,7 @@ export function ReferralPanel({
                 ))}
               </ul>
             ) : (
-              <p className="mt-4 text-xs text-white/40">
+              <p className="mt-4 text-xs text-white/55">
                 No referrals yet. Share your link to get started.
               </p>
             )}
@@ -151,7 +151,7 @@ function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
       <div className="num text-lg font-semibold text-white">{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-white/40">{label}</div>
+      <div className="text-[10px] uppercase tracking-wide text-white/55">{label}</div>
     </div>
   );
 }

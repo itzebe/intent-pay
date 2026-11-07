@@ -82,7 +82,7 @@ export function FlowDiagram({
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="mt-3 flex items-center justify-center gap-2 text-[11px] text-white/35"
+            className="mt-3 flex items-center justify-center gap-2 text-[11px] text-white/55"
           >
             <Sparkle className="h-3.5 w-3.5 text-mono-soft" />
             <span>
@@ -135,10 +135,10 @@ function FlowNode({
           >
             {value}
           </span>
-          <span className="truncate text-xs text-white/45">{title}</span>
+          <span className="truncate text-xs text-white/55">{title}</span>
         </div>
       </div>
-      {sub && <span className="num shrink-0 text-xs text-white/40">{sub}</span>}
+      {sub && <span className="num shrink-0 text-xs text-white/55">{sub}</span>}
     </div>
   );
 }

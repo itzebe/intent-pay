@@ -85,6 +85,11 @@ was supplied for publication.
 - **IN PROGRESS** — copy and error-surface refinement for every failure mode.
 - **IN PROGRESS** — mobile layout hardening across the composer, review and token
   search.
+- **DONE (29C)** — product experience and presentation: one coherent story across
+  the homepage, product, developer and merchant pages; a plain-language hero; a
+  single lifecycle explanation; a "Why Monad" section; and a WCAG 2.2 AA contrast
+  floor (`text-white/50`) across every public surface. Pinned by
+  `tests/siteContent.test.tsx`.
 
 ## Next priorities
 
@@ -96,7 +101,10 @@ was supplied for publication.
   before authorization). Not operational today.
 - **PLANNED** — richer route comparison where additional quote sources become
   available.
-- **PLANNED** — continued accessibility (WCAG 2.2 AA) work.
+- **DONE (29C)** — accessibility (WCAG 2.2 AA) pass over the public marketing and
+  documentation surfaces: a `text-white/50` contrast floor (≥5.3:1 on the app
+  background), verified keyboard focus visibility, and no horizontal overflow from
+  360 px up. Remaining work is per-component review inside the composer/checkout.
 - **PLANNED** — production observability and operational readiness beyond the
   existing diagnostics and ops endpoints.
 

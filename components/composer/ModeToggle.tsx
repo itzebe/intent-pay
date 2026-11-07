@@ -40,7 +40,7 @@ export function ModeToggle({
               />
             )}
             <span className="relative block text-sm font-semibold text-white">{o.label}</span>
-            <span className="relative block text-[11px] text-white/40">{o.hint}</span>
+            <span className="relative block text-[11px] text-white/55">{o.hint}</span>
           </button>
         );
       })}

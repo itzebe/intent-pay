@@ -107,7 +107,7 @@ export function SuccessScreen({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
-              className="text-xs font-medium uppercase tracking-[0.14em] text-white/40"
+              className="text-xs font-medium uppercase tracking-[0.14em] text-white/55"
             >
               {phaseCaption}
             </motion.p>
@@ -191,10 +191,10 @@ export function SuccessScreen({
 function Row({ label, value, sub, strong }: { label: string; value: string; sub?: string; strong?: boolean }) {
   return (
     <div className="flex items-center justify-between py-1.5">
-      <span className="text-xs text-white/45">{label}</span>
+      <span className="text-xs text-white/55">{label}</span>
       <span className="text-right">
         <span className={`num block text-sm ${strong ? "font-semibold text-white" : "text-white/85"}`}>{value}</span>
-        {sub && <span className="num block text-[11px] text-white/40">{sub}</span>}
+        {sub && <span className="num block text-[11px] text-white/55">{sub}</span>}
       </span>
     </div>
   );

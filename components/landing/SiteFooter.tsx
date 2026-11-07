@@ -21,7 +21,7 @@ export function SiteFooter() {
               </span>
               <span className="text-sm font-semibold tracking-tight text-white">Intent Pay</span>
             </div>
-            <p className="mt-3 max-w-xs text-xs leading-relaxed text-white/45">
+            <p className="mt-3 max-w-xs text-xs leading-relaxed text-white/55">
               Intent-based payments on Monad.
             </p>
           </div>
@@ -71,7 +71,7 @@ export function SiteFooter() {
           </FooterColumn>
         </div>
 
-        <div className="mt-8 flex flex-col gap-3 border-t border-white/[0.06] pt-5 text-xs text-white/35 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-8 flex flex-col gap-3 border-t border-white/[0.06] pt-5 text-xs text-white/55 sm:flex-row sm:items-center sm:justify-between">
           <span>© {new Date().getFullYear()} Intent Pay</span>
           <span className="inline-flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" aria-hidden="true" />
@@ -86,7 +86,7 @@ export function SiteFooter() {
 function FooterColumn({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/35">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
         {title}
       </div>
       <ul className="mt-3 space-y-2.5">{children}</ul>

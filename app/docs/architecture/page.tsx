@@ -32,7 +32,7 @@ export default function Architecture() {
             <div key={name} className="card-flat p-4">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-sm font-semibold text-white">{name}</span>
-                <span className="font-mono text-[11px] text-white/40">{files}</span>
+                <span className="font-mono text-[11px] text-white/55">{files}</span>
               </div>
               <p className="mt-1.5 text-xs leading-relaxed text-white/50">{desc}</p>
             </div>

@@ -61,7 +61,7 @@ export function Callout({
 export function Stat({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="card-flat p-3">
-      <div className="text-[11px] uppercase tracking-[0.14em] text-white/35">{label}</div>
+      <div className="text-[11px] uppercase tracking-[0.14em] text-white/55">{label}</div>
       <div className="mt-1 text-sm font-medium text-white/85">{value}</div>
     </div>
   );

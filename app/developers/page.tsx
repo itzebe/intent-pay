@@ -63,7 +63,7 @@ npm install /path/to/intent-pay/packages/sdk/intentpay-sdk-0.1.0.tgz
 npm install @walletconnect/ethereum-provider`}
           </pre>
         </div>
-        <p className="mt-3 text-xs leading-relaxed text-white/40">
+        <p className="mt-3 text-xs leading-relaxed text-white/55">
           When the package is published, <Code>npm install @intentpay/sdk</Code> replaces the build step.
         </p>
       </Section>

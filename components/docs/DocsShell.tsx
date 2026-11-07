@@ -50,7 +50,7 @@ export function DocsShell({ children }: { children: ReactNode }) {
             <nav aria-label="Documentation" className="flex flex-wrap gap-x-6 gap-y-4 lg:block lg:space-y-6">
               {NAV.map((group) => (
                 <div key={group.title}>
-                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/35">
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
                     {group.title}
                   </div>
                   <ul className="flex flex-wrap gap-x-5 gap-y-1.5 lg:block lg:space-y-1.5">

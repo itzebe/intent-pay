@@ -227,7 +227,7 @@ export function MerchantConsole() {
     <div className="space-y-6">
       <section className="card p-5">
         <h2 className="text-sm font-semibold text-white/90">Connect your merchant account</h2>
-        <p className="mt-1 text-xs text-white/45">
+        <p className="mt-1 text-xs text-white/55">
           Paste the API key for your Intent Pay developer account. It stays in this browser and is
           never sent anywhere except the API.
         </p>
@@ -237,7 +237,7 @@ export function MerchantConsole() {
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="ipk_live_…"
-            className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-mono/50 focus:outline-none"
+            className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-xs text-white placeholder:text-white/50 focus:border-mono/50 focus:outline-none"
           />
           <button
             onClick={() => void connect()}
@@ -252,7 +252,7 @@ export function MerchantConsole() {
             <Warning className="h-3.5 w-3.5" /> {authError}
           </p>
         )}
-        <p className="mt-2 text-[11px] text-white/35">
+        <p className="mt-2 text-[11px] text-white/55">
           No key yet?{" "}
           <a href="/docs/api" className="text-mono-soft hover:underline">
             Create a developer account
@@ -281,14 +281,14 @@ export function MerchantConsole() {
                 </span>
               </div>
             </div>
-            <p className="mt-1 text-xs text-white/45">
+            <p className="mt-1 text-xs text-white/55">
               {attribution?.checkoutBound
                 ? "Each order is paid to a unique address derived from your xpub, so a payment can only settle the order it was created for. Only your wallet holds the keys; Intent Pay watches, and can never spend."
                 : "Recommended: register a payment xpub so every order gets its own destination. Without it, orders share your recipient and attribution relies only on the token, amount and timing guards — a payment cannot be tied to one specific order."}
             </p>
             {attribution?.checkoutBound && attribution.preview.length > 0 && (
               <div className="mt-3 rounded-xl bg-white/[0.03] p-3">
-                <div className="text-[10px] uppercase tracking-wide text-white/40">Next destinations</div>
+                <div className="text-[10px] uppercase tracking-wide text-white/55">Next destinations</div>
                 <div className="mt-1 space-y-0.5 font-mono text-[11px] text-white/60">
                   {attribution.preview.map((a) => (
                     <div key={a} className="truncate">
@@ -303,7 +303,7 @@ export function MerchantConsole() {
                 value={xpubInput}
                 onChange={(e) => setXpubInput(e.target.value)}
                 placeholder={attribution?.checkoutBound ? "Replace xpub (xpub…)" : "xpub… (watch-only public key)"}
-                className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-[11px] text-white placeholder:text-white/25 focus:border-mono/50 focus:outline-none"
+                className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-[11px] text-white placeholder:text-white/50 focus:border-mono/50 focus:outline-none"
               />
               <button
                 onClick={() => void saveXpub(xpubInput.trim() || null)}
@@ -322,10 +322,10 @@ export function MerchantConsole() {
                 </button>
               )}
             </div>
-            <p className="mt-2 text-[11px] text-white/35">
+            <p className="mt-2 text-[11px] text-white/55">
               Use the account extended <strong className="text-white/50">public</strong> key (xpub…) exported by
               your own wallet — the derived addresses then follow your normal receive path{" "}
-              <code className="text-white/45">m/44&apos;/60&apos;/0&apos;/0/i</code> and appear in your wallet. A
+              <code className="text-white/55">m/44&apos;/60&apos;/0&apos;/0/i</code> and appear in your wallet. A
               private key (xprv) or a seed phrase is refused. You sweep the funds later with the wallet that holds
               the matching seed — Intent Pay never can.
             </p>
@@ -338,7 +338,7 @@ export function MerchantConsole() {
 
           <section className="card p-5">
             <h2 className="text-sm font-semibold text-white/90">Create a payment link</h2>
-            <p className="mt-1 text-xs text-white/45">
+            <p className="mt-1 text-xs text-white/55">
               {attribution?.checkoutBound
                 ? "This order will be paid to its own derived destination (per-order attribution)."
                 : "This order will share your recipient address. Register a payment xpub above to give each order its own destination."}
@@ -364,7 +364,7 @@ export function MerchantConsole() {
                   value={recipient}
                   onChange={(e) => setRecipient(e.target.value)}
                   placeholder="0x…"
-                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-xs text-white placeholder:text-white/25 focus:border-mono/50 focus:outline-none"
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 font-mono text-xs text-white placeholder:text-white/50 focus:border-mono/50 focus:outline-none"
                 />
                 {wallet.address && (
                   <button
@@ -380,7 +380,7 @@ export function MerchantConsole() {
                   value={orderReference}
                   onChange={(e) => setOrderReference(e.target.value)}
                   placeholder="ORDER-1001"
-                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/25 focus:border-mono/50 focus:outline-none"
+                  className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white placeholder:text-white/50 focus:border-mono/50 focus:outline-none"
                 />
               </Field>
             </div>
@@ -406,7 +406,7 @@ export function MerchantConsole() {
                 <PaymentQR value={created.link} />
                 <div className="min-w-0 flex-1 space-y-3">
                   <div className="rounded-xl bg-white/[0.03] p-3">
-                    <div className="text-[10px] uppercase tracking-wide text-white/40">Payment link</div>
+                    <div className="text-[10px] uppercase tracking-wide text-white/55">Payment link</div>
                     <div className="mt-1 break-all font-mono text-xs text-white/75">{created.link}</div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -442,7 +442,7 @@ export function MerchantConsole() {
               </button>
             </div>
             {checkouts.length === 0 ? (
-              <p className="mt-3 text-xs text-white/40">No orders yet.</p>
+              <p className="mt-3 text-xs text-white/55">No orders yet.</p>
             ) : (
               <div className="mt-3 divide-y divide-white/[0.05]">
                 {checkouts.map((c) => (
@@ -450,7 +450,7 @@ export function MerchantConsole() {
                     <div className="min-w-0">
                       <div className="truncate text-xs text-white/75">
                         {c.orderReference ?? c.id}
-                        {c.amount ? <span className="text-white/45"> · ${c.amount}</span> : null}
+                        {c.amount ? <span className="text-white/55"> · ${c.amount}</span> : null}
                       </div>
                       <a
                         href={`/checkout/${c.token}`}
@@ -476,12 +476,12 @@ export function MerchantConsole() {
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusTone(c.status)}`}>{c.status}</span>
                       <button
                         onClick={() => void loadEvidence(c.id)}
-                        className="text-[11px] text-white/40 hover:text-mono-soft"
+                        className="text-[11px] text-white/55 hover:text-mono-soft"
                       >
                         {evidenceLoading === c.id ? "…" : "Evidence"}
                       </button>
                       {c.status === "open" && (
-                        <button onClick={() => void cancel(c.id)} className="text-[11px] text-white/40 hover:text-rose-200">
+                        <button onClick={() => void cancel(c.id)} className="text-[11px] text-white/55 hover:text-rose-200">
                           Cancel
                         </button>
                       )}
@@ -502,7 +502,7 @@ export function MerchantConsole() {
             <section className="card p-5">
               <div className="flex items-center justify-between gap-2">
                 <h2 className="text-sm font-semibold text-white/90">Settlement evidence</h2>
-                <button onClick={() => setEvidence(null)} className="text-xs text-white/40 hover:text-white/70">
+                <button onClick={() => setEvidence(null)} className="text-xs text-white/55 hover:text-white/70">
                   Close
                 </button>
               </div>
@@ -524,7 +524,7 @@ export function MerchantConsole() {
                       >
                         {settled ? "Settled on-chain" : "Not settled"}
                       </span>
-                      <span className="text-white/45">
+                      <span className="text-white/55">
                         {checkout?.status ?? "—"} · {checkout?.phase ?? "—"}
                       </span>
                     </div>
@@ -536,7 +536,7 @@ export function MerchantConsole() {
                         {settlement.blockNumber ? <> · block {settlement.blockNumber}</> : null}
                       </div>
                     )}
-                    {settlement?.message && <p className="text-white/45">{settlement.message}</p>}
+                    {settlement?.message && <p className="text-white/55">{settlement.message}</p>}
                     {txHashes.length > 0 && (
                       <div className="space-y-0.5">
                         {txHashes.map((h) => (
@@ -566,7 +566,7 @@ export function MerchantConsole() {
 function Field({ label, children, full }: { label: string; children: React.ReactNode; full?: boolean }) {
   return (
     <label className={`block ${full ? "sm:col-span-2" : ""}`}>
-      <span className="mb-1 block text-[11px] uppercase tracking-wide text-white/40">{label}</span>
+      <span className="mb-1 block text-[11px] uppercase tracking-wide text-white/55">{label}</span>
       {children}
     </label>
   );

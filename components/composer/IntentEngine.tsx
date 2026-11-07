@@ -197,7 +197,7 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                         <TokenBadge token={assetToToken(a)} size={26} />
                         <span className="min-w-0">
                           <span className="block truncate text-sm font-semibold text-white">{a.symbol}</span>
-                          <span className="block truncate text-[11px] text-white/40">
+                          <span className="block truncate text-[11px] text-white/55">
                             {a.held ? `Balance ${formatAmount(a.balance ?? "0")}` : "Via conversion"}
                           </span>
                         </span>
@@ -240,11 +240,11 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                             <span className="block truncate text-sm font-semibold text-white">
                               {m.symbol} · {m.name}
                             </span>
-                            <span className="block truncate font-mono text-[11px] text-white/40">
+                            <span className="block truncate font-mono text-[11px] text-white/55">
                               {m.address}
                             </span>
                           </span>
-                          <span className="ml-2 shrink-0 text-[11px] text-white/40">
+                          <span className="ml-2 shrink-0 text-[11px] text-white/55">
                             {m.decimals} dp{m.listed ? " · listed" : ""}
                           </span>
                         </button>
@@ -271,7 +271,7 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
                         </span>
                       </div>
                       {result.handoff?.price != null && (
-                        <span className="num text-[11px] text-white/40">
+                        <span className="num text-[11px] text-white/55">
                           1 {result.draft.asset} ≈ {formatUsd(result.handoff.price)}
                         </span>
                       )}
@@ -287,7 +287,7 @@ export function IntentEngine({ onPrefilled }: { onPrefilled?: () => void }) {
               </div>
 
               {result.llm && (
-                <p className="mt-2 text-[11px] text-white/30">
+                <p className="mt-2 text-[11px] text-white/55">
                   Language hints are AI-assisted. Prices, routes and amounts always come from live
                   on-chain data — never the model.
                 </p>

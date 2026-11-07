@@ -97,7 +97,7 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
                   ? "bg-emerald-400/10 text-emerald-200/90"
                   : it.degraded
                     ? "bg-amber-400/10 text-amber-200/90"
-                    : "bg-white/[0.05] text-white/40"
+                    : "bg-white/[0.05] text-white/55"
               }`}
             >
               <span
@@ -108,10 +108,10 @@ export function IntegrationStack({ network }: { network: MonadNetwork }) {
               {it.active ? "Active" : it.degraded ? "Check" : "Off"}
             </span>
           </div>
-          <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/30">
+          <div className="mt-0.5 text-[10px] uppercase tracking-[0.14em] text-white/55">
             {it.role}
           </div>
-          <div className="mt-1.5 text-[11px] leading-snug text-white/45">{it.detail}</div>
+          <div className="mt-1.5 text-[11px] leading-snug text-white/55">{it.detail}</div>
         </div>
       ))}
     </div>

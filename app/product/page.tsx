@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { MarketingShell, Section, FeatureGrid, NextStep } from "@/components/landing/MarketingShell";
-import { Lifecycle } from "@/components/landing/HomeSections";
+import { Lifecycle, WhyMonad } from "@/components/landing/HomeSections";
 import { Bolt, Code, Shield, Store } from "@/components/ui/Icons";
 
 export const metadata: Metadata = {
@@ -22,7 +22,7 @@ export default function Product() {
     <MarketingShell
       eyebrow="Product"
       title="Payments that start from an outcome, not a token"
-      intro="Intent Pay is payment infrastructure on Monad. You describe what the recipient should receive — recipient, amount, token — and the system resolves which asset you spend, the route, and the transaction. You stay in control of authorization."
+      intro="Intent Pay is payment infrastructure on Monad. You say who receives, how much and which token — and the system works out which asset you spend, the route, and the transaction. You stay in control of authorization, and settlement is verified on-chain."
       actions={
         <>
           <Link href="/#pay" className="btn-primary">
@@ -60,6 +60,8 @@ export default function Product() {
         <div className="mt-1" />
       </Section>
       <Lifecycle />
+
+      <WhyMonad />
 
       <Section title="What is real today">
         <FeatureGrid

@@ -363,5 +363,35 @@ describe("watchWallets", () => {
         vi.useRealTimers();
       }
     });
+
+    it("discovers the real iOS factory shape injected late (trustwallet.ethereum is a factory)", () => {
+      // Trust Wallet's iOS in-app browser exposes `window.trustwallet.ethereum`
+      // as a *factory function* (`window.trustwallet.ethereum()` returns the
+      // provider), not the provider itself, and sets `window.ethereum` to the
+      // provider. A late injection of that exact shape must still be seen — a
+      // bare provider check that only accepted an object with `.request` would
+      // miss the namespace, and the identity must come from `window.ethereum`.
+      vi.useFakeTimers();
+      try {
+        const win = fakeWindow(undefined);
+        const seen: number[] = [];
+        const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+        expect(seen[seen.length - 1]).toBe(0);
+
+        // ~9s later: the factory namespace and the provider appear together.
+        vi.advanceTimersByTime(9000);
+        const provider = fakeProvider({ isTrust: true, isTrustWallet: true });
+        (win as unknown as { trustwallet?: { ethereum: () => Eip1193Provider } }).trustwallet = {
+          ethereum: () => provider,
+        };
+        (win as { ethereum?: Eip1193Provider }).ethereum = provider;
+        vi.advanceTimersByTime(2500);
+
+        expect(seen[seen.length - 1]).toBe(1);
+        destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

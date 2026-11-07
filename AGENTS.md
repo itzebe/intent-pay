@@ -660,6 +660,25 @@ price impact, balance/gas coverage, rebuilds the calldata from the fresh quote,
 asserts the bound + deadline, and re-reads the intent a final time. Any change
 aborts with a specific reason; calldata is never reused from an earlier build.
 
+## A submission is sent exactly once (never retried)
+
+`sendTransactionViaWallet` (`lib/wallet/sendTransaction.ts`) submits the raw
+`eth_sendTransaction` through `walletClient.request`. viem's transport default is
+`retryCount: 3`, and it retries a **transport-shaped** failure — the exact shape
+a Trust Wallet provider throws when it cannot reach its own node
+(`Failed to connect to http://monad.twnodes.com/ …:443`). Without an explicit
+`{ retryCount: 0 }` the same `eth_sendTransaction` is issued up to **four times**:
+the wallet re-prompts the user and the same payment can be broadcast more than
+once. **A transaction submission must never be retried** — every viem wallet
+action that signs or submits (`sendTransaction`, `sendRawTransaction`,
+`signMessage`, `sendCalls`, …) passes `retryCount: 0` for this exact reason, and
+this raw `request` path replaced one of those (`writeContract`), so it must carry
+the same rule. A viem-level retry is only safe for idempotent *reads*. The hosted
+checkout and the SDK use the bare EIP-1193 provider (`lib/wallet/sendCalls.ts`,
+`packages/sdk/src/wallet/connect.ts`) and are outside viem's retry layer.
+Regression: `tests/trustSendPreparation.test.ts` (a wallet transport failure must
+call `eth_sendTransaction` once).
+
 ## Delivery verification
 
 `verifyDelivery` (`lib/execution/verify.ts`) proves the recipient's actual

@@ -81,23 +81,35 @@ export async function sendTransactionViaWallet(
 ): Promise<WalletSendResult> {
   const chainId = `0x${NETWORKS[network].chainId.toString(16)}` as `0x${string}`;
   try {
-    const hash = await walletClient.request({
-      // viem's `request` forwards verbatim to the provider's `request`, so no
-      // chain assertion and no nonce/gas estimation is performed through the
-      // wallet — the only wallet call is this one submission. The envelope
-      // fields the wallet would otherwise have to fetch are supplied by the app.
-      method: "eth_sendTransaction",
-      params: [
-        buildSendParams({
-          from: account,
-          to: call.to,
-          data: call.data,
-          value: call.value,
-          chainId,
-          prepared,
-        }),
-      ],
-    } as never);
+    const hash = await walletClient.request(
+      {
+        // viem's `request` forwards verbatim to the provider's `request`, so no
+        // chain assertion and no nonce/gas estimation is performed through the
+        // wallet — the only wallet call is this one submission. The envelope
+        // fields the wallet would otherwise have to fetch are supplied by the app.
+        method: "eth_sendTransaction",
+        params: [
+          buildSendParams({
+            from: account,
+            to: call.to,
+            data: call.data,
+            value: call.value,
+            chainId,
+            prepared,
+          }),
+        ],
+      } as never,
+      // A transaction submission must NEVER be retried. viem's transport default
+      // is `retryCount: 3`, and it retries a *transport-shaped* failure (a wallet
+      // that could not reach its own node — the Trust Wallet case). That
+      // re-invokes `eth_sendTransaction` up to four times, so the wallet's
+      // approval is shown again and the same payment can be broadcast more than
+      // once. Every viem wallet action that signs or submits (`sendTransaction`,
+      // `sendRawTransaction`, `signMessage`, …) passes `retryCount: 0` for this
+      // exact reason; this raw `request` path replaced one of those, so it must
+      // carry the same rule.
+      { retryCount: 0 },
+    );
     if (typeof hash !== "string" || !TX_HASH_RE.test(hash)) {
       return { ok: false, reason: "invalid_hash" };
     }

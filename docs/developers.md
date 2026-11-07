@@ -6,11 +6,18 @@ This guide is the repository-level developer onboarding. The in-app reference at
 
 ## Onboarding
 
+The fastest path is the in-app quickstart at
+[`/docs/quickstart`](https://intent-pay-roan.vercel.app/docs/quickstart): it takes
+you from a key to a verified settlement with the real request and response shapes.
+
 1. Read [`vision.md`](./vision.md) and [`architecture.md`](./architecture.md).
 2. Skim [`../AGENTS.md`](../AGENTS.md) — it lists the invariants that must not
    regress (the submission is never retried; a broadcast is not a success; the
    requested output asset is authoritative).
-3. Run the app locally (below).
+3. Run the app locally (below) and create a developer key with
+   `POST /api/v1/developers`. On **production, signup is closed** — the operator
+   enables it with `INTENT_PAY_ADMIN_TOKEN`, so an integrator requests a key from
+   the operator. There is no self-serve production signup today.
 4. Exercise routing without a wallet via `POST /api/quote`.
 
 ## Local development
@@ -82,9 +89,22 @@ curl -s -X POST http://localhost:3000/api/quote \
 
 ## SDK setup
 
+The SDK lives in this repository at [`packages/sdk`](../packages/sdk) and is **not
+yet published to npm**, so `npm install @intentpay/sdk` does not work today. Build
+it and install the tarball:
+
 ```bash
-npm install @intentpay/sdk
+cd packages/sdk
+npm install
+npm run build
+npm pack                       # → intentpay-sdk-0.1.0.tgz
+
+# in your own project:
+npm install /path/to/intent-pay/packages/sdk/intentpay-sdk-0.1.0.tgz
 ```
+
+The import specifiers are stable regardless of how it is installed. When the
+package is published, `npm install @intentpay/sdk` replaces the build step.
 
 ```ts
 import { IntentPay } from "@intentpay/sdk";
@@ -117,11 +137,16 @@ const { txHashes } = await wallet.sendCalls(prepared.calls);
 
 ## Integration examples
 
+- [In-app quickstart](https://intent-pay-roan.vercel.app/docs/quickstart) — the
+  same lifecycle, with the real request/response shapes.
 - [`examples/quickstart`](../examples/quickstart) — a minimal server that creates
   an intent and serves a payment page.
 - [`examples/merchant`](../examples/merchant) — a merchant integration.
+- [`examples/status-and-verify`](../examples/status-and-verify) — a headless
+  status check and settlement verification (no browser, no wallet).
 
-Both are runnable with `node server.mjs`; see each example's README.
+The examples are runnable with `node server.mjs` (or `node check.mjs`); see each
+example's README.
 
 ## Testing
 

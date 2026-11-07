@@ -49,13 +49,23 @@ POST /api/v1/intents/{id}/verify         verify settlement on-chain — the only
       </Section>
 
       <Section title="Install the SDK">
+        <p className="mb-3 text-sm leading-relaxed text-white/55">
+          The SDK is developed in this repository and is not yet on npm, so it is
+          built and installed from source. The import specifiers are stable either way.
+        </p>
         <div className="card-flat overflow-x-auto p-4">
           <pre className="font-mono text-xs leading-relaxed text-white/70">
-{`npm install @intentpay/sdk
-# optional: mobile / QR wallets
+{`# build the SDK from this repository, then install the tarball
+cd packages/sdk && npm install && npm run build && npm pack
+npm install /path/to/intent-pay/packages/sdk/intentpay-sdk-0.1.0.tgz
+
+# optional: mobile / QR wallets (peer dependency)
 npm install @walletconnect/ethereum-provider`}
           </pre>
         </div>
+        <p className="mt-3 text-xs leading-relaxed text-white/40">
+          When the package is published, <Code>npm install @intentpay/sdk</Code> replaces the build step.
+        </p>
       </Section>
 
       <Section
@@ -139,6 +149,7 @@ const { txHashes } = await wallet.sendCalls(prepared.calls); // in order, each c
 
       <Section title="Next">
         <div className="grid gap-3 sm:grid-cols-2">
+          <NextStep href="/docs/quickstart" label="Quickstart" body="Authenticate, create an intent, prepare, submit and verify" />
           <NextStep href="/docs/api" label="API reference" body="Every endpoint, request and response" />
           <NextStep href="/docs/developers" label="Integration guide" body="Repository layout, commands and configuration" />
           <NextStep href="/docs/checkout" label="Merchant checkout" body="The two-step intent → checkout model" />

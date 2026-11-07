@@ -28,6 +28,7 @@ export const PUBLIC_ROUTES: { path: string; priority: number }[] = [
   { path: "/docs/security", priority: 0.6 },
   { path: "/docs/roadmap", priority: 0.5 },
   { path: "/docs/faq", priority: 0.6 },
+  { path: "/docs/quickstart", priority: 0.7 },
   { path: "/docs/developers", priority: 0.5 },
   { path: "/docs/api", priority: 0.6 },
   { path: "/docs/checkout", priority: 0.7 },

@@ -114,6 +114,7 @@ describe("public route config", () => {
       "/docs/security",
       "/docs/roadmap",
       "/docs/faq",
+      "/docs/quickstart",
       "/docs/developers",
       "/docs/api",
       "/docs/checkout",

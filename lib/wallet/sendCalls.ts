@@ -22,6 +22,13 @@
 /** A raw `{to,data,value}` call as returned by the prepare endpoints. */
 export type RawCall = { to: string; data: string; value: string };
 
+/**
+ * The envelope fields the app prepares for a call before the wallet sees it.
+ * Re-exported so a caller can supply `gas`/fee/nonce without importing the
+ * execution layer directly.
+ */
+export type { TxPreparation } from "@/lib/execution/prepareTx";
+
 /** Why a sequential submission stopped early. */
 export type SendFailureReason =
   | "rejected"
@@ -62,17 +69,22 @@ export function isUserRejection(err: unknown): boolean {
  */
 export async function sendCallsSequentially(input: {
   calls: RawCall[];
-  /** Sign and broadcast one call; resolves to the wallet's transaction hash. */
-  send: (call: RawCall) => Promise<unknown>;
+  /**
+   * Sign and broadcast one call; resolves to the wallet's transaction hash.
+   * `index` is the position in `calls`, so the caller can prepare a fresh
+   * nonce/fee envelope per call (the nonce must not be reused across a sequence).
+   */
+  send: (call: RawCall, index: number) => Promise<unknown>;
   /** Resolve once the transaction is mined, with its final status. */
   waitForReceipt: (hash: string) => Promise<{ status: string }>;
 }): Promise<SendOutcome> {
   const hashes: string[] = [];
 
-  for (const call of input.calls) {
+  for (let index = 0; index < input.calls.length; index++) {
+    const call = input.calls[index];
     let raw: unknown;
     try {
-      raw = await input.send(call);
+      raw = await input.send(call, index);
     } catch (err) {
       return {
         ok: false,

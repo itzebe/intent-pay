@@ -2,6 +2,7 @@
 
 import type { Address, WalletClient } from "viem";
 import { NETWORKS } from "@/lib/config/chains";
+import { buildSendParams, type TxPreparation } from "@/lib/execution/prepareTx";
 
 /**
  * Provider-agnostic transaction submission.
@@ -26,6 +27,13 @@ import { NETWORKS } from "@/lib/config/chains";
  * identity the app already validated, and the wallet broadcasts it through its
  * native path. The app still never sees a key and never signs on the user's
  * behalf — this only removes an unnecessary wallet RPC read.
+ *
+ * `prepared` (see `lib/execution/prepareTx`) additionally supplies `gas`, the
+ * EIP-1559 fee fields and an optional `nonce`, all read by the app through its
+ * own HTTPS Monad RPC. A wallet whose own node is unreachable (Trust Wallet's
+ * in-app browser proxying to `monad.twnodes.com`) then has nothing left to
+ * estimate or fetch before it can sign — the reported Confirm-and-Send failure.
+ * A field the app could not read is omitted, never fabricated.
  *
  * The return value is deliberately a discriminated result rather than a bare
  * hash, so a caller can tell "the wallet rejected" (definite failure) from
@@ -69,22 +77,25 @@ export async function sendTransactionViaWallet(
   account: Address,
   call: { to: Address; data?: `0x${string}`; value?: bigint },
   network: "mainnet" = "mainnet",
+  prepared?: TxPreparation,
 ): Promise<WalletSendResult> {
-  const chainId = `0x${NETWORKS[network].chainId.toString(16)}`;
+  const chainId = `0x${NETWORKS[network].chainId.toString(16)}` as `0x${string}`;
   try {
     const hash = await walletClient.request({
       // viem's `request` forwards verbatim to the provider's `request`, so no
       // chain assertion and no nonce/gas estimation is performed through the
-      // wallet — the only wallet call is this one submission.
+      // wallet — the only wallet call is this one submission. The envelope
+      // fields the wallet would otherwise have to fetch are supplied by the app.
       method: "eth_sendTransaction",
       params: [
-        {
+        buildSendParams({
           from: account,
           to: call.to,
-          data: call.data && call.data !== "0x" ? call.data : undefined,
-          value: call.value !== undefined ? `0x${call.value.toString(16)}` : undefined,
+          data: call.data,
+          value: call.value,
           chainId,
-        },
+          prepared,
+        }),
       ],
     } as never);
     if (typeof hash !== "string" || !TX_HASH_RE.test(hash)) {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBalances, useWallet } from "@/lib/hooks/useWallet";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { sendCallsSequentially } from "@/lib/wallet/sendCalls";
+import { prepareTxFields, buildSendParams } from "@/lib/execution/prepareTx";
 import { logCheckoutDiagnostic, diagnosticCodeOf } from "@/lib/wallet/checkoutDiagnostics";
 import { classifyTransactionError, isTransportError } from "@/lib/domain/transactionError";
 import { NETWORKS, explorerTxUrl } from "@/lib/config/chains";
@@ -255,26 +256,46 @@ export function CheckoutClient({ token }: { token: string }) {
         setActionError("Connect a wallet to pay.");
         return;
       }
+      const pub = getClientPublicClient(wallet.network ?? "mainnet");
       const outcome = await sendCallsSequentially({
         calls: prepared.calls,
-        send: (call) =>
-          wallet.provider!.request({
+        send: async (call) => {
+          // Prepare the envelope (gas / EIP-1559 fees / nonce) with Intent Pay's
+          // OWN RPC before the wallet sees it, so a wallet whose own node is
+          // unreachable (Trust Wallet's in-app browser proxying to
+          // `monad.twnodes.com`) has nothing left to estimate. A multi-call
+          // payment gets a fresh nonce per call so the sequence cannot reorder.
+          const envelope = await prepareTxFields(
+            pub,
+            {
+              to: call.to as `0x${string}`,
+              data: call.data && call.data !== "0x" ? (call.data as `0x${string}`) : undefined,
+              value: call.value && call.value !== "0" ? BigInt(call.value) : undefined,
+            },
+            {
+              account: wallet.address as `0x${string}`,
+              includeNonce: prepared.calls.length > 1,
+            },
+          );
+          return wallet.provider!.request({
             method: "eth_sendTransaction",
             params: [
-              {
-                from: wallet.address,
-                to: call.to,
-                data: call.data && call.data !== "0x" ? call.data : undefined,
-                value: call.value && call.value !== "0" ? `0x${BigInt(call.value).toString(16)}` : undefined,
+              buildSendParams({
+                from: wallet.address as `0x${string}`,
+                to: call.to as `0x${string}`,
+                data: call.data && call.data !== "0x" ? (call.data as `0x${string}`) : undefined,
+                value: call.value && call.value !== "0" ? BigInt(call.value) : undefined,
                 // The chain identity travels with the request, so the wallet
                 // never has to answer `eth_chainId` itself. A page-world provider
                 // (Trust Wallet) proxies that read to its own node, which is
                 // unreachable on Monad — and a wallet-side failure must not be
                 // mistaken for Intent Pay's RPC being down.
-                chainId: `0x${(wallet.chainId ?? 143).toString(16)}`,
-              },
+                chainId: `0x${(wallet.chainId ?? 143).toString(16)}` as `0x${string}`,
+                prepared: envelope,
+              }),
             ],
-          }),
+          });
+        },
         waitForReceipt: (hash) =>
           getClientPublicClient(wallet.network ?? "mainnet").waitForTransactionReceipt({
             hash: hash as `0x${string}`,

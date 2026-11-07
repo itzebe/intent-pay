@@ -297,6 +297,49 @@ describe("sendCalls", () => {
     // No throw: an unreadable chain is unknown, not wrong.
     await expect(wallet.ensureMonadChain()).resolves.toBeUndefined();
   });
+
+  /**
+   * Mission 24. When the caller has prepared the envelope (gas / EIP-1559 fees /
+   * nonce) with its own RPC, the SDK must forward those fields verbatim so the
+   * wallet has nothing left to estimate — the `monad.twnodes.com` failure.
+   */
+  it("forwards caller-prepared gas, fees and nonce to the wallet", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await wallet.sendCalls([
+      {
+        to: ADDR,
+        data: "0x",
+        value: "0",
+        gas: "21000",
+        maxFeePerGas: "122000000000",
+        maxPriorityFeePerGas: "2000000000",
+        nonce: "7",
+      },
+    ]);
+    const send = provider.calls.find((c) => c.method === "eth_sendTransaction")!;
+    const params = (send.params as unknown[])[0] as Record<string, string>;
+    expect(params.gas).toBe("0x5208");
+    expect(params.maxFeePerGas).toBe("0x1c67c44400");
+    expect(params.maxPriorityFeePerGas).toBe("0x77359400");
+    expect(params.nonce).toBe("0x7");
+  });
+
+  it("drops a malformed envelope field rather than forwarding a bad number", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await wallet.sendCalls([
+      { to: ADDR, data: "0x", value: "0", gas: "not-a-number", maxFeePerGas: "" },
+    ]);
+    const send = provider.calls.find((c) => c.method === "eth_sendTransaction")!;
+    const params = (send.params as unknown[])[0] as Record<string, string>;
+    expect(params.gas).toBeUndefined();
+    expect(params.maxFeePerGas).toBeUndefined();
+    // The chain identity and value are still present.
+    expect(params.chainId).toBe("0x8f");
+  });
 });
 
 describe("account and chain change handling", () => {

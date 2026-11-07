@@ -19,8 +19,25 @@ import {
   type WalletConnectOptions,
 } from "./provider.js";
 
-/** A prepared call, as returned by `prepareTransaction`. */
-export type PreparedCall = { to: string; data: string; value: string };
+/**
+ * A prepared call, as returned by `prepareTransaction`.
+ *
+ * The optional `gas` / `maxFeePerGas` / `maxPriorityFeePerGas` / `nonce` fields
+ * let the caller (or the Intent Pay API) fill the transaction envelope with its
+ * own RPC reads before the wallet is asked to sign. A wallet whose own node is
+ * unreachable — Trust Wallet's in-app browser proxies non-native methods to
+ * `monad.twnodes.com` — then has nothing left to estimate before it can sign.
+ * Omit a field you could not read; the wallet will fall back to its own source.
+ */
+export type PreparedCall = {
+  to: string;
+  data: string;
+  value: string;
+  gas?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
+  nonce?: string;
+};
 
 /** The hash(es) a wallet produced. */
 export type SentTransaction = { txHashes: string[] };
@@ -317,8 +334,17 @@ export class Wallet {
           method: "eth_sendTransaction",
           // The chain identity travels with the request, so the wallet never has
           // to answer `eth_chainId` itself — a page-world provider (Trust
-          // Wallet) may not be able to reach its own node to do so.
-          params: [{ from, to: call.to, data: call.data && call.data !== "0x" ? call.data : undefined, value: normalizeValue(call.value), chainId: "0x" + MONAD_CHAIN_ID.toString(16) }],
+          // Wallet) may not be able to reach its own node to do so. The
+          // envelope fields the caller supplied (gas/fees/nonce) are forwarded
+          // verbatim so the wallet has nothing left to estimate.
+          params: [{
+            from,
+            to: call.to,
+            data: call.data && call.data !== "0x" ? call.data : undefined,
+            value: normalizeValue(call.value),
+            chainId: "0x" + MONAD_CHAIN_ID.toString(16),
+            ...envelopeFields(call),
+          }],
         });
         if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash)) {
           throw new WalletError("wallet_no_account", "The wallet did not return a transaction hash.");
@@ -417,6 +443,28 @@ function normalizeValue(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The envelope fields a caller may have prepared, as EIP-1193 hex quantities.
+ * A value that is absent, malformed or non-positive is dropped rather than
+ * forwarded — an invalid field would be worse than none (the wallet must fall
+ * back to its own source, not be handed a bad number).
+ */
+function envelopeFields(call: PreparedCall): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of ["gas", "maxFeePerGas", "maxPriorityFeePerGas", "nonce"] as const) {
+    const raw = call[key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    try {
+      const n = BigInt(raw);
+      if (n < 0n) continue;
+      out[key] = "0x" + n.toString(16);
+    } catch {
+      /* drop a malformed value */
+    }
+  }
+  return out;
 }
 
 /** Re-exported for callers that want to render a chooser. */

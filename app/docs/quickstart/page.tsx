@@ -344,8 +344,10 @@ try {
           </LI>
           <LI>
             <strong><Code>email_unavailable</Code></strong> — self-service signup needs an email
-            provider (<Code>RESEND_API_KEY</Code> + <Code>EMAIL_FROM</Code>) configured on the
-            deployment. The operator provisions keys directly meanwhile.
+            provider configured on the deployment: either SMTP (<Code>EMAIL_PROVIDER=smtp</Code>,{" "}
+            <Code>EMAIL_FROM</Code>, <Code>SMTP_HOST</Code>, <Code>SMTP_PORT</Code>,{" "}
+            <Code>SMTP_USER</Code>, <Code>SMTP_PASS</Code>) or Resend (<Code>RESEND_API_KEY</Code> +{" "}
+            <Code>EMAIL_FROM</Code>). The operator provisions keys directly meanwhile.
           </LI>
           <LI>
             <strong>&ldquo;Test API keys are not accepted in production&rdquo;</strong> — use a live

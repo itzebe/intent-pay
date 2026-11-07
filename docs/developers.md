@@ -62,6 +62,62 @@ INTENT_LLM_MODEL=gpt-4o-mini
 No key is required to run the deterministic intent parser, the composer, or the
 demo routing provider.
 
+## Email delivery (self-service signup)
+
+Self-service signup needs exactly one working email provider. `EMAIL_PROVIDER`
+selects it explicitly; when it is unset the provider is auto-detected in this
+order: Resend, then SMTP, then the development-only capture outbox. An unknown
+value disables email rather than silently falling back to another provider.
+
+### SMTP (Gmail or any authenticated TLS host)
+
+```
+EMAIL_PROVIDER=smtp
+EMAIL_FROM=your-address@gmail.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465            # 465 = implicit TLS; any other port requires STARTTLS
+SMTP_USER=your-address@gmail.com
+SMTP_PASS=               # a Gmail App Password (see below) — never committed
+SMTP_TLS_CA=             # optional base64 PEM, for a private/self-signed host
+```
+
+Credentials are read only from the process environment and are never logged,
+returned, or included in a message. Port 465 uses implicit TLS; every other port
+requires STARTTLS (`requireTLS`), so the password never crosses a plaintext
+socket. `nodemailer` is imported lazily, so it is only loaded when SMTP is
+actually selected.
+
+For Gmail, `SMTP_PASS` must be a 16-character **App Password**, not the account
+password:
+
+1. Enable 2-Step Verification on the Google account.
+2. Google account → Security → 2-Step Verification → App passwords.
+3. Create an app password for "Mail" and use the generated 16-character value as
+   `SMTP_PASS`. Google rejects a normal account password over SMTP.
+
+Set these in the deployment's secret manager (for Vercel: Project → Settings →
+Environment Variables). Never commit them.
+
+### Resend (HTTP API)
+
+```
+EMAIL_PROVIDER=resend     # or leave EMAIL_PROVIDER unset to auto-detect
+EMAIL_FROM=you@your-verified-domain.com
+RESEND_API_KEY=           # https://resend.com — a free tier is available
+```
+
+`EMAIL_FROM` must be a verified sender on that Resend account.
+
+### Failure behaviour
+
+The transport never reports a success it cannot substantiate. If SMTP is selected
+but incomplete (a required variable missing or a malformed port) the transport is
+`none`, and `/register` refuses with `503 email_unavailable`. A connection
+failure, a rejected authentication or a refused recipient each make `/register`
+return `502 provider_error` with a fixed, credential-free sentence — the account
+stays pending and no key is issued. `/api/v1/capabilities` reports whether a
+provider is configured via `auth.emailVerificationConfigured`.
+
 ## API usage
 
 The versioned API is the external contract.

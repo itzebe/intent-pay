@@ -1,0 +1,110 @@
+# Intent Pay
+
+> Intent Pay is payment infrastructure on Monad (chain id 143) that connects a
+> payment intention with blockchain execution. A user states what the recipient
+> should receive — recipient, amount, token — and the system determines which
+> asset the sender spends, the route, and the transaction, which the user
+> authorizes in their own wallet. It is non-custodial, it never retries a
+> transaction submission, and it proves settlement from the confirmed receipt
+> rather than treating a broadcast as success.
+
+Intent Pay is a Next.js + TypeScript application with a colocated TypeScript SDK.
+It is deliberately **not** a swap interface: the user's mental model is a payment,
+not a trade. It is not a bridge, it is not gasless (gas is always paid in native
+MON), and it never holds a user's key.
+
+## Architecture
+
+- **Intent** (`lib/domain/intent.ts`) is the single canonical payment state. The
+  chat, composer, quote, plan and signing guard all read it. `DEFAULT_INTENT` is
+  empty by design.
+- **Natural language** (`lib/nlp/*`) is a deterministic, offline parser. An
+  optional LLM may only fill gaps and can never supply a price, route, address or
+  transaction.
+- **Wallet** (`lib/wallet/*`, `lib/hooks/useWallet.tsx`) discovers injected
+  wallets via EIP-6963 with a legacy fallback, plus WalletConnect when a project
+  id is configured.
+- **Routing** (`lib/providers/uniswapV3.ts`) is live Uniswap V3 on Monad:
+  exact-output and exact-input, every fee tier quoted.
+- **Construction** (`lib/execution/plan.ts`, `lib/execution/prepareTx.ts`) builds
+  the plan and the transaction envelope (gas, EIP-1559 fees, nonce).
+- **Execution** (`lib/execution/execute.ts`, `lib/wallet/sendTransaction.ts`)
+  submits steps sequentially and exactly once.
+- **Verification** (`lib/execution/verify.ts`, `lib/execution/signGuard.ts`)
+  guards the signature and proves delivery.
+
+## Product capabilities
+
+- Intent-based payment composer with a natural-language intent bar.
+- Live Monad Mainnet balances, prices and Uniswap V3 routes.
+- Multi-wallet connectivity (EIP-6963 injected wallets, legacy fallback,
+  WalletConnect).
+- Protected execution: on-chain output bounds on every swap step, a signing guard
+  that rebuilds from fresh data, price-impact guard.
+- Verified settlement and evidence-based recovery for an ambiguous submission.
+- Partial-balance split: send what you hold and convert the shortfall.
+- Merchant checkout: hosted payment page, payment links, QR codes, per-order
+  attribution via a watch-only xpub, webhooks.
+- Developer API (`/api/v1`) and TypeScript SDK (`@intentpay/sdk`).
+
+## Developer entry points
+
+- `GET /api/v1/capabilities` — the machine-readable statement of the real chain,
+  endpoints, assets, intent states and webhook events.
+- `POST /api/v1/intents` → validate → prepare → authorize → submit → verify.
+- `POST /api/v1/checkouts` — create a merchant checkout bound to an intent.
+- `POST /api/quote` — price a payment with no wallet (the fastest way to exercise
+  routing).
+- SDK: `packages/sdk` (`@intentpay/sdk`, `@intentpay/sdk/wallet`,
+  `@intentpay/sdk/webhooks`).
+- Examples: `examples/quickstart`, `examples/merchant`.
+
+## Security model
+
+- Non-custodial: no key, seed phrase or private key is ever requested, held or
+  stored.
+- The only path to a signature is `prepareSigning`, which rebuilds everything from
+  fresh data and refuses on any change.
+- A submission is sent exactly once and is never retried (`retryCount: 0`).
+- Every swap step carries a real on-chain output bound.
+- A broadcast is not success: delivery is proven from the confirmed receipt.
+- Raw upstream errors are never returned to a client.
+
+## Monad integration
+
+Monad Mainnet, chain id 143. Reads go through a fallback transport over the
+configured Monad RPC endpoints; the browser RPC URL and server RPC URLs are
+configuration-driven. Gas is always paid in native MON; there is no paymaster,
+bundler, UserOperation or account-abstraction path.
+
+## Documentation index
+
+- [README](README.md) — repository landing page.
+- [docs/vision.md](docs/vision.md) — vision, problem, audiences, principles, scope.
+- [docs/product.md](docs/product.md) — capabilities and the three journeys.
+- [docs/architecture.md](docs/architecture.md) — layers, lifecycle, RPC, trust boundaries.
+- [docs/security.md](docs/security.md) — invariants, duplicate-submission protection, disclosure.
+- [docs/developers.md](docs/developers.md) — onboarding, API, SDK, testing.
+- [docs/merchants.md](docs/merchants.md) — checkout integration and reconciliation.
+- [docs/roadmap.md](docs/roadmap.md) — status by area.
+- [CHANGELOG.md](CHANGELOG.md) — technical milestones.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — workflow and expectations.
+- [AGENTS.md](AGENTS.md) — invariants that must not regress.
+- [packages/sdk/README.md](packages/sdk/README.md) — SDK reference.
+
+## Current limitations
+
+- Monad only; not a bridge, no cross-chain delivery.
+- Gas is always MON; no sponsored or gasless path.
+- No service fee is charged today (planned, would be disclosed before authorization).
+- Live route coverage for the long tail of tokens keeps expanding; an asset with
+  no liquidity fails honestly with `route_unavailable`.
+- Additional real-device wallet testing and third-party integration validation are
+  outstanding.
+
+## Notes for automated readers
+
+This file is a maintained summary, not a guarantee of indexing by any AI provider.
+The authoritative technical record is the repository itself, and the invariants in
+[AGENTS.md](AGENTS.md) take precedence over any summary. No secret, credential or
+private customer information is published here or in the linked documents.

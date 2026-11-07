@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { LearnNav } from "@/components/landing/LearnNav";
+import { SiteHeader } from "@/components/landing/SiteHeader";
 import { SiteFooter } from "@/components/landing/SiteFooter";
 
 const NAV = [
@@ -14,7 +14,9 @@ const NAV = [
     { href: "/docs/security", label: "Security & Trust" },
     { href: "/docs/roadmap", label: "Roadmap" },
     { href: "/docs/faq", label: "FAQ" },
-    { href: "/docs/developers", label: "Developers" },
+  ] },
+  { title: "Build", links: [
+    { href: "/docs/developers", label: "Developer Guide" },
     { href: "/docs/api", label: "Developer API" },
     { href: "/docs/checkout", label: "Merchant Checkout" },
   ] },
@@ -24,40 +26,27 @@ const NAV = [
  * Shared shell for every documentation route.
  *
  * A server component so the docs pages stay static and directly navigable
- * (shareable, bookmarkable, refreshable). The header keeps the primary action
- * ("Open the app") one tap away and reuses the same Learn dropdown as the
- * homepage. The sidebar collapses above the content on small screens so the
- * body text keeps the full width on mobile.
+ * (shareable, bookmarkable, refreshable). It reuses the one site header, so the
+ * primary navigation and the logo cannot drift from the app, and keeps the
+ * primary action ("Open the app") one tap away. The sidebar collapses above the
+ * content on small screens so the body text keeps the full width on mobile.
  */
 export function DocsShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh">
-      <header className="sticky top-0 z-40 border-b border-white/[0.05] bg-ink-950/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-mono to-mono-deep text-sm font-black text-white shadow-glow">
-              ⌁
-            </span>
-            <div className="leading-tight">
-              <div className="text-sm font-semibold tracking-tight text-white">Intent Pay</div>
-              <div className="hidden text-[10px] uppercase tracking-[0.16em] text-white/35 sm:block">
-                Documentation
-              </div>
-            </div>
+      <SiteHeader
+        subtitle="Documentation"
+        actions={
+          <Link href="/" className="btn-primary !px-4 !py-2 text-xs">
+            Open the app
           </Link>
-          <div className="flex items-center gap-2.5">
-            <LearnNav />
-            <Link href="/" className="btn-primary !px-4 !py-2 text-xs">
-              Open the app
-            </Link>
-          </div>
-        </div>
-      </header>
+        }
+      />
 
       <div className="mx-auto max-w-6xl px-5 py-8 sm:py-12">
         <div className="lg:flex lg:gap-10">
           <aside className="mb-8 lg:mb-0 lg:w-60 lg:shrink-0">
-            <nav className="flex flex-wrap gap-x-6 gap-y-4 lg:block lg:space-y-6">
+            <nav aria-label="Documentation" className="flex flex-wrap gap-x-6 gap-y-4 lg:block lg:space-y-6">
               {NAV.map((group) => (
                 <div key={group.title}>
                   <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/35">

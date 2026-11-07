@@ -1,131 +1,235 @@
-# Intent Pay — intent-based payments on Monad
+# Intent Pay
 
-**Tell Intent Pay what you want to pay. Review the route. Send on Monad.**
+**Payment infrastructure connecting payment intentions with blockchain execution.**
 
-Intent Pay is an intent-based payment layer for Monad. You choose who receives,
-how much they should receive, and which token they should receive — the app
-figures out which asset you should spend, how much of it is required, the
-available conversion route, and the transaction execution.
+Intent Pay is an intent-based payment layer for **Monad** (chain id 143). You state
+what the recipient should receive — the recipient, the dollar amount, and the token
+— and the system determines which asset you spend, how much of it, the conversion
+route, and the transaction. You approve it in your own wallet.
 
-It is not a swap interface. The user's mental model is a payment, not a trade.
+It is deliberately **not** a swap interface. The user's mental model is a payment,
+not a trade.
 
-## How it works
+- **Production:** https://intent-pay-roan.vercel.app
+- **Documentation:** [`/docs`](https://intent-pay-roan.vercel.app/docs) in the app, and [`docs/`](docs/) in this repository
+- **Status:** live on Monad Mainnet; a real payment has completed end to end (owner-confirmed). See the [roadmap](docs/roadmap.md).
 
-1. **Recipient** — paste a wallet address; it is validated and shortened.
-2. **What should they receive?** — enter a dollar amount and pick the receive
-   token (`MON`, `USDC`, `USDT`, `SOL`, `WETH`, `AUSD`).
-3. **How will you pay?** — the app inspects your supported balances and
-   recommends the best funded asset, while still letting you choose another.
+---
 
-Everything recalculates live: amount, receive token, payment token, and
-recipient.
+## The problem
 
-Two intent modes:
+On-chain payments assume the sender already holds the exact asset the recipient
+wants. When they don't, the sender is pushed into a trading workflow — pick a
+pair, pick a fee tier, reason about slippage, approve, swap, send — and hope the
+amount that lands is the amount that was meant. The payment itself is lost inside
+a trade, and a broadcast transaction is treated as success even when the
+recipient received less than intended.
 
-- **Recipient receives** (default) — you fix what they get; we price what you pay.
-- **I spend** — you fix what you pay; we show what they receive.
+## The solution
+
+Intent Pay keeps the payment as the unit of work. A deterministic engine reads the
+sender's real balances, prices the assets, finds a route, builds a transaction with
+a real on-chain output bound, and verifies that the recipient actually received the
+token they were promised. The user authorizes one prepared transaction in their own
+wallet.
+
+## Features
+
+- **Intent composer** — recipient, amount and receive token, with a
+  natural-language bar (`Send $10 worth of MON to 0x…`) parsed deterministically
+  and offline.
+- **Live routing** — Uniswap V3 on Monad, exact-output and exact-input, every fee
+  tier quoted, with an honest `route_unavailable` when no pool exists.
+- **Multi-wallet connectivity** — EIP-6963 injected-wallet discovery with a legacy
+  fallback, plus WalletConnect mobile and QR wallets when configured.
+- **Protected execution** — a real on-chain minimum output on every swap step, a
+  signing guard that rebuilds from fresh data and refuses on any change, and a
+  price-impact guard.
+- **Verified settlement** — the recipient's transfer is proven from the confirmed
+  receipt; unverified delivery is never shown as success.
+- **Exactly-once submission** — a single approval maps to a single broadcast; the
+  submission is never retried.
+- **Partial-balance split** — send what you hold and convert the shortfall, each
+  leg with its own bound.
+- **Merchant checkout** — hosted payment page, payment links, QR codes, per-order
+  attribution, webhooks.
+- **Developer API + SDK** — a versioned `/api/v1` HTTP API and a TypeScript SDK.
 
 ## Architecture
 
 ```
 Intent layer            lib/domain/intent.ts, lib/domain/validation.ts
-Wallet / balance layer  lib/wallet/*, lib/hooks/useWallet.tsx, app/api/balances
-Quote / routing layer   lib/providers/*, lib/server/quote.ts
-Construction layer      lib/execution/plan.ts, lib/execution/abis.ts
-Execution layer         lib/execution/execute.ts
-Verification layer      lib/providers/uniswapV3.ts (on-chain quotes)
+Natural language        lib/nlp/*                      (deterministic, offline)
+Wallet / balances       lib/wallet/*, lib/hooks/useWallet.tsx, app/api/balances
+Quote / routing         lib/providers/*, lib/server/quote.ts
+Construction            lib/execution/plan.ts, lib/execution/abis.ts, prepareTx.ts
+Execution               lib/execution/execute.ts, lib/wallet/sendTransaction.ts
+Verification            lib/execution/verify.ts, lib/execution/signGuard.ts
+Developer API / SDK     app/api/v1/*, packages/sdk/*
 ```
 
-The routing provider is swappable: `DemoProvider` (deterministic, clearly
-labelled sample data) and the live Uniswap V3 provider share one interface, so
-the UI never changes when the backend does.
+The routing provider is swappable behind `getRoutingProvider`: a deterministic
+`DemoProvider` (labelled sample data) and the live Uniswap V3 provider share one
+interface, so the UI never changes when the backend does. Tokens, chains and
+Uniswap deployments all come from configuration (`lib/config/*`); there are no
+token-specific code paths.
 
-Tokens, chains, and Uniswap deployments all come from configuration
-(`lib/config/tokens.ts`, `lib/config/chains.ts`, `lib/providers/constants.ts`).
-No token-specific code paths.
+See [`docs/architecture.md`](docs/architecture.md) for the full picture.
 
-## Demo vs live
+## Technology stack
 
-- **Demo mode** uses deterministic sample data and is labelled everywhere. No
-  transaction hash is ever shown, because no transaction is sent.
-- **Live mode** reads real Monad balances and quotes real Uniswap V3 routes on
-  Monad mainnet (chain id 143). Nothing is fabricated: unavailable routes fail
-  honestly with a `route_unavailable` result instead of a fake quote.
+- **Framework:** Next.js 15 (App Router) + React 19 + TypeScript (strict).
+- **Styling:** Tailwind CSS with a small design-token set.
+- **Chain:** Monad Mainnet, chain id 143, via viem.
+- **Routing:** Uniswap V3 on Monad.
+- **Wallet:** EIP-6963 injected wallets, legacy fallback, WalletConnect (Reown v2).
+- **Data:** Alchemy (RPC transport, market prices), Zerion (wallet intelligence),
+  GeckoTerminal / DexScreener (fallback prices).
+- **Storage:** managed Postgres (Neon), on-disk SQLite, or in-memory — selected by
+  configuration and probed at runtime.
+- **SDK:** `@intentpay/sdk` (TypeScript, tsup).
 
-Demo mode also exposes a labelled *Simulate price move* control so the
-exact-payment protection can be demonstrated without a live transaction.
+## Monad network
 
-## Natural-language intents
+| | |
+| --- | --- |
+| Network | Monad Mainnet |
+| Chain id | 143 |
+| Native gas token | MON |
+| Routing | Uniswap V3 |
+| Explorer | https://monadscan.com |
 
-Alongside the form, you can describe the payment in plain English — for example
-`Send $10 worth of MON to 0xABC…`, `Send 10 MON`, or `Send $10`. The Intent
-Engine extracts recipient, amount, and asset, asks only for whatever is
-missing, and then hands the completed fields to the **same** composer (same
-quote, routing, review, and approval flow).
+Intent Pay is Monad-only. It is not a bridge and does not claim cross-chain
+delivery. Gas is always paid in native MON — there is no sponsored, ERC-20 or
+account-abstracted gas path.
 
-- Parsing is deterministic and works with no AI provider configured. An optional
-  LLM may only fill gaps; it can never supply a price, route, address, or
-  transaction.
-- `$10`, `10 MON`, and `$10 worth of MON` are treated differently on purpose.
-- A name without an address is never turned into an address; the app asks for
-  the real address.
-
-## Development
+## Local development
 
 ```bash
 npm install
 npm run dev      # http://localhost:3000
-npm test         # vitest
+npm test         # vitest (unit + component tests)
+npm run build    # production build + typecheck
+
+npx tsc --noEmit --noUnusedLocals --noUnusedParameters   # strict typecheck
+```
+
+The SDK is a workspace package:
+
+```bash
+cd packages/sdk
+npm run typecheck
+npm test
 npm run build
 ```
 
-Environment (optional):
+> `next dev` and `next build` share `.next/`. Running a build while the dev server
+> is live can break its module cache; restart the dev server (or remove `.next`)
+> afterwards.
+
+## Environment variables
+
+Every value is optional; the app degrades gracefully and never fakes data when a
+provider is missing. Copy [`.env.example`](.env.example) to `.env.local`.
 
 ```
-MONAD_RPC_URL=https://rpc.monad.xyz
-# Optional AI-assisted intent parsing (the app works without it):
+# Site
+NEXT_PUBLIC_SITE_URL=
+
+# Monad RPC
+MONAD_RPC_URL=                        # server reads; defaults to https://rpc.monad.xyz
+NEXT_PUBLIC_MONAD_RPC_URL=            # browser reads
+
+# Wallet connectivity
+NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID= # free from https://dashboard.reown.com
+
+# Providers
+ALCHEMY_API_KEY=                      # RPC transport + market prices
+NEXT_PUBLIC_ALCHEMY_API_KEY=
+ZERION_API_KEY=                       # wallet asset discovery / USD valuation
+
+# Storage (durable referral attribution)
+DATABASE_URL=                         # Postgres; else SQLite, else in-memory
+
+# Optional AI-assisted intent parsing (the app works without it)
 INTENT_LLM_API_KEY=
 INTENT_LLM_BASE_URL=https://api.openai.com/v1
 INTENT_LLM_MODEL=gpt-4o-mini
 ```
 
-## Wallet connectivity
+See [`.env.example`](.env.example) for the complete, documented list. No secret is
+committed to this repository.
 
-Connect any EIP-1193 wallet — MetaMask, Rabby, Coinbase Wallet, Trust Wallet, or
-any other compatible browser wallet. Wallets are discovered in the browser via
-**EIP-6963** (so several installed extensions are offered side by side instead
-of racing over a single `window.ethereum`), with a legacy `window.ethereum`
-fallback. The connected wallet's real address and real MON balance are shown, and
-the app switches the wallet to Monad Mainnet (chain id 143) before signing.
+## Testing and building
 
-**WalletConnect** (Reown v2) adds mobile and QR wallets. It needs a free project
-id, exposed as the public `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID`:
-
-```
-NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=   # https://dashboard.reown.com
+```bash
+npm test                                  # app unit + component tests
+cd packages/sdk && npm test               # SDK tests
+npm run build                             # production build (includes typecheck)
 ```
 
-Without it, the WalletConnect option is shown as unavailable and injected wallets
-still work — no session is ever fabricated. Signing always happens locally in the
-wallet's own provider; Intent Pay never asks for a seed phrase or private key.
-
-## Gas
-
-Gas is always paid in native MON by the user's own injected wallet. There is no
-sponsored, ERC-20 or account-abstracted gas path — an earlier EIP-7702 /
-paymaster experiment was removed because it could not be demonstrated to
-complete a real end-to-end payment on Monad. Intent Pay is not a gasless
-product, and it does not claim to be.
+Live routing tests are opt-in (`MONAD_LIVE_TESTS=1`) and skipped by default. When a
+test touches tokens or a cached provider, use unique addresses/keys per test — the
+token registry and `TtlCache` are module-level.
 
 ## Documentation
 
-The docs live under `/docs` and are reachable from the **Learn** menu:
+| Document | Contents |
+| --- | --- |
+| [`docs/vision.md`](docs/vision.md) | Vision, problem, audiences, principles, scope and non-goals. |
+| [`docs/product.md`](docs/product.md) | Capabilities and the individual, developer and merchant journeys. |
+| [`docs/architecture.md`](docs/architecture.md) | Layers, lifecycle, RPC, trust boundaries. |
+| [`docs/security.md`](docs/security.md) | Non-custodial principles, submission invariants, disclosure. |
+| [`docs/developers.md`](docs/developers.md) | Onboarding, API usage, SDK setup, integration examples. |
+| [`docs/merchants.md`](docs/merchants.md) | Checkout integration, status verification, reconciliation. |
+| [`docs/roadmap.md`](docs/roadmap.md) | Status by area, with milestone evidence. |
+| [`CHANGELOG.md`](CHANGELOG.md) | Technical milestones. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Development and PR workflow. |
+| [`AGENTS.md`](AGENTS.md) | The invariants that must not regress. |
+| [`packages/sdk/README.md`](packages/sdk/README.md) | SDK reference. |
+| [`llms.txt`](llms.txt) | A compact machine-oriented summary. |
 
-- `/docs` — hub / overview
-- `/docs/litepaper` — the full design and status document
-- `/docs/how-it-works` — the payment journey, step by step
-- `/docs/architecture` — layers, routing and execution
-- `/docs/security` — guards, bounds and honest limits
-- `/docs/roadmap` — built, in progress, planned
-- `/docs/faq` — direct answers
-- `/docs/developers` — repo layout, routes and configuration
+The in-app docs at `/docs` (reachable from the **Documentation** menu) are the
+user-facing equivalent.
+
+## Security and wallet authority
+
+Intent Pay is non-custodial and never signs on the user's behalf.
+
+- No key, seed phrase or private key is ever requested, held or stored.
+- The only path to a signature is `prepareSigning`, which rebuilds everything from
+  fresh data immediately before signing and aborts on any change.
+- Every swap step carries a real on-chain output bound (the UI's "minimum
+  received" is not the protection).
+- A submission is sent exactly once and is never retried.
+- A broadcast is not success: delivery is proven from the confirmed receipt.
+
+See [`docs/security.md`](docs/security.md) and [`AGENTS.md`](AGENTS.md).
+
+## Project status
+
+- **Live** on Monad Mainnet. A real payment has completed end to end
+  (owner-confirmed; see the [roadmap](docs/roadmap.md)).
+- **Complete:** payment execution and reliability, the developer API and SDK,
+  merchant checkout.
+- **In progress:** expanding live-network verification, copy refinement, mobile
+  hardening.
+- **Outstanding:** additional real-device wallet testing, third-party developer
+  integration validation, merchant onboarding.
+
+The full, honest picture is in [`docs/roadmap.md`](docs/roadmap.md).
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). In short: branch from `main`, keep the
+change focused, run the typecheck, app tests, SDK tests and build, and state
+explicitly whether payment execution behaviour changed. `main` deploys to
+production, so a merge is a release.
+
+## Contact
+
+- **Support / security:** jonathanebi05@gmail.com
+- **X:** [@IntentPayApp](https://x.com/IntentPayApp)
+
+Report a suspected vulnerability privately rather than in a public issue.
+

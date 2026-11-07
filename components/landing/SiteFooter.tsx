@@ -13,7 +13,7 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-white/[0.06] bg-ink-950/40">
       <div className="mx-auto max-w-5xl px-5 py-10">
-        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-5">
           <div className="sm:col-span-2 lg:col-span-1">
             <div className="flex items-center gap-2.5">
               <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-gradient-to-br from-mono to-mono-deep text-sm font-black text-white shadow-glow">
@@ -25,6 +25,21 @@ export function SiteFooter() {
               Intent-based payments on Monad.
             </p>
           </div>
+
+          <FooterColumn title="Product">
+            <FooterLink href="/product" label="Product">
+              Product
+            </FooterLink>
+            <FooterLink href="/developers" label="Developers">
+              Developers
+            </FooterLink>
+            <FooterLink href="/merchants" label="Merchants">
+              Merchants
+            </FooterLink>
+            <FooterLink href="/docs" label="Documentation">
+              Documentation
+            </FooterLink>
+          </FooterColumn>
 
           <FooterColumn title="Social">
             <FooterLink href="https://x.com/IntentPayApp" external label="X (Twitter)">
@@ -43,6 +58,12 @@ export function SiteFooter() {
           <FooterColumn title="Documentation">
             <FooterLink href="/docs/litepaper" label="Litepaper">
               Litepaper
+            </FooterLink>
+            <FooterLink href="/docs/security" label="Security & Trust">
+              Security &amp; Trust
+            </FooterLink>
+            <FooterLink href="/docs/roadmap" label="Roadmap">
+              Roadmap
             </FooterLink>
             <FooterLink href="/docs/faq" label="FAQ">
               FAQ

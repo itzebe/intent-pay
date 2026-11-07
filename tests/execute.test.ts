@@ -231,9 +231,37 @@ describe("executePlan — transaction rejection handling", () => {
       expect(isWalletTransportFailure(err)).toBe(true);
       const info = classifyTransactionError(err, { source: "wallet" });
       expect(info.kind).toBe("wallet_rpc");
-      expect(info.mayHaveSubmitted).toBe(false);
+      // The wallet failed AFTER it was asked to send, so the transaction may
+      // already be on-chain — it must NOT be reported as definitely unsent.
+      expect(info.mayHaveSubmitted).toBe(true);
+      expect(info.action).toBe("Check status");
       // It must never be reported as our RPC being unavailable.
       expect(info.kind).not.toBe("rpc_unavailable");
+    }
+  });
+
+  // R. The reported Trust Wallet symptom: the wallet opens its native approval,
+  //    the user enters their password, and only then does its native layer raise
+  //    `Failed to connect to http://monad.twnodes.com/`. That is a transport
+  //    failure *after* authorisation, so it is an unknown outcome — never a
+  //    definite "not sent", and never a raw provider string.
+  it("treats the Trust Wallet post-password connection error as an unknown outcome (R)", async () => {
+    const wallet = walletWith(async () => {
+      throw new TypeError("Failed to connect to http://monad.twnodes.com/");
+    });
+
+    try {
+      await executePlan(directTransferPlan(), wallet, "mainnet");
+      throw new Error("expected executePlan to throw");
+    } catch (err) {
+      expect(isWalletTransportFailure(err)).toBe(true);
+      const info = classifyTransactionError(err, { source: "wallet" });
+      expect(info.kind).toBe("wallet_rpc");
+      expect(info.mayHaveSubmitted).toBe(true);
+      expect(info.action).toBe("Check status");
+      // The raw host must never reach the user.
+      expect(info.message).not.toContain("twnodes");
+      expect(info.message).not.toMatch(/monad\.twnodes/);
     }
   });
 });

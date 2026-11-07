@@ -137,6 +137,14 @@ export function CheckoutClient({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Set when the wallet authorised but then failed on its own transport, so the
+  // outcome is unknown. Pay is disabled until a status check proves nothing was
+  // broadcast — otherwise a retry could double-pay.
+  const [unknownOutcome, setUnknownOutcome] = useState(false);
+  const [statusNote, setStatusNote] = useState<string | null>(null);
+  // The account's pending nonce just before the attempt, so an unknown outcome
+  // can be probed for real on-chain activity through our own RPC.
+  const baselineNonceRef = useRef<bigint | undefined>(undefined);
   const preparedRef = useRef<PreparedCalls | null>(null);
 
   const onMonad = wallet.chainId === NETWORKS.mainnet.chainId;
@@ -204,6 +212,8 @@ export function CheckoutClient({ token }: { token: string }) {
     if (!wallet.address) return;
     setBusy(true);
     setActionError(null);
+    setUnknownOutcome(false);
+    setStatusNote(null);
     const kind: "injected" | "walletconnect" | "none" = wallet.kind ?? (wallet.provider ? "injected" : "none");
     try {
       // 1. Ask the server for the calls, built from the frozen parameters.
@@ -257,6 +267,15 @@ export function CheckoutClient({ token }: { token: string }) {
         return;
       }
       const pub = getClientPublicClient(wallet.network ?? "mainnet");
+      // Baseline the account's pending nonce before the wallet is asked to sign,
+      // so a post-authorisation failure can be probed for real activity.
+      try {
+        baselineNonceRef.current = BigInt(
+          await pub.getTransactionCount({ address: wallet.address as `0x${string}`, blockTag: "pending" }),
+        );
+      } catch {
+        baselineNonceRef.current = undefined;
+      }
       const outcome = await sendCallsSequentially({
         calls: prepared.calls,
         send: async (call) => {
@@ -308,14 +327,19 @@ export function CheckoutClient({ token }: { token: string }) {
         // Record whatever already broadcast so the order reflects it, then stop.
         await recordSubmitted(outcome.hashes);
         // A transport failure the *wallet's* provider hit is not our RPC being
-        // down: say so plainly and never imply a payment failed when nothing was
-        // sent. Any other failure keeps the honest, cause-specific copy.
+        // down: say so plainly. But it is NOT proof nothing was sent — the wallet
+        // is asked to send only after the customer authorised, so if it holds no
+        // hash we cannot rule out a broadcast. Mark the outcome unknown and
+        // require a status check before any retry (which could double-pay).
         const walletTransport = outcome.reason === "send_failed" && isTransportError(outcome.cause);
         setActionError(
           walletTransport
             ? classifyTransactionError(outcome.cause, { source: "wallet" }).message
             : outcome.message,
         );
+        if (walletTransport && outcome.hashes.length === 0) {
+          setUnknownOutcome(true);
+        }
         logCheckoutDiagnostic({
           stage: outcome.reason === "unconfirmed" ? "receipt" : "broadcast",
           walletKind: kind,
@@ -371,13 +395,48 @@ export function CheckoutClient({ token }: { token: string }) {
   const checkStatus = useCallback(async () => {
     setBusy(true);
     setActionError(null);
+    setStatusNote(null);
     try {
+      // Unknown outcome (the wallet failed on its own transport after the
+      // customer authorised): probe the account itself. A pending nonce above
+      // the pre-attempt baseline means the wallet DID broadcast, so the payment
+      // may already be on-chain even though we hold no hash. Read through our own
+      // RPC — independent of the wallet's node.
+      if (unknownOutcome) {
+        const baseline = baselineNonceRef.current;
+        let current: bigint | undefined;
+        try {
+          current = BigInt(
+            await getClientPublicClient(wallet.network ?? "mainnet").getTransactionCount({
+              address: wallet.address as `0x${string}`,
+              blockTag: "pending",
+            }),
+          );
+        } catch {
+          current = undefined;
+        }
+        if (baseline === undefined || current === undefined) {
+          setStatusNote(
+            "We could not read the account's activity to confirm whether a transaction was sent. Do not pay again until you have checked your wallet's activity.",
+          );
+        } else if (current > baseline) {
+          setStatusNote(
+            `Your wallet has submitted a transaction (account activity advanced from ${baseline} to ${current}). It may be this payment — check your wallet's activity and the explorer before doing anything else, and do not pay again.`,
+          );
+        } else {
+          setStatusNote(
+            "No transaction from your wallet has been broadcast yet (account activity is unchanged), so nothing was sent. You can safely pay again.",
+          );
+          setUnknownOutcome(false);
+        }
+        return;
+      }
       await fetch(`/api/checkout/${token}/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       await load();
     } finally {
       setBusy(false);
     }
-  }, [token, load]);
+  }, [unknownOutcome, wallet.address, wallet.network, token, load]);
 
   if (loading) {
     return (
@@ -464,6 +523,13 @@ export function CheckoutClient({ token }: { token: string }) {
           </div>
         )}
 
+        {statusNote && (
+          <div className="flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2 text-xs text-white/70">
+            <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/45" />
+            <span>{statusNote}</span>
+          </div>
+        )}
+
         {!terminal && wallet.address && onMonad && (
           <BalanceOverview balances={balances} loading={balancesLoading} connected />
         )}
@@ -482,14 +548,15 @@ export function CheckoutClient({ token }: { token: string }) {
             ) : (
               <button
                 onClick={() => void pay()}
-                disabled={busy}
+                disabled={busy || unknownOutcome}
+                title={unknownOutcome ? "Check the payment status first — a transaction may already have been sent." : undefined}
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-mono to-mono-deep px-4 py-3 text-sm font-semibold text-white shadow-glow transition disabled:opacity-60"
               >
                 {busy ? <Spinner className="h-4 w-4" /> : null}
                 {busy ? "Waiting for your wallet…" : `Pay ${centsOf(view.amount)}`}
               </button>
             )}
-            {view.phase === "transaction_submitted" && (
+            {(view.phase === "transaction_submitted" || unknownOutcome) && (
               <button
                 onClick={() => void checkStatus()}
                 disabled={busy}

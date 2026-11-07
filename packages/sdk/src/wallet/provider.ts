@@ -94,6 +94,48 @@ export function walletErrorMessage(err: unknown): string {
   return "The wallet could not complete the request. Try again.";
 }
 
+/**
+ * True when a thrown value looks like a transport failure — the wallet's
+ * provider could not reach a network endpoint (its own node, a CSP block, DNS,
+ * TLS, offline) rather than refusing the request.
+ *
+ * Trust Wallet's in-app browser is the concrete case: it opens its native
+ * approval, the user enters their password, and only then does its native layer
+ * report `Failed to connect to http://monad.twnodes.com/`. That does **not**
+ * prove nothing was broadcast, so a caller must treat it as an *unknown*
+ * outcome — never a definite "not sent" — and must not blindly resend.
+ */
+export function isWalletTransportError(err: unknown): boolean {
+  if (!err) return false;
+  const parts: string[] = [];
+  let node: unknown = err;
+  for (let depth = 0; node && depth < 6; depth++) {
+    if (typeof node === "string") {
+      parts.push(node);
+      break;
+    }
+    if (typeof node !== "object") break;
+    const n = node as { message?: unknown; cause?: unknown; error?: unknown };
+    if (typeof n.message === "string") parts.push(n.message);
+    node = n.cause ?? n.error;
+  }
+  const text = parts.join(" ").toLowerCase();
+  return (
+    /failed to fetch/.test(text) ||
+    /networkerror/.test(text) ||
+    /network request failed/.test(text) ||
+    /load failed/.test(text) ||
+    /fetch failed/.test(text) ||
+    /failed to connect/.test(text) ||
+    /could not connect|couldn't connect|unable to connect/.test(text) ||
+    /connection refused|connection reset|connection closed|connection error/.test(text) ||
+    /net::err_/.test(text) ||
+    /err_connection|err_name_not_resolved|err_address_unreachable|err_network_changed/.test(text) ||
+    /network is unreachable|host is unreachable|no route to host/.test(text) ||
+    /timed out|timeout/.test(text)
+  );
+}
+
 /** Options for connecting a wallet. */
 export type ConnectOptions = {
   /**

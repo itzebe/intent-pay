@@ -130,7 +130,17 @@ function numericCode(err: unknown): number | undefined {
   return undefined;
 }
 
-/** True when any message along the `cause` chain looks like a transport failure. */
+/**
+ * True when any message along the `cause` chain looks like a transport failure.
+ *
+ * The connection-failure family matters as much as `fetch failed`: a wallet
+ * provider that reaches its own node over HTTP surfaces a *connection* error,
+ * not a `fetch` one. Trust Wallet's in-app browser is the concrete case — its
+ * native layer reports `Failed to connect to http://monad.twnodes.com/` when it
+ * cannot reach its own NaaS RPC. Without these shapes that raw phrase falls
+ * through to the generic fallback, so the user is never told the transaction may
+ * already be on-chain.
+ */
 export function isTransportError(err: unknown): boolean {
   const text = textOf(err).toLowerCase();
   return (
@@ -139,6 +149,16 @@ export function isTransportError(err: unknown): boolean {
     /network request failed/.test(text) ||
     /load failed/.test(text) ||
     /fetch failed/.test(text) ||
+    // Connection refused / unreachable / DNS — a provider talking to its own node.
+    /failed to connect/.test(text) ||
+    /could not connect|couldn't connect|unable to connect/.test(text) ||
+    /connection refused|connection reset|connection closed|connection error/.test(text) ||
+    /net::err_/.test(text) ||
+    /err_connection|err_name_not_resolved|err_address_unreachable|err_network_changed/.test(text) ||
+    /network is unreachable|host is unreachable|no route to host/.test(text) ||
+    // Node/undici errno spellings of the same failures.
+    /econnrefused|econnreset|enotfound|eai_again|etimedout|epipe|enetunreach|ehostunreach/.test(text) ||
+    /socket hang up|other side closed/.test(text) ||
     /timed out|timeout/.test(text)
   );
 }
@@ -151,9 +171,10 @@ export function isTransportError(err: unknown): boolean {
  * the wallet's original thrown value on `cause` (`lib/execution/execute.ts`).
  * Our own chain reads (quote, balances, gas, receipt wait) are made through our
  * HTTPS clients and are either handled internally or fail without a step id.
- * So a transport-shaped failure that carries a step id is the wallet provider,
- * and the copy must say the transaction was not sent — never that our RPC is
- * down, and never that a payment failed when nothing was submitted.
+ * So a transport-shaped failure that carries a step id is the wallet provider —
+ * never our RPC being down. (The outcome is still treated as *unknown*, because
+ * the failure happens after the user authorised and may not prove nothing was
+ * broadcast; see `classifyTransactionError`.)
  */
 export function isWalletTransportFailure(err: unknown): boolean {
   const e = err as { stepId?: unknown; cause?: unknown } | undefined;
@@ -269,24 +290,33 @@ export function classifyTransactionError(
     };
   }
 
-  // Node reachability.
+  // Node reachability. The shape test is the single `isTransportError` rule, so
+  // a connection-refused/DNS failure (a wallet talking to its own node) is
+  // recognised here too — never left to the generic fallback.
   if (
-    /network error|failed to fetch|timeout|timed out|fetch failed|gateway|-32000|-32603|rate limit|too many requests/.test(
-      text,
-    ) ||
+    isTransportError(err) ||
+    /network error|gateway|rate limit|too many requests/.test(text) ||
     code === -32000 ||
     code === -32603
   ) {
     // A transport failure the *wallet* hit is not our RPC being down: our own
     // quote, balance, gas and receipt reads are independent and keep working.
-    // Say so plainly and never imply a payment failed when nothing was sent.
+    //
+    // But it is NOT safe to claim "the transaction was not sent": the wallet is
+    // asked to send only *after* the user has authorised, so the wallet may
+    // already have signed and broadcast before its transport to its own node
+    // failed. Trust Wallet's in-app browser raises exactly this — it opens its
+    // native approval, the user enters their password, and only then does its
+    // native layer report `Failed to connect to http://monad.twnodes.com/`. That
+    // error does not prove nothing was broadcast, so the outcome is unknown: keep
+    // any hash we hold, do not resubmit, and offer a status check.
     if (walletSource) {
       return {
         kind: "wallet_rpc",
         message:
-          "Your wallet couldn't complete its network request to Monad, so the transaction was not sent. Intent Pay's own chain reads are unaffected — try again, and if it keeps happening use another wallet or WalletConnect.",
-        mayHaveSubmitted: false,
-        action: "Try again",
+          "Your wallet authorised the payment but could not reach its own network endpoint, so we can't confirm whether the transaction was broadcast. It may already be on Monad. Do not submit another payment — check the transaction status first.",
+        mayHaveSubmitted: true,
+        action: "Check status",
       };
     }
     return {

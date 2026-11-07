@@ -47,7 +47,7 @@ present a walkthrough as a completed payment, and never manufacture a hash.
 4. Safety: non-custodial, guarded signing, on-chain bounds, verified settlement.
 5. Why Monad: low fees, fast finality, real EVM tooling.
 6. Audiences: individuals, developers (API/SDK), merchants (checkout/links/QR).
-7. Limits: mainnet only, no refunds, no sandbox, operator-gated signup.
+7. Limits: mainnet only, no refunds, no sandbox, self-service email-verified signup.
 8. Ecosystem fit and next steps.
 
 ## Questions an ecosystem reviewer might ask

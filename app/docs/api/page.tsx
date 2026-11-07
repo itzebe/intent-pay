@@ -121,7 +121,10 @@ npm install @walletconnect/ethereum-provider`}</pre>
 
       <DocSection title="Accounts and keys">
         <UL>
-          <LI><Code>POST /api/v1/developers</Code> — create an account and its first key. In production this requires the admin token; outside production it is open. Returns the key <strong>once</strong>.</LI>
+          <LI><Code>POST /api/v1/developers/register</Code> — start self-service signup. Creates a pending account and emails a single-use verification link. Issues <strong>no</strong> key. Fails with <Code>email_unavailable</Code> if the deployment has no email provider.</LI>
+          <LI><Code>POST /api/v1/developers/verify</Code> — exchange the verification token for the account&apos;s first key. The key is returned <strong>once</strong>.</LI>
+          <LI><Code>POST /api/v1/developers/resend</Code> — re-send a verification email for a pending account.</LI>
+          <LI><Code>POST /api/v1/developers</Code> — operator provisioning: create an account and its first key. Requires the admin token; the operator path for support and bulk onboarding. Returns the key <strong>once</strong>.</LI>
           <LI><Code>GET /api/v1/developers</Code> — your account and keys (prefix, environment, status — never a secret).</LI>
           <LI><Code>POST /api/v1/developers/keys</Code> — <Code>create</Code>, <Code>rotate</Code> or <Code>revoke</Code> a key. Rotation revokes the old key immediately.</LI>
         </UL>

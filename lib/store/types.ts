@@ -44,8 +44,12 @@ export type StoreKind = "postgres" | "sqlite" | "memory";
  * order to a developer-API intent.
  * v4 adds `apiTxClaims`, the durable `(chainId, txHash)` replay guard: one
  * on-chain transaction can be payment evidence for at most one intent.
+ * v5 adds checkout-specific attribution columns (per-checkout derived address).
+ * v6 adds self-service developer signup: an `email`/`email_verified_at` pair on
+ * the developer and the `apiEmailVerifications` table (single-use, expiring,
+ * hashed-at-rest email verification tokens).
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** A unique-constraint violation, shared by both adapters. */
 export class StoreConflictError extends Error {
@@ -208,6 +212,20 @@ export type ApiDeveloperRecord = {
   /** Opaque public id (`dev_…`). Never a row id. */
   id: string;
   name: string;
+  /**
+   * The developer's normalized (lower-cased, trimmed) email, or `null` for an
+   * account provisioned before self-service signup existed. Unique when present,
+   * so two accounts can never claim the same address. Never returned to another
+   * tenant; it is the account owner's own identity.
+   */
+  email: string | null;
+  /**
+   * Unix ms the email was proven, or `null` while unverified. A self-service
+   * account is created with `null` and receives **no credential** until this is
+   * set by a single-use verification token; an admin-provisioned account may
+   * carry `null` and still hold a key (the operator vouches for it directly).
+   */
+  emailVerifiedAt: number | null;
   /** "active" | "suspended". A suspended developer cannot authenticate. */
   status: string;
   /**
@@ -447,6 +465,37 @@ export type ApiTxClaimRecord = {
   claimedAt: number;
 };
 
+/**
+ * A self-service email verification challenge.
+ *
+ * Created when a developer registers, and consumed exactly once when the emailed
+ * link is opened. The **plaintext token is never stored** — only a SHA-256 hash
+ * of a 256-bit random value — so a database read cannot yield a working link. The
+ * row is single-use (a successful verification deletes it) and expires, so a
+ * leaked link has a bounded lifetime and cannot be replayed.
+ *
+ * A pending registration is an account with `email_verified_at = NULL`; it holds
+ * no API key, so an unverified (and possibly forged) email can never be used to
+ * obtain a credential. Registering the same address again replaces this row (a
+ * fresh token) rather than creating a second account.
+ */
+export type ApiEmailVerificationRecord = {
+  /** Opaque public id (`evf_…`). Never a row id. */
+  id: string;
+  /** The developer account awaiting verification. */
+  developerId: string;
+  /** The normalized email the link was sent to (for audit / resend matching). */
+  email: string;
+  /** SHA-256 hex of the token secret. The plaintext is never persisted. */
+  tokenHash: string;
+  /** Unix ms the token was issued. */
+  createdAt: number;
+  /** Unix ms the token stops being valid. */
+  expiresAt: number;
+  /** Unix ms the account was verified with this token, or null while pending. */
+  consumedAt: number | null;
+};
+
 /** The row shapes each adapter must persist. */
 export type StoreTables = {
   referrals: ReferralRecord;
@@ -463,6 +512,7 @@ export type StoreTables = {
   apiWebhookDeliveries: ApiWebhookDeliveryRecord;
   apiCheckouts: ApiCheckoutRecord;
   apiTxClaims: ApiTxClaimRecord;
+  apiEmailVerifications: ApiEmailVerificationRecord;
 };
 
 export type TableName = keyof StoreTables;

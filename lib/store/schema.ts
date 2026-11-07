@@ -163,13 +163,17 @@ export const SCHEMA: TableSchema[] = [
     columns: [
       { field: "id", column: "id", type: "text" },
       { field: "name", column: "name", type: "text" },
+      { field: "email", column: "email", type: "text", nullable: true },
+      { field: "emailVerifiedAt", column: "email_verified_at", type: "int", nullable: true },
       { field: "status", column: "status", type: "text" },
       { field: "paymentXpub", column: "payment_xpub", type: "text", nullable: true },
       { field: "nextDerivationIndex", column: "next_derivation_index", type: "int" },
       { field: "createdAt", column: "created_at", type: "int" },
       { field: "updatedAt", column: "updated_at", type: "int" },
     ],
-    uniqueGroups: [],
+    // A verified email identifies exactly one account; NULLs never collide, so
+    // the legacy/admin accounts without an email remain valid.
+    uniqueGroups: [["email"]],
     checks: [`status IN ('active', 'suspended')`],
   },
   {
@@ -323,6 +327,25 @@ export const SCHEMA: TableSchema[] = [
     // by application memory, so two concurrent verifications cannot both win.
     uniqueGroups: [],
     foreignKeys: ["FOREIGN KEY(intent_id) REFERENCES api_intents(id)"],
+  },
+  // --- Self-service developer signup (v6) ----------------------------------
+  {
+    name: "apiEmailVerifications",
+    primaryKeys: ["id"],
+    columns: [
+      { field: "id", column: "id", type: "text" },
+      { field: "developerId", column: "developer_id", type: "text" },
+      { field: "email", column: "email", type: "text" },
+      { field: "tokenHash", column: "token_hash", type: "text" },
+      { field: "createdAt", column: "created_at", type: "int" },
+      { field: "expiresAt", column: "expires_at", type: "int" },
+      { field: "consumedAt", column: "consumed_at", type: "int", nullable: true },
+    ],
+    // A token hash is globally unique (it identifies one challenge), and a
+    // developer has at most one live challenge — a resend replaces the previous
+    // row rather than leaving two valid links.
+    uniqueGroups: [["tokenHash"], ["developerId"]],
+    foreignKeys: ["FOREIGN KEY(developer_id) REFERENCES api_developers(id)"],
   },
 ];
 

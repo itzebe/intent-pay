@@ -21,9 +21,13 @@ API key; `public/index.html` is a plain page that calls the example's own server
 npm --prefix packages/sdk install
 npm --prefix packages/sdk run build
 
-# 2. Create a merchant account and key (local deployment, or the admin token in production)
-curl -s -X POST http://localhost:3000/api/v1/developers \
-  -H 'Content-Type: application/json' -d '{"name":"my-shop"}'
+# 2. Create a merchant account and key (self-service — see docs/merchants.md §6)
+curl -s -X POST http://localhost:3000/api/v1/developers/register \
+  -H 'Content-Type: application/json' -d '{"name":"my-shop","email":"you@example.com"}'
+# → 202 { "status": "verification_sent", … }   (a link is emailed)
+# then open the link, or exchange the token:
+curl -s -X POST http://localhost:3000/api/v1/developers/verify \
+  -H 'Content-Type: application/json' -d '{"token":"ipv_…"}'
 # → { "developer": {…}, "apiKey": "ipk_test_…", … }   (shown once)
 
 # 3. Run the example against a local or production deployment

@@ -34,7 +34,7 @@ async function makeIntent() {
   const store = new SqliteStore(":memory:");
   setStore(store);
   // A real developer row is required by the foreign key.
-  await store.insert("apiDevelopers", { id: "dev_1", name: "Test", status: "active", paymentXpub: null, nextDerivationIndex: 0, createdAt: Date.now(), updatedAt: Date.now() });
+  await store.insert("apiDevelopers", { id: "dev_1", name: "Test", email: null, emailVerifiedAt: null, status: "active", paymentXpub: null, nextDerivationIndex: 0, createdAt: Date.now(), updatedAt: Date.now() });
   const result = await createIntent({
     developerId: "dev_1",
     createdByKeyId: "key_1",

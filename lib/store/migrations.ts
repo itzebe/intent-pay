@@ -149,6 +149,21 @@ export const MIGRATIONS: Migration[] = [
     id: 5,
     statements: [...ATTRIBUTION_COLUMNS, ...ATTRIBUTION_INDEXES],
   },
+  {
+    // v6 — self-service developer signup. `TABLES` re-issues every table
+    // (`IF NOT EXISTS`, so the existing ones are untouched) which creates the new
+    // `api_email_verifications` table; the explicit `ALTER TABLE ... ADD COLUMN
+    // IF NOT EXISTS` statements add `email` / `email_verified_at` to the existing
+    // `api_developers` table. The email uniqueness index is created for the
+    // verified-email invariant (NULLs do not collide).
+    id: 6,
+    statements: [
+      ...TABLES,
+      `ALTER TABLE ${qi("api_developers")} ADD COLUMN IF NOT EXISTS ${qi("email")} TEXT`,
+      `ALTER TABLE ${qi("api_developers")} ADD COLUMN IF NOT EXISTS ${qi("email_verified_at")} BIGINT`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_developers_email ON ${qi("api_developers")} (${qi("email")}) WHERE ${qi("email")} IS NOT NULL`,
+    ],
+  },
 ];
 
 export const LATEST_MIGRATION = MIGRATIONS.reduce((max, m) => Math.max(max, m.id), 0);

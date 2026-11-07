@@ -78,8 +78,9 @@ describe("merchant page states the real limits honestly", () => {
     expect(page).not.toMatch(/refund (an|a) (payment|order) via|refund endpoint/i);
   });
 
-  it("does not present production signup as self-serve", () => {
-    expect(page).toMatch(/operator-assisted/i);
+  it("states self-service signup and does not claim an operator is required", () => {
+    expect(page).toMatch(/self-service/i);
+    expect(page).toMatch(/verification link/i);
     expect(page).not.toMatch(/sign up for free|create an account in one click/i);
   });
 
@@ -144,10 +145,12 @@ describe("merchant guide matches the implementation", () => {
     expect(guide).not.toMatch(/X-Signature:/);
   });
 
-  it("states the operator-gated production signup, distinguishing it from local", () => {
-    expect(guide).toMatch(/operator-gated/i);
+  it("states self-service signup, distinguishing it from operator provisioning", () => {
+    expect(guide).toMatch(/self-service/i);
+    expect(guide).toContain("/api/v1/developers/register");
+    expect(guide).toContain("/api/v1/developers/verify");
     expect(guide).toContain("INTENT_PAY_ADMIN_TOKEN");
-    expect(guide).toMatch(/Local \/ non-production deployment/);
+    expect(guide).toMatch(/Operator provisioning/i);
   });
 });
 
@@ -181,7 +184,7 @@ describe("merchant capability claims map to real code", () => {
     expect(capabilities).toMatch(/Only Monad Mainnet is supported|no testnet/i);
   });
 
-  it("keeps production signup behind the admin gate", () => {
+  it("keeps operator provisioning behind the admin gate", () => {
     const route = read("app/api/v1/developers/route.ts");
     expect(route).toContain("adminAuthorized");
     expect(route).toMatch(/requires the admin token/);

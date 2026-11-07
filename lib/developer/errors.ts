@@ -25,6 +25,7 @@ export const API_ERROR_CODES = [
   "replay_detected",
   "already_submitted",
   "storage_unavailable",
+  "email_unavailable",
   "provider_error",
   "internal_error",
 ] as const;
@@ -51,6 +52,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   replay_detected: 409,
   already_submitted: 409,
   storage_unavailable: 503,
+  email_unavailable: 503,
   provider_error: 502,
   internal_error: 500,
 };

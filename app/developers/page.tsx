@@ -23,7 +23,10 @@ export default function Developers() {
       intro="A versioned HTTP API and a TypeScript SDK that take a payment intent from creation to independently verified settlement. Your server holds the API key; your user's wallet signs locally. The two never meet."
       actions={
         <>
-          <Link href="/docs/api" className="btn-primary">
+          <Link href="/developer" className="btn-primary">
+            Get an API key
+          </Link>
+          <Link href="/docs/api" className="btn-ghost">
             API reference
           </Link>
           <Link href="/docs/developers" className="btn-ghost">
@@ -32,6 +35,37 @@ export default function Developers() {
         </>
       }
     >
+      <Section
+        title="Get an API key"
+        intro="Self-service: create an account with your email, verify it, and receive your first key."
+      >
+        <div className="space-y-3 text-sm leading-relaxed text-white/55">
+          <p className="text-pretty">
+            Open the{" "}
+            <Link href="/developer" className="text-mono-soft hover:underline">
+              developer portal
+            </Link>
+            , enter your email, and open the verification link we send. Your first API key is issued{" "}
+            <strong className="text-white/80">once</strong>, only after the address is verified — so an address
+            you do not control can never obtain a credential. Manage additional keys, rotation and revocation
+            from the same portal.
+          </p>
+        </div>
+        <div className="card-flat mt-4 overflow-x-auto p-4">
+          <pre className="font-mono text-xs leading-relaxed text-white/70">
+{`# 1. start signup — a verification email is sent
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers/register \\
+  -H 'Content-Type: application/json' \\
+  -d '{"name":"my-app","email":"you@example.com"}'
+
+# 2. open the link from the email, or exchange the token for your key
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers/verify \\
+  -H 'Content-Type: application/json' \\
+  -d '{"token":"ipv_…"}'`}
+          </pre>
+        </div>
+      </Section>
+
       <Section
         title="The payment lifecycle, as an API"
         intro="Five calls mirror the five stages. Nothing is signed or broadcast on the server."

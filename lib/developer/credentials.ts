@@ -56,6 +56,8 @@ export function parseApiKey(key: string): { prefix: string; secret: string; envi
  */
 export async function createDeveloperWithKey(input: {
   name: string;
+  email?: string | null;
+  emailVerifiedAt?: number | null;
   environment?: ApiKeyEnvironment;
   keyName?: string;
   now?: number;
@@ -65,6 +67,8 @@ export async function createDeveloperWithKey(input: {
   const developer: ApiDeveloperRecord = {
     id: newDeveloperId(),
     name: input.name.slice(0, 120) || "developer",
+    email: input.email ?? null,
+    emailVerifiedAt: input.emailVerifiedAt ?? null,
     status: "active",
     paymentXpub: null,
     nextDerivationIndex: 0,
@@ -209,6 +213,14 @@ export async function authenticateApiKey(
   if (!developer) return { ok: false, code: "unauthorized", message: "Invalid API key." };
   if (developer.status !== "active") {
     return { ok: false, code: "forbidden", message: "This developer account is suspended." };
+  }
+  // A self-service account that has not proven its email holds no usable key.
+  // (An admin-provisioned account has no email at all and is unaffected; a pending
+  // account never receives a key in the first place — this is defence in depth.)
+  const hasEmail = typeof developer.email === "string" && developer.email.length > 0;
+  const verified = developer.emailVerifiedAt !== null && developer.emailVerifiedAt !== undefined;
+  if (hasEmail && !verified) {
+    return { ok: false, code: "forbidden", message: "Verify your email address before using this API key." };
   }
 
   // Best-effort usage stamp; a failure here must never fail authentication.

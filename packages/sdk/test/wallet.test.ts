@@ -340,6 +340,33 @@ describe("sendCalls", () => {
     // The chain identity and value are still present.
     expect(params.chainId).toBe("0x8f");
   });
+
+  /**
+   * Mission 25. The wallet is asked to send only *after* the user authorised, so
+   * a transport failure then does not prove nothing was broadcast. Trust Wallet's
+   * native layer reports `Failed to connect to http://monad.twnodes.com/` after
+   * password entry; the SDK must surface that as an unknown outcome — never a
+   * definite "not sent" that would invite a double-spend.
+   */
+  it("surfaces a post-authorisation transport failure as an unknown outcome", async () => {
+    const provider = makeProvider({
+      rejectSend: { code: -32603, message: "Failed to connect to http://monad.twnodes.com/" },
+    });
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await expect(
+      wallet.sendCalls([{ to: ADDR, data: "0x", value: "0" }]),
+    ).rejects.toMatchObject({ walletCode: "wallet_unknown_outcome" });
+  });
+
+  it("keeps a user rejection distinct from an unknown outcome", async () => {
+    const provider = makeProvider({ rejectSend: { code: 4001 } });
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await expect(
+      wallet.sendCalls([{ to: ADDR, data: "0x", value: "0" }]),
+    ).rejects.toMatchObject({ walletCode: "wallet_rejected" });
+  });
 });
 
 describe("account and chain change handling", () => {

@@ -15,6 +15,7 @@ export {
   isMonadChainId,
   firstAccount,
   isUserRejection,
+  isWalletTransportError,
   walletErrorMessage,
   monadAddChainParams,
   MONAD_CHAIN_ID,

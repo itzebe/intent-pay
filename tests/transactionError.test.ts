@@ -3,6 +3,8 @@ import {
   classifyTransactionError,
   withFeeShortfallMessage,
   isFeeShortfall,
+  isTransportError,
+  isWalletTransportFailure,
   INSUFFICIENT_MON_FOR_FEES_MESSAGE,
 } from "@/lib/domain/transactionError";
 
@@ -70,6 +72,62 @@ describe("classifyTransactionError", () => {
   it("treats a network/RPC failure as unknown — may have submitted", () => {
     const info = classifyTransactionError(new Error("fetch failed"));
     expect(info.kind).toBe("rpc_unavailable");
+    expect(info.mayHaveSubmitted).toBe(true);
+  });
+
+  /**
+   * Mission 24/25. Trust Wallet's in-app browser opens its native approval, the
+   * user enters their password, and only then does its native layer fail with
+   * `Failed to connect to http://monad.twnodes.com/`. That must be recognised as
+   * a *transport* failure of the wallet's own provider, not our RPC being down,
+   * and classified as an unknown outcome (never a definite "not sent").
+   */
+  it("recognises the Trust Wallet post-password transport failure", () => {
+    const raw = new TypeError("Failed to connect to http://monad.twnodes.com/");
+    expect(isTransportError(raw)).toBe(true);
+    const info = classifyTransactionError(raw, { source: "wallet" });
+    expect(info.kind).toBe("wallet_rpc");
+    expect(info.mayHaveSubmitted).toBe(true);
+    // The raw host never reaches the user.
+    expect(info.message).not.toContain("twnodes");
+  });
+
+  it("recognises a connection-refused/DNS failure as transport", () => {
+    for (const message of [
+      "Failed to fetch",
+      "net::ERR_CONNECTION_REFUSED",
+      "net::ERR_NAME_NOT_RESOLVED",
+      "connect ECONNREFUSED 127.0.0.1:8545",
+      "getaddrinfo ENOTFOUND monad.twnodes.com",
+      "connect ETIMEDOUT",
+      "socket hang up",
+      "NetworkError when attempting to fetch resource.",
+    ]) {
+      expect(isTransportError(new TypeError(message)), message).toBe(true);
+    }
+  });
+
+  it("does not mistake a rejection or an on-chain revert for a transport failure", () => {
+    expect(isTransportError(Object.assign(new Error("User rejected the request."), { code: 4001 }))).toBe(false);
+    expect(isTransportError(new Error("execution reverted: insufficient output amount"))).toBe(false);
+    expect(classifyTransactionError(Object.assign(new Error("User rejected the request."), { code: 4001 })).kind).toBe("rejected");
+  });
+
+  /**
+   * The wallet-side detection is separate from our own RPC being down: it only
+   * fires for a *step-tagged* submission failure, so a quote/balance/receipt
+   * read that fails is never blamed on the wallet.
+   */
+  it("only calls it a wallet transport failure when the failure came from a submission step", () => {
+    const walletErr = Object.assign(new Error("The transaction could not be sent."), {
+      code: "unknown",
+      stepId: "transfer",
+      cause: new TypeError("Failed to connect to http://monad.twnodes.com/"),
+    });
+    expect(isWalletTransportFailure(walletErr)).toBe(true);
+    expect(isWalletTransportFailure(new TypeError("Failed to connect to http://monad.twnodes.com/"))).toBe(false);
+    const info = classifyTransactionError(walletErr, { source: "wallet" });
+    expect(info.kind).toBe("wallet_rpc");
     expect(info.mayHaveSubmitted).toBe(true);
   });
 

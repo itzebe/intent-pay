@@ -72,6 +72,18 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
   const [unresolved, setUnresolved] = useState<Unresolved | null>(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [statusNote, setStatusNote] = useState<string | null>(null);
+  // True only when the status check positively established that nothing was
+  // broadcast (the account's pending nonce did not advance). Retry is offered
+  // only in that case — otherwise it would risk a duplicate payment.
+  const [nothingSent, setNothingSent] = useState(false);
+  // Every hash the current attempt actually broadcast, captured as each step
+  // reports it. Read in the failure path so an *unknown* outcome after the user
+  // authorised keeps the hash(es) instead of losing them with the local scope.
+  const attemptHashesRef = useRef<`0x${string}`[]>([]);
+  // The account's nonce observed immediately before the attempt, so a failure
+  // after authorisation can be probed for real on-chain activity (a mined or
+  // pending transaction) rather than guessed at.
+  const baselineNonceRef = useRef<bigint | undefined>(undefined);
   // Anchor the collected intent steps so a natural-language prefill can scroll
   // the user down to the fields it just filled.
   const composeRef = useRef<HTMLDivElement>(null);
@@ -263,6 +275,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     setDelivery(null);
     setUnresolved(null);
     setStatusNote(null);
+    setNothingSent(false);
     lastQuoteRef.current = null;
     flow.refreshQuote();
   }, [flow]);
@@ -274,47 +287,76 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
    * still-absent receipt keeps the outcome unknown.
    */
   const checkUnresolvedStatus = useCallback(async () => {
-    if (!unresolved || unresolved.hashes.length === 0 || checkingStatus) return;
+    if (!unresolved || checkingStatus) return;
     setCheckingStatus(true);
     setStatusNote(null);
+    setNothingSent(false);
     try {
       const client = getClientPublicClient(flow.intent.network);
-      const receipts = await Promise.all(
-        unresolved.hashes.map((hash) =>
-          client.getTransactionReceipt({ hash }).catch(() => null),
-        ),
-      );
-      const confirmed = receipts.filter((r) => r?.status === "success");
-      if (confirmed.length === unresolved.hashes.length) {
-        const hashes = unresolved.hashes;
-        setUnresolved(null);
-        setTxHash(hashes[hashes.length - 1]);
-        try {
-          const check = await verifyDelivery(
-            client,
-            hashes,
-            flow.receiveTokenConfig,
-            flow.intent.recipient,
-            reviewQuote?.receiveAmount ?? "",
-            BigInt(displayPlan.slippageBps || 50),
-          );
-          setDelivery(check);
-        } catch {
-          setDelivery(null);
+      // With hashes: read each receipt directly.
+      if (unresolved.hashes.length > 0) {
+        const receipts = await Promise.all(
+          unresolved.hashes.map((hash) =>
+            client.getTransactionReceipt({ hash }).catch(() => null),
+          ),
+        );
+        const confirmed = receipts.filter((r) => r?.status === "success");
+        if (confirmed.length === unresolved.hashes.length) {
+          const hashes = unresolved.hashes;
+          setUnresolved(null);
+          setTxHash(hashes[hashes.length - 1]);
+          try {
+            const check = await verifyDelivery(
+              client,
+              hashes,
+              flow.receiveTokenConfig,
+              flow.intent.recipient,
+              reviewQuote?.receiveAmount ?? "",
+              BigInt(displayPlan.slippageBps || 50),
+            );
+            setDelivery(check);
+          } catch {
+            setDelivery(null);
+          }
+          setStage("success");
+          return;
         }
-        setStage("success");
+        const reverted = receipts.some((r) => r?.status === "reverted");
+        if (reverted) {
+          setStatusNote(
+            "The transaction reverted on-chain. Nothing was delivered — review the payment before trying again.",
+          );
+          return;
+        }
+        setStatusNote(
+          "The transaction is still not confirmed on Monad. It may be pending or dropped — check the explorer, and do not submit a duplicate payment until you are sure.",
+        );
         return;
       }
-      const reverted = receipts.some((r) => r?.status === "reverted");
-      if (reverted) {
+      // No hash (the wallet failed before returning one). Probe the account
+      // itself: a pending nonce above the pre-attempt baseline means the wallet
+      // DID broadcast, so the payment may already be on-chain even though we hold
+      // no hash. Read through our own RPC — independent of the wallet's node.
+      const baseline = baselineNonceRef.current;
+      const current = await client
+        .getTransactionCount({ address: wallet.address as `0x${string}`, blockTag: "pending" })
+        .catch(() => undefined);
+      if (baseline === undefined || current === undefined) {
         setStatusNote(
-          "The transaction reverted on-chain. Nothing was delivered — review the payment before trying again.",
+          "We could not read the account's activity to confirm whether a transaction was sent. Do not submit another payment until you have checked your wallet's activity.",
+        );
+        return;
+      }
+      if (current > baseline) {
+        setStatusNote(
+          `Your wallet has submitted a transaction (account activity advanced from ${baseline} to ${current}). It may be the payment — check your wallet's activity and the explorer before doing anything else, and do not submit a duplicate payment.`,
         );
         return;
       }
       setStatusNote(
-        "The transaction is still not confirmed on Monad. It may be pending or dropped — check the explorer, and do not submit a duplicate payment until you are sure.",
+        "No transaction from your wallet has been broadcast yet (account activity is unchanged), so nothing was sent. You can safely retry the payment.",
       );
+      setNothingSent(true);
     } finally {
       setCheckingStatus(false);
     }
@@ -326,6 +368,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     flow.receiveTokenConfig,
     reviewQuote?.receiveAmount,
     displayPlan.slippageBps,
+    wallet.address,
   ]);
 
   /**
@@ -347,6 +390,7 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
     setSteps([]);
     setDelivery(null);
     setUnresolved(null);
+    setNothingSent(false);
 
     // Structured, secret-free trail: every failure records the exact stage so
     // the "returns to Confirm and Send with no explanation" symptom can be
@@ -420,7 +464,13 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
       // failure after a broadcast is never retried blindly (which would
       // double-spend).
       let sawSubmission = false;
+      // Reset the per-attempt hash capture: a fresh attempt must not inherit the
+      // previous one's hashes.
+      attemptHashesRef.current = [];
       const onStep = (r: StepResult) => {
+        // Keep every hash the plan actually broadcast, so a later unknown-outcome
+        // failure can preserve it and offer a real status check.
+        if (r.hash) attemptHashesRef.current.push(r.hash);
         // The single rule for "may already be on-chain": a submitted/confirmed
         // step, or a failed one that still carries a hash (a revert or an
         // unresolved send). Never reimplemented here.
@@ -509,6 +559,22 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
         }
 
         const plan = prepared.plan;
+
+        // Record the account's current nonce immediately before the wallet is
+        // asked to sign. If the wallet then fails after authorisation, this is
+        // the baseline that lets the recovery panel tell a real on-chain
+        // transaction from a genuinely-unsent one — read through our own RPC, so
+        // it does not depend on the wallet's node. Best-effort: a failed read
+        // leaves it undefined and the recovery copy stays honest.
+        try {
+          const n = await getClientPublicClient(flow.intent.network).getTransactionCount({
+            address: wallet.address as `0x${string}`,
+            blockTag: "pending",
+          });
+          baselineNonceRef.current = BigInt(n);
+        } catch {
+          baselineNonceRef.current = undefined;
+        }
 
         // The operation is prepared from fresh data; the wallet signature has not
         // been requested yet. Record the stage for correlation only.
@@ -620,6 +686,23 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               : "failed",
           { code: info.kind, diagnostic: info.message },
         );
+
+        // The wallet failed AFTER the user authorised it (Trust Wallet's native
+        // layer reporting it could not reach its own node is the reported case).
+        // We cannot prove the transaction was not broadcast, so it is not a plain
+        // failure to retry: preserve every hash we hold and send the user to the
+        // unknown-outcome panel, which only offers a read-only status check and
+        // never resubmits. A definite pre-authorisation failure still returns to
+        // Review with a retry, as before.
+        if (info.kind === "wallet_rpc") {
+          setUnresolved({
+            hashes: attemptHashesRef.current,
+            error: info.message,
+          });
+          setStage("review");
+          return;
+        }
+
         setStage("review");
       }
     } finally {
@@ -882,14 +965,17 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
               <UnresolvedPanel
                 hashes={unresolved.hashes}
                 network={flow.intent.network}
+                detail={unresolved.error ?? null}
                 onCheckStatus={checkUnresolvedStatus}
                 checking={checkingStatus}
                 statusNote={statusNote}
+                canRetry={nothingSent}
                 onRetry={onConfirm}
                 onBack={() => {
                   setStage("compose");
                   reviewVersionRef.current = null;
                   setUnresolved(null);
+                  setNothingSent(false);
                 }}
               />
             ) : (
@@ -1030,17 +1116,23 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
 function UnresolvedPanel({
   hashes,
   network,
+  detail,
   onCheckStatus,
   checking,
   statusNote,
+  canRetry,
   onRetry,
   onBack,
 }: {
   hashes: `0x${string}`[];
   network: MonadNetwork;
+  /** The specific cause, when we have one (never a raw provider string). */
+  detail: string | null;
   onCheckStatus: () => void;
   checking: boolean;
   statusNote: string | null;
+  /** True only when the status check proved nothing was broadcast. */
+  canRetry: boolean;
   onRetry: () => void;
   onBack: () => void;
 }) {
@@ -1053,13 +1145,12 @@ function UnresolvedPanel({
           </div>
           <h2 className="text-lg font-semibold text-white">Transaction status unknown</h2>
           <p className="mt-2 max-w-sm text-sm text-white/55">
-            The transaction was submitted, but we could not confirm its outcome within the
-            confirmation window. It may still be processing on Monad. Nothing else has been sent —
-            do not submit a duplicate payment until you are sure.
+            {detail ??
+              "The transaction was submitted, but we could not confirm its outcome within the confirmation window. It may still be processing on Monad. Nothing else has been sent — do not submit a duplicate payment until you are sure."}
           </p>
         </div>
 
-        {hashes.length > 0 && (
+        {hashes.length > 0 ? (
           <div className="mt-5 space-y-2">
             {hashes.map((h) => (
               <a
@@ -1074,6 +1165,11 @@ function UnresolvedPanel({
               </a>
             ))}
           </div>
+        ) : (
+          <p className="mt-5 text-center text-xs text-white/45">
+            Your wallet did not return a transaction hash. Use the check below to see whether it
+            broadcast a transaction anyway.
+          </p>
         )}
 
         {statusNote && (
@@ -1084,7 +1180,7 @@ function UnresolvedPanel({
 
         <button
           onClick={onCheckStatus}
-          disabled={checking || hashes.length === 0}
+          disabled={checking}
           className="btn-primary mt-5 w-full"
         >
           {checking ? (
@@ -1095,7 +1191,12 @@ function UnresolvedPanel({
             "Check transaction status"
           )}
         </button>
-        <button onClick={onRetry} disabled={checking} className="btn-ghost mt-3 w-full">
+        <button
+          onClick={onRetry}
+          disabled={checking || !canRetry}
+          title={canRetry ? undefined : "Check the transaction status first — a payment may already have been sent."}
+          className="btn-ghost mt-3 w-full disabled:opacity-40"
+        >
           Retry payment
         </button>
         <button onClick={onBack} disabled={checking} className="btn-ghost mt-3 w-full">

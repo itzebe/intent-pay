@@ -113,15 +113,26 @@ describe("isTransportError / isWalletTransportFailure", () => {
 describe("classifyTransactionError distinguishes the wallet's RPC from ours", () => {
   const transport = new TypeError("Failed to fetch");
 
-  it("with source 'wallet' it is a wallet_rpc failure that did NOT submit", () => {
+  it("with source 'wallet' it is a wallet_rpc failure that MAY have submitted", () => {
     const info = classifyTransactionError(transport, { source: "wallet" });
     expect(info.kind).toBe("wallet_rpc");
-    expect(info.mayHaveSubmitted).toBe(false);
-    expect(info.message).toMatch(/wallet couldn't complete its network request/i);
-    expect(info.message).toMatch(/Intent Pay's own chain reads are unaffected/i);
-    // It must not claim our RPC is down or send the user to a status check.
+    // The wallet is asked to send only after the user authorised, so a transport
+    // failure does not prove nothing was broadcast: it is an unknown outcome.
+    expect(info.mayHaveSubmitted).toBe(true);
+    expect(info.message).toMatch(/may already be on Monad|authorised the payment/i);
+    expect(info.message).toMatch(/do not submit another payment/i);
+    // It must not claim our RPC is down, and it must not claim nothing was sent.
     expect(info.message).not.toMatch(/network provider is temporarily unavailable/i);
-    expect(info.action).toBe("Try again");
+    expect(info.message).not.toMatch(/was not sent/i);
+    expect(info.action).toBe("Check status");
+  });
+
+  it("recognises the Trust Wallet connection-error shapes as transport failures", () => {
+    // The exact phrase Trust Wallet's native layer raises after password entry.
+    expect(isTransportError(new TypeError("Failed to connect to http://monad.twnodes.com/"))).toBe(true);
+    expect(isTransportError(new Error("net::ERR_CONNECTION_REFUSED"))).toBe(true);
+    expect(isTransportError(new Error("ERR_NAME_NOT_RESOLVED"))).toBe(true);
+    expect(isTransportError(new Error("Could not connect to the server"))).toBe(true);
   });
 
   it("with the default source it stays the honest rpc_unavailable outcome", () => {

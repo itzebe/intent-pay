@@ -49,6 +49,7 @@ export const SDK_ERROR_CODES = [
   "wallet_rejected",
   "wallet_wrong_chain",
   "wallet_no_account",
+  "wallet_unknown_outcome",
 ] as const;
 
 export type SdkErrorCode = (typeof SDK_ERROR_CODES)[number];
@@ -131,7 +132,15 @@ export class ConfigurationError extends IntentPayError {
 export class WalletError extends IntentPayError {
   readonly walletCode: SdkErrorCode;
 
-  constructor(code: "wallet_not_found" | "wallet_rejected" | "wallet_wrong_chain" | "wallet_no_account", message: string) {
+  constructor(
+    code:
+      | "wallet_not_found"
+      | "wallet_rejected"
+      | "wallet_wrong_chain"
+      | "wallet_no_account"
+      | "wallet_unknown_outcome",
+    message: string,
+  ) {
     super(code, message);
     this.name = "WalletError";
     this.walletCode = code;

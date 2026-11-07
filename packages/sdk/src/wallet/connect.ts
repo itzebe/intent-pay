@@ -11,6 +11,7 @@ import {
   firstAccount,
   isMonadChainId,
   isUserRejection,
+  isWalletTransportError,
   monadAddChainParams,
   walletErrorMessage,
   MONAD_CHAIN_ID,
@@ -353,6 +354,17 @@ export class Wallet {
       } catch (err) {
         if (err instanceof WalletError) throw err;
         if (isUserRejection(err)) throw new WalletError("wallet_rejected", "You rejected the transaction in your wallet.");
+        // A transport failure after the user authorised does not prove nothing was
+        // broadcast — the wallet may have signed and sent before its own node
+        // became unreachable (Trust Wallet's native layer is the reported case).
+        // Surface it as an unknown outcome so the caller checks status instead of
+        // resending.
+        if (isWalletTransportError(err)) {
+          throw new WalletError(
+            "wallet_unknown_outcome",
+            "Your wallet authorised the payment but could not reach its own network endpoint, so we can't confirm whether the transaction was broadcast. It may already be on-chain. Do not resend — check the transaction status first.",
+          );
+        }
         throw new WalletError("wallet_no_account", walletErrorMessage(err));
       }
     }

@@ -385,6 +385,57 @@ describe("confirmation flow", () => {
     expect(screen.getByText("Refreshing price…")).toBeTruthy();
   });
 
+  it("does not offer a plain retry after a wallet fails post-authorisation — it shows the unknown-outcome panel (Trust Wallet)", async () => {
+    // The reported Trust Wallet case: the user authorises (enters their password)
+    // and only then does the wallet's native layer fail with a transport error
+    // ("Failed to connect to http://monad.twnodes.com/"). That does not prove
+    // nothing was broadcast, so the composer must NOT return to Review with a
+    // plain Retry (a double-spend path) — it must show the unknown-outcome panel
+    // with a read-only status check, and keep Retry disabled until a check proves
+    // nothing was sent.
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [
+          {
+            id: "transfer",
+            kind: "transfer",
+            label: "Send USDC",
+            token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" },
+            amount: 5_000_000n,
+            to: flow.intent.recipient,
+          },
+        ],
+      },
+    });
+    executePlan.mockRejectedValue(
+      Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: new TypeError("Failed to connect to http://monad.twnodes.com/"),
+      }),
+    );
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+
+    // The unknown-outcome panel is shown, never a bare retry on Review.
+    expect(screen.getByText(/Transaction status unknown/i)).toBeTruthy();
+    // The raw host never reaches the user.
+    expect(screen.queryByText(/twnodes/i)).toBeNull();
+    // Retry is present but disabled until a status check proves nothing was sent.
+    const retry = screen.getByText("Retry payment") as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    expect(screen.getByText("Check transaction status")).toBeTruthy();
+  });
+
   it("does NOT disappear after the wrap/approval step while the swap is still pending (MON → USDT)", async () => {
     // The reported MON→USDT symptom: the composer vanished right after the
     // wrap/approval. Cause: a mid-execution quote re-price unmounted the whole

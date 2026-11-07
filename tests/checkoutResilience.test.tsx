@@ -57,8 +57,12 @@ vi.mock("@/components/wallet/WalletBar", () => ({
   ConnectButton: () => React.createElement("button", null, "Connect wallet"),
   BalanceOverview: () => React.createElement("div", null, "Your wallet"),
 }));
+const { nonceMock } = vi.hoisted(() => ({ nonceMock: vi.fn(async () => 0) }));
 vi.mock("@/lib/wallet/clients", () => ({
-  getClientPublicClient: () => ({ waitForTransactionReceipt: vi.fn(async () => ({ status: "success" as const })) }),
+  getClientPublicClient: () => ({
+    waitForTransactionReceipt: vi.fn(async () => ({ status: "success" as const })),
+    getTransactionCount: nonceMock,
+  }),
 }));
 
 function checkoutView(overrides: Record<string, unknown> = {}) {
@@ -194,13 +198,71 @@ describe("checkout resilience", () => {
     fireEvent.click(screen.getByRole("button", { name: /Pay \$25\.00/ }));
     await flush();
     await flush();
-    expect(screen.getByText(/wallet couldn't complete its network request/i)).toBeTruthy();
-    // Our own reads are explicitly not the problem, and nothing was submitted.
-    expect(screen.getByText(/Intent Pay's own chain reads are unaffected/i)).toBeTruthy();
+    expect(screen.getByText(/authorised the payment/i)).toBeTruthy();
+    // Our own reads are explicitly not the problem.
     expect(screen.queryByText(/network provider is temporarily unavailable/i)).toBeNull();
-    // The page is still usable: the customer can retry, not a blank screen.
-    expect(screen.getByRole("button", { name: /Pay \$25\.00/ })).toBeTruthy();
+    // The outcome is unknown, so paying again is blocked until a status check —
+    // the page is still usable (not blank) and offers the check.
+    expect(screen.getByText("Check payment status")).toBeTruthy();
+    const pay = screen.getByRole("button", { name: /Pay \$25\.00/ }) as HTMLButtonElement;
+    expect(pay.disabled).toBe(true);
     expect(screen.getByText("$25.00 in USDC")).toBeTruthy();
+  });
+
+  /**
+   * Mission 24. After a post-authorisation wallet transport failure the outcome
+   * is unknown. A status check that reads the account's own activity must decide
+   * honestly: a nonce above the pre-attempt baseline means the wallet DID
+   * broadcast (the payment may be on-chain — do not pay again), an unchanged
+   * nonce means nothing was sent (safe to retry).
+   */
+  it("reports that a transaction may already be on-chain when the account's nonce advanced", async () => {
+    nonceMock.mockReset();
+    nonceMock.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to connect to http://monad.twnodes.com/"));
+    global.fetch = mockFetch({
+      "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
+      "POST /api/checkout/chk_token/prepare": () => ({
+        calls: [{ to: "0x0000000000000000000000000000000000000001", data: "0x", value: "0" }],
+        quote: { payToken: "USDC", payAmount: "25", receiveToken: "USDC", receiveAmount: "25", minimumReceived: "25", slippageBps: 50, networkCostUsd: 0.01 },
+      }),
+    }) as any;
+    render(<CheckoutClient token="chk_token" />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$25\.00/ }));
+    await flush();
+    await flush();
+    fireEvent.click(screen.getByText("Check payment status"));
+    await flush();
+    await flush();
+    expect(screen.getByText(/has submitted a transaction/i)).toBeTruthy();
+    // Still blocked from paying again.
+    const pay = screen.getByRole("button", { name: /Pay \$25\.00/ }) as HTMLButtonElement;
+    expect(pay.disabled).toBe(true);
+  });
+
+  it("reports that nothing was sent when the account's nonce is unchanged, and re-enables Pay", async () => {
+    nonceMock.mockReset();
+    nonceMock.mockResolvedValue(0);
+    wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to connect to http://monad.twnodes.com/"));
+    global.fetch = mockFetch({
+      "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
+      "POST /api/checkout/chk_token/prepare": () => ({
+        calls: [{ to: "0x0000000000000000000000000000000000000001", data: "0x", value: "0" }],
+        quote: { payToken: "USDC", payAmount: "25", receiveToken: "USDC", receiveAmount: "25", minimumReceived: "25", slippageBps: 50, networkCostUsd: 0.01 },
+      }),
+    }) as any;
+    render(<CheckoutClient token="chk_token" />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$25\.00/ }));
+    await flush();
+    await flush();
+    fireEvent.click(screen.getByText("Check payment status"));
+    await flush();
+    await flush();
+    expect(screen.getByText(/nothing was sent/i)).toBeTruthy();
+    const pay = screen.getByRole("button", { name: /Pay \$25\.00/ }) as HTMLButtonElement;
+    expect(pay.disabled).toBe(false);
   });
 });
 

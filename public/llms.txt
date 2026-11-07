@@ -56,8 +56,11 @@ MON), and it never holds a user's key.
 - `POST /api/quote` — price a payment with no wallet (the fastest way to exercise
   routing).
 - SDK: `packages/sdk` (`@intentpay/sdk`, `@intentpay/sdk/wallet`,
-  `@intentpay/sdk/webhooks`).
-- Examples: `examples/quickstart`, `examples/merchant`.
+  `@intentpay/sdk/webhooks`). Not yet published to npm; build it from source
+  (`npm run build && npm pack`) and install the tarball.
+- Examples: `examples/quickstart`, `examples/merchant`,
+  `examples/status-and-verify`.
+- Quickstart: `https://intent-pay-roan.vercel.app/docs/quickstart`.
 
 ## Security model
 
@@ -85,6 +88,8 @@ bundler, UserOperation or account-abstraction path.
 - [docs/architecture.md](docs/architecture.md) — layers, lifecycle, RPC, trust boundaries.
 - [docs/security.md](docs/security.md) — invariants, duplicate-submission protection, disclosure.
 - [docs/developers.md](docs/developers.md) — onboarding, API, SDK, testing.
+- [docs/quickstart](https://intent-pay-roan.vercel.app/docs/quickstart) — in-app
+  quickstart: authenticate, create an intent, prepare, submit and verify.
 - [docs/merchants.md](docs/merchants.md) — checkout integration and reconciliation.
 - [docs/roadmap.md](docs/roadmap.md) — status by area.
 - [CHANGELOG.md](CHANGELOG.md) — technical milestones.

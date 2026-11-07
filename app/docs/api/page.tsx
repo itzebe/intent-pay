@@ -85,12 +85,16 @@ export default function DeveloperApiDocs() {
       <DocSection title="TypeScript SDK">
         <P>
           <Code>@intentpay/sdk</Code> wraps this API with typed methods and an error model, and adds
-          the browser wallet layer. It ships three entry points so nothing you do not use enters your
-          bundle:
+          the browser wallet layer. It is developed in this repository and is <strong>not yet
+          published to npm</strong>, so it is built and installed from source. It ships three entry
+          points so nothing you do not use enters your bundle:
         </P>
         <div className="card-flat overflow-x-auto p-4">
-          <pre className="font-mono text-xs leading-relaxed text-white/70">{`npm install @intentpay/sdk
-# for mobile / QR wallets:
+          <pre className="font-mono text-xs leading-relaxed text-white/70">{`# build the SDK from the repository, then install the tarball
+cd packages/sdk && npm install && npm run build && npm pack
+npm install /path/to/intent-pay/packages/sdk/intentpay-sdk-0.1.0.tgz
+
+# for mobile / QR wallets (peer dependency):
 npm install @walletconnect/ethereum-provider`}</pre>
         </div>
         <UL>

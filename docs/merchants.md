@@ -6,7 +6,11 @@ This guide is the repository-level merchant onboarding. The in-app reference at
 ## Onboarding
 
 1. Obtain a merchant API key (`ipk_live_<prefix>.<secret>`). The key is held by
-   your server, never on a customer route and never bundled into a browser.
+   your server, never on a customer route and never bundled into a browser. On a
+   **local deployment** you create one yourself with
+   `POST /api/v1/developers`; on **production, signup is closed** — the operator
+   enables it with `INTENT_PAY_ADMIN_TOKEN`, so a merchant requests a key from the
+   operator. There is no self-serve production signup today.
 2. Read `GET /api/v1/capabilities` for the real chain, assets and endpoints.
 3. Optionally register a **watch-only payment xpub** so each order is paid to a
    unique derived destination (see below).

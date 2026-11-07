@@ -16,6 +16,7 @@ const CARDS = [
   { href: "/docs/security", t: "Security & Trust", d: "The signing guard, on-chain output bounds and honest capability reporting." },
   { href: "/docs/roadmap", t: "Roadmap", d: "What is built and verified, what is in progress, and what is planned." },
   { href: "/docs/faq", t: "FAQ", d: "Direct answers about tokens, gas, fees, safety and network support." },
+  { href: "/docs/quickstart", t: "Quickstart", d: "Integrate the API and SDK: authenticate, create an intent, prepare, submit and verify." },
   { href: "/docs/developers", t: "Developers", d: "Repository layout, commands, routes and configuration." },
   { href: "/docs/api", t: "Developer API", d: "The versioned /api/v1 endpoints for intents, checkouts, webhooks and settlement." },
   { href: "/docs/checkout", t: "Merchant Checkout", d: "Accept payments with a link or QR; receive the asset you asked for." },

@@ -183,6 +183,7 @@ token registry and `TtlCache` are module-level.
 | [`docs/developers.md`](docs/developers.md) | Onboarding, API usage, SDK setup, integration examples. |
 | [`docs/merchants.md`](docs/merchants.md) | Checkout integration, status verification, reconciliation. |
 | [`docs/roadmap.md`](docs/roadmap.md) | Status by area, with milestone evidence. |
+| [`examples/`](examples/) | Runnable quickstart, merchant and headless status/verify examples. |
 | [`CHANGELOG.md`](CHANGELOG.md) | Technical milestones. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Development and PR workflow. |
 | [`AGENTS.md`](AGENTS.md) | The invariants that must not regress. |

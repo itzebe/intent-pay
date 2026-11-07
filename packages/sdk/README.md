@@ -16,11 +16,27 @@ Three entry points, so nothing you do not use is pulled into your bundle:
 
 ## Install
 
+The SDK is developed in this repository (`packages/sdk`) and is **not yet
+published to the npm registry**, so `npm install @intentpay/sdk` does not work
+today. Build it from source and install the resulting tarball:
+
 ```bash
-npm install @intentpay/sdk
+# 1. Get the SDK and build it
+git clone https://github.com/itzebe/intent-pay
+cd intent-pay/packages/sdk
+npm install
+npm run build
+npm pack                       # → intentpay-sdk-0.1.0.tgz
+
+# 2. In your own project, install that tarball
+npm install /path/to/intent-pay/packages/sdk/intentpay-sdk-0.1.0.tgz
 ```
 
-For WalletConnect (mobile / QR wallets):
+The import specifiers are stable regardless of how you install it — `@intentpay/sdk`,
+`@intentpay/sdk/wallet` and `@intentpay/sdk/webhooks` all resolve. When the package
+is published, `npm install @intentpay/sdk` will replace step 1.
+
+For WalletConnect (mobile / QR wallets) add the peer dependency to your project:
 
 ```bash
 npm install @walletconnect/ethereum-provider

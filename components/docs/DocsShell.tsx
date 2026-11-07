@@ -16,6 +16,7 @@ const NAV = [
     { href: "/docs/faq", label: "FAQ" },
   ] },
   { title: "Build", links: [
+    { href: "/docs/quickstart", label: "Quickstart" },
     { href: "/docs/developers", label: "Developer Guide" },
     { href: "/docs/api", label: "Developer API" },
     { href: "/docs/checkout", label: "Merchant Checkout" },

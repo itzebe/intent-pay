@@ -293,6 +293,54 @@ describe("application-owned transaction preparation", () => {
       maxFeePerGas: "0x1c67c44400",
     });
   });
+
+  // 11. A transport-shaped send failure must be submitted EXACTLY ONCE. viem's
+  //     transport default is `retryCount: 3`, and it retries a transport error —
+  //     the exact shape a Trust Wallet provider throws when it cannot reach its
+  //     own node. Without an explicit `retryCount: 0` the raw `eth_sendTransaction`
+  //     is re-issued up to four times: the wallet re-prompts the user and the same
+  //     payment can be broadcast more than once. This is the "payments keep
+  //     failing with …:443" regression (a duplicated submit, not a single failure).
+  it("submits eth_sendTransaction exactly once on a wallet transport failure", async () => {
+    let calls = 0;
+    const wallet = createWalletClient({
+      account: SENDER,
+      chain: monadMainnet,
+      transport: custom({
+        request: async ({ method }: any) => {
+          if (method !== "eth_sendTransaction") throw new Error(`unexpected ${method}`);
+          calls += 1;
+          throw new Error("Failed to connect to http://monad.twnodes.com/ 3.33.251.223:443");
+        },
+      } as never),
+    });
+
+    const result = await sendTransactionViaWallet(wallet, SENDER, { to: RECIPIENT, value: 1n }, "mainnet");
+    expect(result).toMatchObject({ ok: false, reason: "send_failed" });
+    expect(calls).toBe(1);
+  });
+
+  // 12. The same rule end-to-end through the plan executor: one step, one send
+  //     attempt, even though the wallet's transport failed.
+  it("does not resend a step whose wallet transport failed", async () => {
+    const rpc = stubAppRpc();
+    restore = rpc.restore;
+    let sends = 0;
+    const wallet = createWalletClient({
+      account: SENDER,
+      chain: monadMainnet,
+      transport: custom({
+        request: async ({ method }: any) => {
+          if (method !== "eth_sendTransaction") throw new Error(`unexpected ${method}`);
+          sends += 1;
+          throw new Error("Failed to connect to http://monad.twnodes.com/ 3.33.251.223:443");
+        },
+      } as never),
+    });
+
+    await expect(executePlan(directTransferPlan(), wallet, "mainnet")).rejects.toBeTruthy();
+    expect(sends).toBe(1);
+  });
 });
 
 describe("prepareTxFields — never fabricate a field", () => {

@@ -39,7 +39,8 @@ may not do. The agent does **not** perform a real Mainnet payment.
 
 ## Acceptance checklist (for the owner's real validation)
 
-- [ ] Operator provisions a production API key for the merchant.
+- [ ] Obtain a production API key — self-service (register + verify email) or
+      operator-provisioned.
 - [ ] (Optional) Operator registers the merchant's watch-only xpub; a checkout
       shows a unique destination and the mode reads `checkout_bound`.
 - [ ] Merchant creates a checkout for a small, real amount in the token the

@@ -15,10 +15,14 @@ no application code, no `@/` alias and no `lib/*` import.
 npm --prefix packages/sdk install
 npm --prefix packages/sdk run build
 
-# 2. Get a merchant key (open locally; operator-gated in production — see docs/merchants.md §6)
-curl -s -X POST http://localhost:3000/api/v1/developers \
-  -H 'Content-Type: application/json' -d '{"name":"my-shop"}'
-# → { "developer": {…}, "apiKey": "ipk_test_…" }   (shown once)
+# 2. Get a merchant key (self-service — see docs/merchants.md §6)
+curl -s -X POST http://localhost:3000/api/v1/developers/register \
+  -H 'Content-Type: application/json' -d '{"name":"my-shop","email":"you@example.com"}'
+# → 202 { "status": "verification_sent", … }   (a link is emailed)
+# then open the link, or exchange the token:
+curl -s -X POST http://localhost:3000/api/v1/developers/verify \
+  -H 'Content-Type: application/json' -d '{"token":"ipv_…"}'
+# → { "apiKey": "ipk_test_…" }   (shown once)
 
 # 3. Run the demo against a local or production deployment
 INTENTPAY_API_KEY=ipk_test_… \

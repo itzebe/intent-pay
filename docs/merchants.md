@@ -44,8 +44,9 @@ These are real limits, stated so the working surface is not over-claimed.
   payment moves real funds. See §14.
 - **No refunds.** An overpayment is never refunded automatically, and there is no
   refund endpoint. A `verified` order records the exact amount delivered.
-- **No self-serve production signup.** Production key issuance is
-  operator-assisted. See §6.
+- **Self-serve signup with email verification.** Signup is public: register an
+  email, open the verification link, and your first key is issued once. An
+  operator can also provision a key directly (the admin path). See §6.
 - **Webhook delivery is request-driven.** Events enqueue a delivery row; a due
   attempt is made after a `submit`/`verify` response, after a delivery-log read,
   or via the admin drain route. This deployment has no cron configured — see §12.
@@ -80,39 +81,52 @@ Authorization: Bearer ipk_live_<prefix>.<secret>
 
 ## 6. Credential acquisition
 
-There are two environments, and they differ in how a key is obtained.
+Signup is **self-service**: register an email, open the verification link, and your
+first key is issued once. No operator is involved.
 
-- **Local / non-production deployment** — signup is open:
+```bash
+# 1. start signup — a verification email is sent to the address
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers/register \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-shop","email":"you@example.com"}'
+# → 202 { "ok": true, "status": "verification_sent", … }
 
-  ```bash
-  curl -s -X POST http://localhost:3000/api/v1/developers \
-    -H 'Content-Type: application/json' \
-    -d '{"name":"my-shop"}'
-  # → { "ok": true, "developer": {…}, "apiKey": "ipk_live_…", "keyId": "key_…" }
-  ```
+# 2. exchange the token from the email for your first key
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers/verify \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"ipv_…"}'
+# → 201 { "ok": true, "apiKey": "ipk_live_…", "keyId": "key_…", … }
+```
 
-- **Production** — signup is **operator-gated**. The endpoint requires the
-  operator's `INTENT_PAY_ADMIN_TOKEN`:
+- **No credential before proof.** Registration issues **no** key; the key is
+  minted only when the verification link is opened, so an address you do not
+  control can never obtain one. The verification token is single-use, expires in
+  24 hours, and only its hash is stored.
+- The response to `/register` is the same whether the address is new, already
+  pending or already registered, so the endpoint cannot be used to discover which
+  addresses have accounts.
+- If the deployment has no email provider configured, `/register` refuses with
+  `503 email_unavailable` rather than accepting an account it cannot verify.
+- The portal at [`/developer`](https://intent-pay-roan.vercel.app/developer) does
+  the same flow in a browser and manages keys (create / rotate / revoke) after
+  sign-in.
 
-  ```bash
-  curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers \
-    -H "Authorization: Bearer $INTENT_PAY_ADMIN_TOKEN" \
-    -H 'Content-Type: application/json' \
-    -d '{"name":"my-shop"}'
-  ```
+**Operator provisioning (support / bulk onboarding).** An operator may create an
+account directly with the `INTENT_PAY_ADMIN_TOKEN`:
 
-  Without the token the response is:
+```bash
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers \
+  -H "Authorization: Bearer $INTENT_PAY_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-shop","email":"ops@example.com"}'
+```
 
-  ```json
-  { "ok": false, "error": { "code": "forbidden",
-    "message": "Developer signup requires the admin token." } }
-  ```
+Without the token this endpoint responds:
 
-  A merchant does **not** hold the admin token. The supported process today is:
-  the merchant asks the deployment operator for a key, and the operator runs the
-  request above and hands over the returned `apiKey` securely. There is **no**
-  self-serve production signup and no public endpoint that bypasses operator
-  approval.
+```json
+{ "ok": false, "error": { "code": "forbidden",
+  "message": "Operator provisioning requires the admin token. Self-service signup is available at the developer portal." } }
+```
 
 `GET /api/v1/developers` returns your account and your keys' metadata (prefix,
 label, environment, status) — never a secret.
@@ -373,9 +387,9 @@ no risk-free mode that still proves a real payment.
 
 The safest available approach:
 
-1. Test your integration **logic** locally against a local deployment (signup is
-   open outside production — see §6). Create intents, checkouts, links and QR
-   codes without any wallet.
+1. Test your integration **logic** locally against a local deployment (or use the
+   self-service signup on any deployment — see §6). Create intents, checkouts,
+   links and QR codes without any wallet.
 2. Exercise the read and error paths: `GET /api/v1/capabilities`, create/validate,
    the idempotency replay, and the error codes in §13.
 3. A `test` environment key is accepted outside production, but it does **not**
@@ -402,8 +416,9 @@ about the real path.
 
 - **`401 unauthorized`** — the key is missing, malformed, revoked or expired.
   The `Authorization` header must be `Bearer <key>`.
-- **`403 forbidden` on `POST /api/v1/developers`** — production signup requires
-  the operator's admin token (§6).
+- **`403 forbidden` on `POST /api/v1/developers`** — this is the operator
+  provisioning path and requires the admin token. For normal signup use the
+  public `/api/v1/developers/register` → `/api/v1/developers/verify` flow (§6).
 - **`403 forbidden` on a request with a valid-looking key** — a `test` key is
   being used in production without the override.
 - **`409 conflict` creating a checkout** — the intent already has one. A second

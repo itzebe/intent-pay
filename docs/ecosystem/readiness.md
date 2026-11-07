@@ -23,7 +23,9 @@ project memory.
   cleanly (LICENSE included), but the `@intentpay` scope is not held by the owner
   and no npm credential is available. Do not bypass; see
   `sdk-publication-checklist.md`.
-- **Self-service merchant signup** — not built; onboarding is operator-gated.
+- **Self-service merchant registration UI** — developer signup is self-service
+  (email-verified); registering a merchant's receive address/xpub in the same UI
+  is planned, not built.
 - **Sandbox / testnet** — none exists; this is a mainnet-only product.
 - **Refunds** — no endpoint.
 - **Real merchant validation** — a real merchant has not completed and

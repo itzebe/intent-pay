@@ -20,6 +20,7 @@ export const PUBLIC_ROUTES: { path: string; priority: number }[] = [
   { path: "/", priority: 1 },
   { path: "/product", priority: 0.9 },
   { path: "/developers", priority: 0.9 },
+  { path: "/developer", priority: 0.7 },
   { path: "/merchants", priority: 0.9 },
   { path: "/docs", priority: 0.8 },
   { path: "/docs/litepaper", priority: 0.7 },

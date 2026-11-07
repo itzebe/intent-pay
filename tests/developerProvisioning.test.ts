@@ -5,11 +5,12 @@ import { POST as developersPOST } from "@/app/api/v1/developers/route";
 import { GET as intentsGET } from "@/app/api/v1/intents/route";
 
 /**
- * Self-serve developer provisioning (`POST /api/v1/developers`).
+ * Operator developer provisioning (`POST /api/v1/developers`).
  *
- * This is the only way an outside integrator can mint an API key, and it is the
- * gate that keeps production from becoming an open signup. Two properties matter
- * and are asserted here:
+ * This is the operator path for minting an API key (support and bulk
+ * onboarding); public self-service signup is a separate flow
+ * (`/api/v1/developers/register` → `/verify`). Two properties matter and are
+ * asserted here:
  *
  *   - in production it is **closed** unless the operator has configured
  *     `INTENT_PAY_ADMIN_TOKEN`, and then it needs the correct token (a missing

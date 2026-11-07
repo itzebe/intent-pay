@@ -14,10 +14,11 @@ you from a key to a verified settlement with the real request and response shape
 2. Skim [`../AGENTS.md`](../AGENTS.md) — it lists the invariants that must not
    regress (the submission is never retried; a broadcast is not a success; the
    requested output asset is authoritative).
-3. Run the app locally (below) and create a developer key with
-   `POST /api/v1/developers`. On **production, signup is closed** — the operator
-   enables it with `INTENT_PAY_ADMIN_TOKEN`, so an integrator requests a key from
-   the operator. There is no self-serve production signup today.
+3. Run the app locally (below) and create a developer key. Signup is
+   **self-service** on every deployment: `POST /api/v1/developers/register` emails
+   a verification link, and `POST /api/v1/developers/verify` exchanges the token
+   for your first key. An operator can also provision a key directly with
+   `POST /api/v1/developers`, which requires the `INTENT_PAY_ADMIN_TOKEN`.
 4. Exercise routing without a wallet via `POST /api/quote`.
 
 ## Local development

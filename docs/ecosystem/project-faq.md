@@ -47,9 +47,10 @@ is unverified — never success.
 
 ## API credentials
 
-**How do I get an API key?** Production credentials are provisioned by the
-operator today; there is no self-service signup yet. The key authorizes API
-calls only — it cannot sign or move funds.
+**How do I get an API key?** Signup is self-service: register your email at the
+developer portal, open the verification link, and your first key is issued once.
+An operator can also provision a key directly. The key authorizes API calls only
+— it cannot sign or move funds.
 
 ## Webhooks
 

@@ -14,8 +14,8 @@ export const metadata: Metadata = {
  *
  * Every command, field and response below was taken from a real local run of the
  * shipped API and SDK (see the repository's `examples/` and `tests/`), not from a
- * design sketch. Where a capability does not exist yet — a published npm package,
- * a self-serve production key — it says so and gives the supported alternative.
+ * design sketch. Where a capability does not exist yet — a published npm package —
+ * it says so and gives the supported alternative.
  */
 export default function Quickstart() {
   return (
@@ -53,10 +53,12 @@ wallet.sendCalls()    ────────▶  submitTransaction()       ─
             <strong>Node.js 20.19+</strong> for the SDK (the app itself requires Node 24.22+).
           </LI>
           <LI>
-            <strong>A developer account and API key.</strong> On a local deployment you create one
-            with one request (step 3). <strong>On the production deployment, signup is closed</strong>{" "}
-            — the operator enables it with <Code>INTENT_PAY_ADMIN_TOKEN</Code>, and an integrator
-            requests a key from the operator. There is no self-serve production signup today.
+            <strong>A developer account and API key.</strong> Signup is <strong>self-service</strong>:
+            create an account with your email at the{" "}
+            <Link href="/developer">developer portal</Link>, open the verification link, and your
+            first key is issued once. The operator can also provision a key directly with{" "}
+            <Code>INTENT_PAY_ADMIN_TOKEN</Code> (step 3) — the admin token is never needed for normal
+            signup.
           </LI>
           <LI>
             <strong>Monad Mainnet access.</strong> Intent Pay is Monad-only, chain id{" "}
@@ -97,17 +99,28 @@ npm install @walletconnect/ethereum-provider`}
 
       <DocSection title="3. Authentication">
         <P>
-          Create a developer account and its first key. On a <strong>local</strong> deployment this is
-          open; on <strong>production</strong> it requires the admin token.
+          Signup is self-service. Register an email, open the verification link, and your first key is
+          returned <strong>once</strong>. No administrator token is involved.
         </P>
         <div className="card-flat overflow-x-auto p-4">
           <pre className="font-mono text-xs leading-relaxed text-white/70">
-{`# local deployment (no token needed)
-curl -s -X POST http://localhost:3000/api/v1/developers \\
+{`# 1. start signup (a verification email is sent)
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers/register \\
   -H 'Content-Type: application/json' \\
-  -d '{"name":"my-app","environment":"test"}'
+  -d '{"name":"my-app","email":"you@example.com"}'
 
-# production (operator-held admin token)
+# 2. exchange the token from the email for your first key
+curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers/verify \\
+  -H 'Content-Type: application/json' \\
+  -d '{"token":"ipv_…"}'`}
+          </pre>
+        </div>
+        <P>
+          An operator can also provision an account directly, which requires the admin token:
+        </P>
+        <div className="card-flat overflow-x-auto p-4">
+          <pre className="font-mono text-xs leading-relaxed text-white/70">
+{`# operator provisioning (support / bulk onboarding)
 curl -s -X POST https://intent-pay-roan.vercel.app/api/v1/developers \\
   -H "Authorization: Bearer $INTENT_PAY_ADMIN_TOKEN" \\
   -H 'Content-Type: application/json' \\
@@ -324,8 +337,15 @@ try {
       <DocSection title="10. Troubleshooting">
         <UL>
           <LI>
-            <strong>&ldquo;Developer signup requires the admin token&rdquo;</strong> — you are calling
-            production. Create the key locally, or ask the operator to issue one.
+            <strong>&ldquo;Operator provisioning requires the admin token&rdquo;</strong> — you are
+            calling <Code>POST /api/v1/developers</Code> (the operator path). For normal signup, use{" "}
+            <Code>/api/v1/developers/register</Code> and <Code>/api/v1/developers/verify</Code>, which
+            need no token.
+          </LI>
+          <LI>
+            <strong><Code>email_unavailable</Code></strong> — self-service signup needs an email
+            provider (<Code>RESEND_API_KEY</Code> + <Code>EMAIL_FROM</Code>) configured on the
+            deployment. The operator provisions keys directly meanwhile.
           </LI>
           <LI>
             <strong>&ldquo;Test API keys are not accepted in production&rdquo;</strong> — use a live

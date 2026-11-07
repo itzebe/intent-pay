@@ -4,6 +4,8 @@ import { SEED_TOKENS } from "@/lib/config/tokens";
 import { WEBHOOK_EVENTS, INTENT_STATES } from "@/lib/developer/intentLifecycle";
 import { MAX_ATTEMPTS } from "@/lib/developer/webhooks";
 import { isProductionEnvironment, testKeysAllowed } from "@/lib/developer/credentials";
+import { emailConfigured } from "@/lib/developer/email";
+import { adminConfigured } from "@/lib/server/auth";
 import { storeCapability } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +60,9 @@ export async function GET() {
       { method: "GET", path: "/api/v1/attribution", description: "Read the checkout-attribution configuration." },
       { method: "POST", path: "/api/v1/attribution", description: "Register or clear the watch-only payment xpub (per-checkout destinations)." },
       { method: "GET", path: "/api/v1/capabilities", description: "This document." },
+      { method: "POST", path: "/api/v1/developers/register", description: "Start self-service signup: creates a pending account and emails a verification link." },
+      { method: "POST", path: "/api/v1/developers/verify", description: "Exchange a single-use verification token for the first API key." },
+      { method: "POST", path: "/api/v1/developers/resend", description: "Re-send a verification email for a pending account." },
       { method: "POST", path: "/api/v1/webhooks", description: "Register a webhook destination." },
       { method: "GET", path: "/api/v1/webhooks", description: "List webhook destinations." },
       { method: "DELETE", path: "/api/v1/webhooks/{id}", description: "Delete a webhook destination." },
@@ -120,7 +125,15 @@ export async function GET() {
       header: "Authorization",
       /** Test keys are refused in production unless explicitly overridden. */
       testKeysAccepted: !isProductionEnvironment() || testKeysAllowed(),
-      signup: isProductionEnvironment() ? "admin" : "open",
+      /**
+       * Self-service signup is public on every deployment and always requires a
+       * verified email before a credential is issued. The administrator token
+       * remains an *additional*, operator-only provisioning path.
+       */
+      signup: "self_serve",
+      signupRequiresEmailVerification: true,
+      emailVerificationConfigured: emailConfigured(),
+      operatorProvisioning: adminConfigured(),
     },
   });
 }

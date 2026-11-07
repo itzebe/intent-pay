@@ -158,8 +158,9 @@ share the merchant's recipient.
   automatically.
 - **No sandbox.** There is no testnet or simulated-ledger mode; a `test` key does
   not change the chain.
-- **Operator-gated signup.** Production credentials are provisioned by the
-  operator; there is no self-service merchant signup.
+- **Self-service signup (email-verified).** Developers register an email, verify
+  it, and receive a key; an operator can also provision directly. Merchant
+  onboarding additionally needs a receive address or watch-only xpub.
 - **Request-driven webhooks.** Delivery is request-driven; a production merchant
   should add a scheduled drain.
 - **Live-route coverage** for the long tail of tokens keeps expanding.
@@ -184,9 +185,9 @@ share the merchant's recipient.
 | Hosted checkout, payment links, QR | Implemented |
 | HMAC webhooks, idempotency, replay protection | Implemented |
 | Merchant console | Implemented |
+| Self-service developer signup (email-verified) | Implemented |
 | Refunds | Planned |
 | Scheduled webhook drain | Planned |
 | Sandbox / testnet mode | Not planned as a claim (mainnet only) |
-| Self-service production signup | Planned |
 | `@intentpay/sdk` on npm | Blocked (scope ownership) |
 | Service fee | Planned |

@@ -73,27 +73,35 @@ describe("quickstart is a real, wired page", () => {
     ]) {
       expect(source, `quickstart omits ${call}`).toContain(call);
     }
-    // It must be honest about the two capability gaps.
+    // It must be honest about the remaining capability gap.
     expect(source).toMatch(/not yet published to npm/);
-    expect(source).toMatch(/signup is closed|admin token/);
+    expect(source).toMatch(/self-service/i);
   });
 });
 
 describe("key issuance is described honestly", () => {
-  it("says production signup is operator-gated in the developer and merchant guides", () => {
+  it("describes self-service signup with an operator fallback in the guides", () => {
     for (const file of ["docs/developers.md", "docs/merchants.md"]) {
       const source = read(file);
       expect(
-        /signup is closed|admin token/i.test(source),
-        `${file} does not disclose that production key issuance is operator-gated`,
+        /self-service/i.test(source),
+        `${file} does not disclose that signup is self-service`,
+      ).toBe(true);
+      expect(
+        /INTENT_PAY_ADMIN_TOKEN/.test(source),
+        `${file} does not document the operator provisioning fallback`,
       ).toBe(true);
     }
   });
 
-  it("does not present production signup as self-serve anywhere it is described", () => {
-    const source = read("app/docs/quickstart/page.tsx");
-    expect(source).toMatch(/signup is closed|admin token/);
-    expect(source).not.toMatch(/sign up for free|create an account in one click/i);
+  it("does not claim production signup is closed anywhere it is described", () => {
+    for (const file of ["app/docs/quickstart/page.tsx", "docs/developers.md", "docs/merchants.md"]) {
+      const source = read(file);
+      expect(source, `${file} still claims signup is closed`).not.toMatch(/signup is closed/i);
+    }
+    const quickstart = read("app/docs/quickstart/page.tsx");
+    expect(quickstart).toMatch(/self-service/i);
+    expect(quickstart).not.toMatch(/sign up for free|create an account in one click/i);
   });
 });
 

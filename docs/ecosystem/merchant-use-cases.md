@@ -47,14 +47,17 @@ workflows. Every capability named here exists; limitations are stated plainly.
 - **No refunds.** No refund endpoint exists; an overpayment is reconciled
   manually.
 - **No sandbox.** Orders are real mainnet value.
-- **Operator-gated onboarding.** There is no self-service merchant signup.
+- **Merchant onboarding needs a receive address.** Signup is self-service
+  (email-verified), but a merchant still configures a Monad receive address or a
+  watch-only xpub before a checkout can settle.
 - **Request-driven webhooks.** Add a scheduled drain for production reliability.
 - **Delivery depends on a route.** If no route exists for the requested token,
   the checkout fails honestly rather than producing a fabricated quote.
 
-## Operator-assisted onboarding today
+## Onboarding today
 
-Because production signup is operator-gated, a merchant is onboarded by the
-operator: a production API key is provisioned and (optionally) a watch-only xpub
-registered for checkout-bound attribution. A self-service flow is planned, not
-built.
+Signup is self-service: a developer registers an email, opens the verification
+link, and receives a key. For a merchant, a receive address (or a watch-only xpub
+for checkout-bound attribution) is configured on the account. An operator can
+also provision an account directly with the admin token. A merchant self-service
+flow that registers the receive address/xpub in the same UI is planned, not built.

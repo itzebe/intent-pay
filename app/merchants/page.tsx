@@ -71,8 +71,8 @@ const STAGES = [
   },
   {
     n: "5",
-    t: "Go live",
-    d: "Production key issuance is operator-assisted: the deployment operator enables signup and issues your key. There is no self-serve production signup.",
+    t: "Get your key",
+    d: "Signup is self-service: register your email, open the verification link, and your first key is issued once. No operator needed.",
   },
 ] as const;
 

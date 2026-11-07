@@ -46,9 +46,10 @@ was supplied for publication.
 | COMPLETE | TypeScript SDK (`@intentpay/sdk`) | PR #22 (`2e61e4d`), `packages/sdk` |
 | COMPLETE | Typed SDK error handling and transaction execution | `packages/sdk/src/core/errors.ts`, `src/wallet/connect.ts` |
 | COMPLETE | Webhooks with signature verification | PRs #24, #30, #31, `lib/developer/webhooks.ts` |
-| COMPLETE | Runnable integration examples | `examples/quickstart`, `examples/merchant` |
+| COMPLETE | Runnable integration examples | `examples/quickstart`, `examples/merchant`, `examples/status-and-verify`, `examples/merchant-onboarding` |
 | COMPLETE | Developer documentation (in-app and repository) | `/docs/api`, `/docs/developers`, `docs/*` |
 | NEEDS VALIDATION | External developer onboarding and integration validation | No third-party integration has been validated end to end yet |
+| BLOCKED | SDK publication to npm | The package (`@intentpay/sdk`) builds and packs (LICENSE now included) but is not published; publishing needs an npm account/scope the repository does not hold |
 
 ## Merchant infrastructure
 
@@ -61,7 +62,11 @@ was supplied for publication.
 | COMPLETE | Replay-resistant settlement attribution | PR #25 (`2253abd`) |
 | COMPLETE | Payment status and independent verification | `lib/server/*`, checkout `/verify` routes |
 | COMPLETE | Merchant console (real client of the public API) | `components/merchant/MerchantConsole.tsx` |
-| NEEDS VALIDATION | Merchant onboarding usability | The console works; a real merchant has not yet onboarded |
+| COMPLETE | Merchant onboarding journey (landing page + guide) | `app/merchants/page.tsx`, `docs/merchants.md`, regression `tests/merchantOnboarding.test.ts` |
+| COMPLETE | Headless merchant demonstration (no signature) | `examples/merchant-onboarding` |
+| NEEDS VALIDATION | Merchant onboarding usability | The console works and the headless demo proves the merchant half; a real merchant has not yet completed a live order |
+| PLANNED | Refunds | No refund endpoint exists; an overpayment is never refunded automatically |
+| PLANNED | Scheduled webhook drain | Delivery is request-driven today; a production merchant should add a cron drain (`docs/merchants.md` §12) |
 
 ## Security and hardening
 

@@ -59,8 +59,11 @@ MON), and it never holds a user's key.
   `@intentpay/sdk/webhooks`). Not yet published to npm; build it from source
   (`npm run build && npm pack`) and install the tarball.
 - Examples: `examples/quickstart`, `examples/merchant`,
-  `examples/status-and-verify`.
+  `examples/status-and-verify`, `examples/merchant-onboarding`.
 - Quickstart: `https://intent-pay-roan.vercel.app/docs/quickstart`.
+- Merchant onboarding: `https://intent-pay-roan.vercel.app/merchants` (overview)
+  and `https://intent-pay-roan.vercel.app/docs/checkout` (integration guide). The
+  merchant console is at `/merchant`.
 
 ## Security model
 

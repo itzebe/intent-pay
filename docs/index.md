@@ -23,7 +23,8 @@ Related repository files:
 - [`../AGENTS.md`](../AGENTS.md) — the invariants an agent or contributor must not regress.
 - [`../llms.txt`](../llms.txt) — a compact machine-oriented summary.
 - [`../packages/sdk/README.md`](../packages/sdk/README.md) — SDK reference.
-- [`../examples/`](../examples) — runnable quickstart and merchant examples.
+- [`../examples/`](../examples) — runnable quickstart, merchant, merchant-onboarding
+  and headless status/verify examples.
 
 ## Status legend
 

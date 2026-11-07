@@ -74,6 +74,15 @@ not be retried blindly.
 
 - No secret is committed to the repository; `.env.example` documents every key
   using placeholders only.
+- **Email credentials are server-only.** `SMTP_PASS` (a Gmail App Password) and
+  `RESEND_API_KEY` are read from the process environment, used only inside the
+  server-side transport (`lib/developer/email.ts`), and never logged, returned in
+  an API response, or embedded in a message. A delivery failure is reported as a
+  fixed, credential-free sentence — the provider's own text (which can echo the
+  host, the user name or a server reply) is never surfaced.
+- The SMTP socket is always encrypted: implicit TLS on port 465, and a mandatory
+  STARTTLS upgrade (`requireTLS`) on every other port, so the password never
+  crosses a plaintext connection.
 - The SDK refuses to construct a keyed client in a browser
   (`client_credential_in_browser`).
 - A raw upstream error is never returned to a client: URLs are collapsed to their

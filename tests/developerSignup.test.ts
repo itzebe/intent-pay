@@ -58,12 +58,21 @@ beforeEach(() => {
     INTENT_PAY_EMAIL_CAPTURE: process.env.INTENT_PAY_EMAIL_CAPTURE,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     EMAIL_FROM: process.env.EMAIL_FROM,
+    EMAIL_PROVIDER: process.env.EMAIL_PROVIDER,
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_PORT: process.env.SMTP_PORT,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
   };
   // A configured SQLite path makes storeCapability() report `persistent`, which
   // the signup routes require — the same gate production enforces.
   process.env.INTENT_PAY_DB_PATH = "/data/intent-pay.sqlite";
   delete process.env.RESEND_API_KEY;
   delete process.env.EMAIL_FROM;
+  // No ambient SMTP configuration: the capture transport is what these tests use.
+  for (const k of ["EMAIL_PROVIDER", "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"]) {
+    delete (process.env as Record<string, string | undefined>)[k];
+  }
   process.env.INTENT_PAY_EMAIL_CAPTURE = "1";
   (process.env as Record<string, string | undefined>).NODE_ENV = "test";
   setStore(new SqliteStore(":memory:"));
@@ -405,6 +414,24 @@ describe("email transport is honest about configuration", () => {
     process.env.EMAIL_FROM = "no-reply@intent-pay.example";
     expect(emailTransportKind()).toBe("resend");
     expect(emailConfigured()).toBe(true);
+  });
+
+  it("selects smtp when EMAIL_PROVIDER=smtp and the SMTP variables are set", () => {
+    process.env.EMAIL_PROVIDER = "smtp";
+    process.env.EMAIL_FROM = "no-reply@intent-pay.example";
+    process.env.SMTP_USER = "no-reply@intent-pay.example";
+    process.env.SMTP_PASS = "app-password";
+    expect(emailTransportKind()).toBe("smtp");
+    expect(emailConfigured()).toBe(true);
+  });
+
+  it("treats an incomplete smtp selection as unconfigured, not as a fallback", () => {
+    process.env.EMAIL_PROVIDER = "smtp";
+    process.env.EMAIL_FROM = "no-reply@intent-pay.example";
+    process.env.SMTP_USER = "no-reply@intent-pay.example";
+    // SMTP_PASS missing.
+    expect(emailTransportKind()).toBe("none");
+    expect(emailConfigured()).toBe(false);
   });
 
   it("never enables the capture transport in production", () => {

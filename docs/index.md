@@ -14,6 +14,7 @@ the same system and neither invents capability.
 | [developers.md](./developers.md) | Developer onboarding: API usage, SDK setup, integration examples, testing. |
 | [merchants.md](./merchants.md) | Merchant onboarding, checkout integration, status verification, reconciliation. |
 | [roadmap.md](./roadmap.md) | Completed milestones, current work, next priorities and outstanding validation. |
+| [ecosystem/](./ecosystem/) | Monad ecosystem materials: technical overview, architecture, developer/merchant opportunities, demo script, FAQ, verified ecosystem opportunities and readiness. |
 
 Related repository files:
 

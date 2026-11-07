@@ -3,6 +3,8 @@
 import type { Hash, WalletClient } from "viem";
 import { getClientPublicClient } from "@/lib/wallet/clients";
 import { sendTransactionViaWallet } from "@/lib/wallet/sendTransaction";
+import { prepareTxFields } from "./prepareTx";
+import { stepGasUnits } from "./plan";
 import type { MonadNetwork } from "@/lib/config/chains";
 import type { PaymentPlan, PlanStep } from "./plan";
 import { encodeStep, type EncodedCall } from "./encode";
@@ -76,6 +78,7 @@ async function submitStep(
   step: PlanStep,
   walletClient: WalletClient,
   network: MonadNetwork,
+  opts: { includeNonce?: boolean } = {},
 ): Promise<Hash> {
   const account = walletClient.account!.address;
   // The app owns the calldata (encodeStep) and submits a single raw
@@ -84,7 +87,15 @@ async function submitStep(
   // the reads a Trust Wallet provider proxies to its own (possibly blocked) node.
   // See `lib/wallet/sendTransaction.ts`.
   const call = encodeStep(step);
-  const result = await sendTransactionViaWallet(walletClient, account, call, network);
+  // Fill the envelope (gas / EIP-1559 fees / nonce) from the app's OWN RPC, so a
+  // wallet whose own node is unreachable has nothing left to estimate before it
+  // can sign. Best-effort: an unreadable field is omitted, never fabricated.
+  const prepared = await prepareTxFields(getClientPublicClient(network), call, {
+    account,
+    fallbackGas: stepGasUnits(step),
+    includeNonce: opts.includeNonce,
+  });
+  const result = await sendTransactionViaWallet(walletClient, account, call, network, prepared);
   if (result.ok) return result.hash;
   if (result.reason === "rejected") {
     throw new ExecutionError("You rejected the transaction.", "rejected", step.id, result.error);
@@ -124,7 +135,13 @@ export async function executePlan(
     report({ stepId: step.id, label: step.label, status: "pending" });
     let hash: Hash;
     try {
-      hash = await submitStep(step, walletClient, network);
+      // A multi-step plan (approve → swap → unwrap → deliver) sends several
+      // sequential transactions; a fixed nonce read fresh before each send keeps
+      // them in order even if the wallet's own pending count lags. A single-step
+      // plan leaves the nonce to the wallet.
+      hash = await submitStep(step, walletClient, network, {
+        includeNonce: plan.steps.length > 1,
+      });
       report({ stepId: step.id, label: step.label, status: "submitted", hash });
       if (step.id === plan.primaryStepId) primaryHash = hash;
     } catch (err) {

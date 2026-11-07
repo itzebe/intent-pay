@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WalletClient } from "viem";
+import { stubAppRpc } from "./helpers/rpcStub";
 import { executePlan, ExecutionError } from "@/lib/execution/execute";
 import { classifyTransactionError, isWalletTransportFailure } from "@/lib/domain/transactionError";
 import { buildPaymentPlan } from "@/lib/execution/plan";
@@ -76,6 +77,15 @@ function walletWith(
 }
 
 describe("executePlan — transaction rejection handling", () => {
+  // `executePlan` prepares the transaction envelope (gas/fees) through the app's
+  // own RPC before the wallet signs, so stub those reads to keep the suite
+  // offline. Tests that manage the receipt spy themselves pass `receipt: false`.
+  let rpc: ReturnType<typeof stubAppRpc>;
+  beforeEach(() => {
+    rpc = stubAppRpc();
+  });
+  afterEach(() => rpc.restore());
+
   it("reports a user rejection as a `rejected` error and never a confirmed step", async () => {
     const seen: string[] = [];
     await expect(

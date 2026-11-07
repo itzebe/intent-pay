@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createWalletClient, custom, type WalletClient } from "viem";
+import { stubAppRpc } from "./helpers/rpcStub";
 import { executePlan } from "@/lib/execution/execute";
 import { sendTransactionViaWallet } from "@/lib/wallet/sendTransaction";
 import { buildPaymentPlan } from "@/lib/execution/plan";
-import { getClientPublicClient } from "@/lib/wallet/clients";
 import { getToken } from "@/lib/config/tokens";
 import { monadMainnet } from "@/lib/config/chains";
 import type { Quote } from "@/lib/domain/intent";
@@ -83,23 +83,26 @@ function trustWalletClient(log: string[], opts?: { hash?: `0x${string}` }): Wall
 }
 
 describe("Trust Wallet RPC independence — execution", () => {
+  // The app now prepares the transaction envelope through its own RPC, so stub
+  // those reads. This keeps the test offline and proves the app — not the
+  // wallet — supplies gas and fees.
+  let rpc: ReturnType<typeof stubAppRpc>;
+  beforeEach(() => {
+    rpc = stubAppRpc();
+  });
+  afterEach(() => rpc.restore());
+
   it("completes a payment while the wallet's own chain read fails", async () => {
     const log: string[] = [];
-    const client = getClientPublicClient("mainnet");
-    const spy = vi
-      .spyOn(client, "waitForTransactionReceipt")
-      .mockResolvedValue({ status: "success" } as any);
+    const result = await executePlan(directTransferPlan(), trustWalletClient(log), "mainnet");
 
-    try {
-      const result = await executePlan(directTransferPlan(), trustWalletClient(log), "mainnet");
-
-      expect(result.confirmed).toBe(true);
-      expect(result.primaryHash).toBe(HASH);
-      // The wallet was asked ONLY to send — never to answer a chain read.
-      expect(log).toEqual(["eth_sendTransaction"]);
-    } finally {
-      spy.mockRestore();
-    }
+    expect(result.confirmed).toBe(true);
+    expect(result.primaryHash).toBe(HASH);
+    // The wallet was asked ONLY to send — never to answer a chain read.
+    expect(log).toEqual(["eth_sendTransaction"]);
+    // The envelope came from the app's own RPC.
+    expect(rpc.client.estimateGas).toHaveBeenCalled();
+    expect(rpc.client.estimateFeesPerGas).toHaveBeenCalled();
   });
 
   it("hands the wallet the calldata, value and an explicit chainId", async () => {

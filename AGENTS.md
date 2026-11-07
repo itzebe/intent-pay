@@ -536,6 +536,38 @@ never be described as a "minimum". `MIN_EXECUTABLE_LIQUIDITY_USD`
 minimum, and `Amount is too small to send` (`validateAmount`) only fires when an
 amount rounds below one base unit at the token's decimals.
 
+### The app prepares the transaction envelope, not the wallet
+
+The reported Trust Wallet failure — `Failed to connect to
+http://monad.twnodes.com/` *after* Confirm and Send — is not a chain read the app
+makes. `monad.twnodes.com` is Trust Wallet's **own** NaaS RPC: its in-app-browser
+provider answers any method it does not handle natively by proxying to that node
+from the page. The app already submits a raw `eth_sendTransaction` with an
+explicit `chainId`, so it never triggers that proxy — but it used to omit
+`gas`/fees/nonce, leaving the *wallet* to fetch them, and a wallet whose own node
+is unreachable cannot.
+
+`lib/execution/prepareTx.ts` is the single rule. `prepareTxFields` reads `gas`
+(`estimateGas` + 20%), the EIP-1559 `maxFeePerGas`/`maxPriorityFeePerGas`
+(`estimateFeesPerGas`) and, for a multi-step plan, a fresh `nonce` through the
+app's **own** `getClientPublicClient` RPC, and `buildSendParams` assembles the
+`eth_sendTransaction` object. All three paths — the composer (`executePlan` →
+`sendTransactionViaWallet`), the hosted checkout (`sendCallsSequentially`) and
+the SDK's `Wallet.sendCalls` (which forwards caller-supplied envelope fields) —
+use it, so the wallet is asked only to approve, sign and broadcast.
+
+Rules: every read is best-effort and **total** — a field whose read fails (or a
+client missing the method) is **omitted**, never fabricated, and preparation must
+never be the reason a payment cannot proceed. The nonce is re-read fresh per call
+so a sequential plan cannot reorder. The gas buffer is a real cost because Monad
+charges the gas **limit**; it stays at 20% to match `coversGas`. The calldata,
+sender, recipient, value and on-chain output bound are unchanged.
+
+**Honest boundary:** this removes the reads a wallet performs *before* signing.
+Trust Wallet's native broadcaster may still use its own node to broadcast; that
+layer is closed source and cannot be inspected or configured from a dApp, so a
+physical Android Trust Wallet test is the only way to confirm the last step.
+
 ## Execution protection (MEV / sandwich)
 
 The product goal — an attacker cannot make the recipient receive drastically

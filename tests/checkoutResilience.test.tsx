@@ -19,6 +19,7 @@ vi.mock("framer-motion", () => {
 
 import { CheckoutClient } from "@/components/checkout/CheckoutClient";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { SUBMISSION_UNKNOWN_MESSAGE, ACTIVITY_ADVANCED_MESSAGE } from "@/lib/domain/recovery";
 
 /**
  * Checkout resilience — the "blank screen after Continue Payment" regression.
@@ -63,6 +64,14 @@ vi.mock("@/lib/wallet/clients", () => ({
     waitForTransactionReceipt: vi.fn(async () => ({ status: "success" as const })),
     getTransactionCount: nonceMock,
   }),
+}));
+
+// Recovery now runs through Intent Pay's own RPC endpoints (a pure engine plus a
+// client adapter). Mock the adapter so the jsdom test can drive each evidence
+// case deterministically without a network.
+const { recoverMock } = vi.hoisted(() => ({ recoverMock: vi.fn() }));
+vi.mock("@/lib/execution/recoveryClient", () => ({
+  recoverWithAppRpc: (...a: unknown[]) => recoverMock(...a),
 }));
 
 function checkoutView(overrides: Record<string, unknown> = {}) {
@@ -210,15 +219,20 @@ describe("checkout resilience", () => {
   });
 
   /**
-   * Mission 24. After a post-authorisation wallet transport failure the outcome
-   * is unknown. A status check that reads the account's own activity must decide
-   * honestly: a nonce above the pre-attempt baseline means the wallet DID
-   * broadcast (the payment may be on-chain — do not pay again), an unchanged
-   * nonce means nothing was sent (safe to retry).
+   * Mission 26. After a post-authorisation wallet transport failure the outcome
+   * is unknown. The status check must recover the truth from evidence read
+   * through Intent Pay's own RPC — never guess. A nonce is a CLUE only: an
+   * advanced nonce is reported as un-attributable activity (still blocked), an
+   * unchanged nonce never proves nothing was sent (still blocked), and only a
+   * definite pre-submission failure re-enables Pay.
    */
-  it("reports that a transaction may already be on-chain when the account's nonce advanced", async () => {
-    nonceMock.mockReset();
-    nonceMock.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+  it("reports advanced (unattributable) account activity and keeps Pay disabled", async () => {
+    recoverMock.mockResolvedValueOnce({
+      outcome: { state: "SUBMISSION_UNKNOWN", reason: "no_hash_activity_advanced", activityAdvanced: true },
+      message: ACTIVITY_ADVANCED_MESSAGE,
+      safeToRetry: false,
+      evidence: [],
+    });
     wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to connect to http://monad.twnodes.com/"));
     global.fetch = mockFetch({
       "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
@@ -235,15 +249,48 @@ describe("checkout resilience", () => {
     fireEvent.click(screen.getByText("Check payment status"));
     await flush();
     await flush();
-    expect(screen.getByText(/has submitted a transaction/i)).toBeTruthy();
+    expect(screen.getByText(/activity has changed/i)).toBeTruthy();
     // Still blocked from paying again.
     const pay = screen.getByRole("button", { name: /Pay \$25\.00/ }) as HTMLButtonElement;
     expect(pay.disabled).toBe(true);
   });
 
-  it("reports that nothing was sent when the account's nonce is unchanged, and re-enables Pay", async () => {
-    nonceMock.mockReset();
-    nonceMock.mockResolvedValue(0);
+  it("keeps Pay disabled when the evidence cannot establish the outcome (no hash, no activity)", async () => {
+    recoverMock.mockResolvedValueOnce({
+      outcome: { state: "SUBMISSION_UNKNOWN", reason: "no_hash_activity_unchanged", activityAdvanced: false },
+      message: SUBMISSION_UNKNOWN_MESSAGE,
+      safeToRetry: false,
+      evidence: [],
+    });
+    wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to connect to http://monad.twnodes.com/"));
+    global.fetch = mockFetch({
+      "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
+      "POST /api/checkout/chk_token/prepare": () => ({
+        calls: [{ to: "0x0000000000000000000000000000000000000001", data: "0x", value: "0" }],
+        quote: { payToken: "USDC", payAmount: "25", receiveToken: "USDC", receiveAmount: "25", minimumReceived: "25", slippageBps: 50, networkCostUsd: 0.01 },
+      }),
+    }) as any;
+    render(<CheckoutClient token="chk_token" />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$25\.00/ }));
+    await flush();
+    await flush();
+    fireEvent.click(screen.getByText("Check payment status"));
+    await flush();
+    await flush();
+    // The corrected model: an unchanged nonce is NOT proof nothing was sent.
+    expect(screen.getByText(/couldn't confirm whether your wallet submitted/i)).toBeTruthy();
+    const pay = screen.getByRole("button", { name: /Pay \$25\.00/ }) as HTMLButtonElement;
+    expect(pay.disabled).toBe(true);
+  });
+
+  it("re-enables Pay only when the evidence is a definite pre-submission failure", async () => {
+    recoverMock.mockResolvedValueOnce({
+      outcome: { state: "DEFINITIVE_FAILURE", reason: "pre_submission" },
+      message: "The wallet could not submit the payment. Nothing was sent, so you can safely pay again.",
+      safeToRetry: true,
+      evidence: [],
+    });
     wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to connect to http://monad.twnodes.com/"));
     global.fetch = mockFetch({
       "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
@@ -263,6 +310,34 @@ describe("checkout resilience", () => {
     expect(screen.getByText(/nothing was sent/i)).toBeTruthy();
     const pay = screen.getByRole("button", { name: /Pay \$25\.00/ }) as HTMLButtonElement;
     expect(pay.disabled).toBe(false);
+  });
+
+  it("advances to verification when the status check finds a confirmed receipt", async () => {
+    recoverMock.mockResolvedValueOnce({
+      outcome: { state: "CONFIRMED", hash: `0x${"b".repeat(64)}` },
+      message: "Your payment was confirmed on Monad.",
+      safeToRetry: false,
+      hash: `0x${"b".repeat(64)}`,
+      evidence: [],
+    });
+    wallet.provider.request.mockRejectedValueOnce(new TypeError("Failed to connect to http://monad.twnodes.com/"));
+    global.fetch = mockFetch({
+      "GET /api/checkout/chk_token": () => ({ checkout: checkoutView(), txHashes: [] }),
+      "POST /api/checkout/chk_token/prepare": () => ({
+        calls: [{ to: "0x0000000000000000000000000000000000000001", data: "0x", value: "0" }],
+        quote: { payToken: "USDC", payAmount: "25", receiveToken: "USDC", receiveAmount: "25", minimumReceived: "25", slippageBps: 50, networkCostUsd: 0.01 },
+      }),
+      "POST /api/checkout/chk_token/verify": () => ({ status: "ok" }),
+    }) as any;
+    render(<CheckoutClient token="chk_token" />);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$25\.00/ }));
+    await flush();
+    await flush();
+    fireEvent.click(screen.getByText("Check payment status"));
+    await flush();
+    await flush();
+    expect(screen.getByText(/confirmed on Monad/i)).toBeTruthy();
   });
 });
 

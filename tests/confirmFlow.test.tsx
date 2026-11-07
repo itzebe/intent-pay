@@ -102,8 +102,16 @@ vi.mock("@/lib/execution/execute", async () => {
   };
 });
 
+// Recovery runs through Intent Pay's own RPC endpoints; the jsdom test has no
+// network, so it is mocked and driven deterministically per case.
+const recoverWithAppRpc = vi.fn();
+vi.mock("@/lib/execution/recoveryClient", () => ({
+  recoverWithAppRpc: (...a: unknown[]) => recoverWithAppRpc(...a),
+}));
+
 const { PaymentComposer } = await import("@/components/composer/PaymentComposer");
 const { reduceIntent, initialIntent } = await import("@/lib/domain/canonicalIntent");
+const { SUBMISSION_UNKNOWN_MESSAGE, ACTIVITY_ADVANCED_MESSAGE } = await import("@/lib/domain/recovery");
 
 function makeQuote(version: number) {
   return {
@@ -202,6 +210,15 @@ describe("confirmation flow", () => {
   beforeEach(() => {
     prepareSigning.mockReset();
     executePlan.mockReset();
+    recoverWithAppRpc.mockReset();
+    // Default: an evidence check that cannot establish the outcome (no hash, no
+    // attributable activity). Individual tests override it.
+    recoverWithAppRpc.mockResolvedValue({
+      outcome: { state: "SUBMISSION_UNKNOWN", reason: "no_hash_activity_unchanged", activityAdvanced: false },
+      message: SUBMISSION_UNKNOWN_MESSAGE,
+      safeToRetry: false,
+      evidence: [],
+    });
     // Default: already on Monad. Individual tests override to exercise the
     // honest chain-error path, then this restores the default.
     ensureMonad.mockReset();
@@ -427,13 +444,171 @@ describe("confirmation flow", () => {
     });
 
     // The unknown-outcome panel is shown, never a bare retry on Review.
-    expect(screen.getByText(/Transaction status unknown/i)).toBeTruthy();
+    expect(screen.getByText("Payment status needs checking")).toBeTruthy();
     // The raw host never reaches the user.
     expect(screen.queryByText(/twnodes/i)).toBeNull();
     // Retry is present but disabled until a status check proves nothing was sent.
     const retry = screen.getByText("Retry payment") as HTMLButtonElement;
     expect(retry.disabled).toBe(true);
-    expect(screen.getByText("Check transaction status")).toBeTruthy();
+    expect(screen.getByText(/Check payment status/)).toBeTruthy();
+  });
+
+  it("a Trust Wallet post-authorisation failure with no activity stays unknown and keeps Retry disabled", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [{ id: "transfer", kind: "transfer", label: "Send USDC", token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" }, amount: 5_000_000n, to: flow.intent.recipient }],
+      },
+    });
+    executePlan.mockRejectedValue(
+      Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: new TypeError("Failed to connect to http://monad.twnodes.com/"),
+      }),
+    );
+    // The auto-run evidence check finds nothing attributable to this payment.
+    recoverWithAppRpc.mockResolvedValue({
+      outcome: { state: "SUBMISSION_UNKNOWN", reason: "no_hash_activity_unchanged", activityAdvanced: false },
+      message: SUBMISSION_UNKNOWN_MESSAGE,
+      safeToRetry: false,
+      evidence: [],
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+
+    // Wait for the auto-run status check to settle.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/couldn't confirm whether your wallet submitted/i)).toBeTruthy();
+    const retry = screen.getByText("Retry payment") as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+  });
+
+  it("reports advanced (unattributable) activity honestly and keeps Retry disabled", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [{ id: "transfer", kind: "transfer", label: "Send USDC", token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" }, amount: 5_000_000n, to: flow.intent.recipient }],
+      },
+    });
+    executePlan.mockRejectedValue(
+      Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: new TypeError("Failed to connect to http://monad.twnodes.com/"),
+      }),
+    );
+    recoverWithAppRpc.mockResolvedValue({
+      outcome: { state: "SUBMISSION_UNKNOWN", reason: "no_hash_activity_advanced", activityAdvanced: true },
+      message: ACTIVITY_ADVANCED_MESSAGE,
+      safeToRetry: false,
+      evidence: [],
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/activity has changed since/i)).toBeTruthy();
+    const retry = screen.getByText("Retry payment") as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+  });
+
+  it("enables Retry only when an explicit rejection proves nothing was sent", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [{ id: "transfer", kind: "transfer", label: "Send USDC", token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" }, amount: 5_000_000n, to: flow.intent.recipient }],
+      },
+    });
+    executePlan.mockRejectedValue(
+      Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: new TypeError("Failed to connect to http://monad.twnodes.com/"),
+      }),
+    );
+    recoverWithAppRpc.mockResolvedValue({
+      outcome: { state: "DEFINITIVE_FAILURE", reason: "pre_submission" },
+      message: "The wallet could not submit the payment. Nothing was sent, so you can safely try again.",
+      safeToRetry: true,
+      evidence: [],
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const retry = screen.getByText("Retry payment") as HTMLButtonElement;
+    expect(retry.disabled).toBe(false);
+  });
+
+  it("proceeds to the success screen when the status check finds a confirmed receipt", async () => {
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [{ id: "transfer", kind: "transfer", label: "Send USDC", token: { address: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", symbol: "USDC" }, amount: 5_000_000n, to: flow.intent.recipient }],
+      },
+    });
+    executePlan.mockRejectedValue(
+      Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: new TypeError("Failed to connect to http://monad.twnodes.com/"),
+      }),
+    );
+    recoverWithAppRpc.mockResolvedValue({
+      outcome: { state: "CONFIRMED", hash: "0x" + "ab".repeat(32) },
+      message: "Your payment was confirmed on Monad.",
+      safeToRetry: false,
+      hash: "0x" + "ab".repeat(32),
+      evidence: [],
+    });
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The unknown-outcome panel is gone; the success stage is reached.
+    expect(screen.queryByText("Payment status needs checking")).toBeNull();
   });
 
   it("does NOT disappear after the wrap/approval step while the swap is still pending (MON → USDT)", async () => {
@@ -740,7 +915,7 @@ describe("confirmation flow", () => {
     });
 
     // The honest unknown-outcome screen is shown — not a success screen.
-    expect(screen.getByText(/Transaction status unknown/i)).toBeTruthy();
+    expect(screen.getByText("Payment status needs checking")).toBeTruthy();
     expect(screen.queryByText(/Waiting for confirmation/i)).toBeNull();
     // Exactly one submission and no automatic resubmission.
     expect(executePlan).toHaveBeenCalledTimes(1);
@@ -837,7 +1012,7 @@ describe("confirmation flow", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText(/Transaction status unknown/i)).toBeTruthy();
+    expect(screen.getByText("Payment status needs checking")).toBeTruthy();
 
     // "Back to edit" returns the user to a working composer — not a blank or
     // trapped state — and preserves the payment they were making.
@@ -845,7 +1020,7 @@ describe("confirmation flow", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.queryByText(/Transaction status unknown/i)).toBeNull();
+    expect(screen.queryByText("Payment status needs checking")).toBeNull();
     expect(flow.intent.receiveAmount).toBe("5");
     expect(flow.intent.receiveToken).toBe("USDC");
   });

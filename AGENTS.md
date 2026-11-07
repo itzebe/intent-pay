@@ -702,6 +702,48 @@ transaction. The page keeps its own `recordSubmitted` (best-effort submit +
 `load()`), mirroring `executePlan`'s "never resubmit automatically" rule. Do not
 collapse this back into a fire-and-forget loop.
 
+`SuccessScreen` only reads "delivered" when `delivery.verified` is true; an
+unverified delivery reads "sent / broadcast, delivery not yet proven".
+
+### An unknown outcome is recovered from evidence, never from a nonce
+
+The post-authorisation failure (the wallet authorised — the user entered their
+password — and *then* its native layer reported it could not reach
+`monad.twnodes.com`) leaves the outcome **unknown**: the wallet is asked to send
+only after authorisation, so it may already have broadcast. PR #47 stopped
+calling that a failure, but its recovery leaned on two nonce heuristics that are
+**clues, not proof**: an advanced pending nonce was read as "this payment was
+broadcast", and an unchanged one as "nothing was sent". Neither is sound — an
+unrelated transaction on the account advances the nonce, and `pending` is a
+per-node mempool view, not a chain fact.
+
+`lib/domain/recovery.ts` (`recoverSubmission`, pure) is now the single rule. It
+reads evidence through Intent Pay's **own** RPC endpoints
+(`lib/execution/recoveryClient.ts`, one independent client per configured
+endpoint — never the wallet's provider, whose node is exactly what failed) and
+classifies one honest outcome:
+
+- `CONFIRMED` / `REVERTED` — a receipt for a hash we hold. Proceeds to
+  `verifyDelivery` / reports the revert.
+- `SUBMITTED` — a hash is visible but not yet mined. Keep it; never resubmit.
+- `SUBMISSION_UNKNOWN` — the reads cannot establish what happened. Retry stays
+  **disabled**.
+- `DEFINITIVE_FAILURE` — an explicit rejection or an established pre-submission
+  failure. **The only state that re-enables Retry / Pay.**
+
+`matchCandidate` matches a candidate transaction field-by-field against the
+attempt identity the app captured just before signing (`to`, `value`, calldata,
+nonce); a disagreement is `conflict` (an unrelated tx), a field it cannot read is
+`unknown` — never a false `match`. A nonce is used for corroboration only and
+**never decides the outcome**; an advanced nonce is reported as un-attributable
+activity (`ACTIVITY_ADVANCED_MESSAGE`), not as SUBMITTED.
+
+Both the composer (`UnresolvedPanel`) and the hosted checkout use this one
+engine, so their copy (`PAYMENT_STATUS_NEEDS_CHECKING_TITLE`,
+`SUBMISSION_UNKNOWN_MESSAGE`) cannot drift. The status check is read-only: it
+never signs, never broadcasts and never resubmits. Regression:
+`tests/recovery.test.ts`, plus the composer/checkout component cases.
+
 ## Actionable transaction errors
 
 `lib/domain/transactionError.ts` (`classifyTransactionError`, pure) maps any

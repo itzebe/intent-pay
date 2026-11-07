@@ -174,6 +174,17 @@ describe("isRetryable / isAmbiguousSubmission", () => {
     const { isAmbiguousSubmission } = await import("../src/core/errors.js");
     expect(isAmbiguousSubmission(new ApiError("invalid_amount", "x", { status: 422 }))).toBe(false);
   });
+
+  it("treats a wallet that authorised and then failed on its own transport as ambiguous", async () => {
+    // Trust Wallet's native layer reporting it cannot reach its node is the
+    // reported case: the wallet may already have broadcast, so a caller must
+    // never blindly resend.
+    const { isAmbiguousSubmission, WalletError } = await import("../src/core/errors.js");
+    const err = new WalletError("wallet_unknown_outcome", "authorised, transport failed");
+    expect(isAmbiguousSubmission(err)).toBe(true);
+    // A plain rejection is not ambiguous — nothing was sent.
+    expect(isAmbiguousSubmission(new WalletError("wallet_rejected", "declined"))).toBe(false);
+  });
 });
 
 function sampleIntent() {

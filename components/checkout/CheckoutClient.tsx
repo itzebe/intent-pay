@@ -7,6 +7,8 @@ import { sendCallsSequentially } from "@/lib/wallet/sendCalls";
 import { prepareTxFields, buildSendParams } from "@/lib/execution/prepareTx";
 import { logCheckoutDiagnostic, diagnosticCodeOf } from "@/lib/wallet/checkoutDiagnostics";
 import { classifyTransactionError, isTransportError } from "@/lib/domain/transactionError";
+import { recoverWithAppRpc } from "@/lib/execution/recoveryClient";
+import { SUBMISSION_UNKNOWN_MESSAGE, type AttemptIdentity } from "@/lib/domain/recovery";
 import { NETWORKS, explorerTxUrl } from "@/lib/config/chains";
 import { shortAddress } from "@/lib/format";
 import { Copy, ExternalLink, Shield, Spinner, Warning } from "@/components/ui/Icons";
@@ -142,8 +144,12 @@ export function CheckoutClient({ token }: { token: string }) {
   // broadcast — otherwise a retry could double-pay.
   const [unknownOutcome, setUnknownOutcome] = useState(false);
   const [statusNote, setStatusNote] = useState<string | null>(null);
-  // The account's pending nonce just before the attempt, so an unknown outcome
-  // can be probed for real on-chain activity through our own RPC.
+  const [statusChecked, setStatusChecked] = useState(false);
+  // The exact first call we asked the wallet to send, so a status check can match
+  // a candidate found on chain. Set from the prepared calls just before signing.
+  const attemptIdentityRef = useRef<AttemptIdentity | null>(null);
+  // The account's pending nonce just before the attempt — a recovery CLUE only,
+  // never proof (an unrelated tx advances it; a node's mempool view is local).
   const baselineNonceRef = useRef<bigint | undefined>(undefined);
   const preparedRef = useRef<PreparedCalls | null>(null);
 
@@ -214,6 +220,7 @@ export function CheckoutClient({ token }: { token: string }) {
     setActionError(null);
     setUnknownOutcome(false);
     setStatusNote(null);
+    setStatusChecked(false);
     const kind: "injected" | "walletconnect" | "none" = wallet.kind ?? (wallet.provider ? "injected" : "none");
     try {
       // 1. Ask the server for the calls, built from the frozen parameters.
@@ -268,7 +275,8 @@ export function CheckoutClient({ token }: { token: string }) {
       }
       const pub = getClientPublicClient(wallet.network ?? "mainnet");
       // Baseline the account's pending nonce before the wallet is asked to sign,
-      // so a post-authorisation failure can be probed for real activity.
+      // so a post-authorisation failure can be probed for real activity. A clue
+      // only — never proof of what this payment did.
       try {
         baselineNonceRef.current = BigInt(
           await pub.getTransactionCount({ address: wallet.address as `0x${string}`, blockTag: "pending" }),
@@ -276,6 +284,17 @@ export function CheckoutClient({ token }: { token: string }) {
       } catch {
         baselineNonceRef.current = undefined;
       }
+      // Capture the exact first call we are about to ask the wallet to send, so a
+      // later status check can match a candidate on chain field-by-field (the
+      // calldata, recipient and value are the app's own frozen values).
+      const firstCall = prepared.calls[0];
+      attemptIdentityRef.current = {
+        from: wallet.address as `0x${string}`,
+        to: firstCall?.to as `0x${string}` | undefined,
+        value: firstCall?.value && firstCall.value !== "0" ? BigInt(firstCall.value) : undefined,
+        data: firstCall?.data && firstCall.data !== "0x" ? (firstCall.data as `0x${string}`) : undefined,
+        baselineNonce: baselineNonceRef.current,
+      };
       const outcome = await sendCallsSequentially({
         calls: prepared.calls,
         send: async (call) => {
@@ -398,42 +417,50 @@ export function CheckoutClient({ token }: { token: string }) {
     setStatusNote(null);
     try {
       // Unknown outcome (the wallet failed on its own transport after the
-      // customer authorised): probe the account itself. A pending nonce above
-      // the pre-attempt baseline means the wallet DID broadcast, so the payment
-      // may already be on-chain even though we hold no hash. Read through our own
-      // RPC — independent of the wallet's node.
+      // customer authorised): recover the true state from evidence read through
+      // Intent Pay's own RPC endpoints. A nonce reading is a clue only — an
+      // advanced nonce is reported as un-attributable activity and an unchanged
+      // nonce never proves nothing was sent, so Pay stays disabled unless a
+      // definite pre-submission failure is established.
       if (unknownOutcome) {
-        const baseline = baselineNonceRef.current;
-        let current: bigint | undefined;
-        try {
-          current = BigInt(
-            await getClientPublicClient(wallet.network ?? "mainnet").getTransactionCount({
-              address: wallet.address as `0x${string}`,
-              blockTag: "pending",
-            }),
-          );
-        } catch {
-          current = undefined;
-        }
-        if (baseline === undefined || current === undefined) {
-          setStatusNote(
-            "We could not read the account's activity to confirm whether a transaction was sent. Do not pay again until you have checked your wallet's activity.",
-          );
-        } else if (current > baseline) {
-          setStatusNote(
-            `Your wallet has submitted a transaction (account activity advanced from ${baseline} to ${current}). It may be this payment — check your wallet's activity and the explorer before doing anything else, and do not pay again.`,
-          );
-        } else {
-          setStatusNote(
-            "No transaction from your wallet has been broadcast yet (account activity is unchanged), so nothing was sent. You can safely pay again.",
-          );
+        const identity: AttemptIdentity = attemptIdentityRef.current ?? {
+          from: wallet.address as `0x${string}`,
+          baselineNonce: baselineNonceRef.current,
+        };
+        const result = await recoverWithAppRpc({
+          network: wallet.network ?? "mainnet",
+          attempt: identity,
+          hashes: txHashes as `0x${string}`[],
+        });
+        if (result.outcome.state === "CONFIRMED" || result.outcome.state === "REVERTED") {
+          // The chain has spoken; reflect it and re-verify independently.
+          setStatusNote(result.message);
           setUnknownOutcome(false);
+          if (result.outcome.state === "CONFIRMED") {
+            await fetch(`/api/checkout/${token}/verify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            }).catch(() => undefined);
+          }
+          await load();
+          return;
         }
+        if (result.outcome.state === "DEFINITIVE_FAILURE") {
+          setStatusNote(result.message);
+          setUnknownOutcome(false);
+          return;
+        }
+        // SUBMITTED / SUBMISSION_UNKNOWN: keep Pay disabled and show the honest
+        // note. An explorer link is only offered when we hold a real hash.
+        if (result.hash && !txHashes.includes(result.hash)) setTxHashes([result.hash]);
+        setStatusNote(result.message);
         return;
       }
       await fetch(`/api/checkout/${token}/verify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       await load();
     } finally {
+      setStatusChecked(true);
       setBusy(false);
     }
   }, [unknownOutcome, wallet.address, wallet.network, token, load]);
@@ -516,14 +543,24 @@ export function CheckoutClient({ token }: { token: string }) {
           </div>
         )}
 
-        {actionError && (
+        {unknownOutcome ? (
           <div className="flex items-start gap-2 rounded-xl bg-amber-400/10 px-3 py-2 text-xs text-amber-200/90">
             <Warning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>{actionError}</span>
+            <div className="space-y-1">
+              <p className="font-semibold text-amber-100">Payment status needs checking</p>
+              <p>{statusNote ?? actionError ?? SUBMISSION_UNKNOWN_MESSAGE}</p>
+            </div>
           </div>
+        ) : (
+          actionError && (
+            <div className="flex items-start gap-2 rounded-xl bg-amber-400/10 px-3 py-2 text-xs text-amber-200/90">
+              <Warning className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{actionError}</span>
+            </div>
+          )
         )}
 
-        {statusNote && (
+        {statusNote && !unknownOutcome && (
           <div className="flex items-start gap-2 rounded-xl bg-white/[0.04] px-3 py-2 text-xs text-white/70">
             <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-white/45" />
             <span>{statusNote}</span>
@@ -562,7 +599,7 @@ export function CheckoutClient({ token }: { token: string }) {
                 disabled={busy}
                 className="mt-2 w-full rounded-xl border border-white/10 px-4 py-2.5 text-xs font-medium text-white/70 transition hover:bg-white/[0.04] disabled:opacity-60"
               >
-                Check payment status
+                {statusChecked && unknownOutcome ? "Check payment status again" : "Check payment status"}
               </button>
             )}
           </div>

@@ -177,11 +177,13 @@ export function isRetryable(err: unknown): boolean {
  * Whether a failure may have left a transaction on-chain.
  *
  * A `submitted`-class failure (a timeout or a transport error while broadcasting,
- * or a `provider_error` from `submit`) means the transaction may already exist.
- * The SDK exposes this so a caller **never blindly resubmits**: the safe path is
- * to re-read the intent and verify, not to send again.
+ * a `provider_error` from `submit`, or a wallet that authorised and then failed
+ * on its own transport) means the transaction may already exist. The SDK exposes
+ * this so a caller **never blindly resubmits**: the safe path is to re-read the
+ * intent and verify, not to send again.
  */
 export function isAmbiguousSubmission(err: unknown): boolean {
+  if (err instanceof WalletError) return err.walletCode === "wallet_unknown_outcome";
   if (err instanceof TransportError) return err.code === "transport_timeout" || err.code === "transport_network_error";
   if (err instanceof ApiError) return err.apiCode === "provider_error" || err.apiCode === "internal_error";
   return false;

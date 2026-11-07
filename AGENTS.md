@@ -930,6 +930,46 @@ curl -s -X POST http://localhost:3000/api/quote -H 'Content-Type: application/js
   manifest is added later.
 
 
+## Presentation & navigation (one header, one footer, one story)
+
+- **`components/landing/SiteHeader.tsx` is the only site header.** The app
+  (`AppShell`) and every docs page (`DocsShell`) render it, so the primary
+  navigation (Product · Developers · Merchants · Documentation) and the logo
+  cannot drift between routes. `DocsShell` and the top-level pages are **server
+  components** — they must stay static and directly navigable (shareable,
+  bookmarkable, refreshable). The header is a client component (it reads the
+  pathname and toggles the mobile menu); the app passes the wallet
+  `ConnectButton` as the `actions` slot, the docs pages pass a plain "Open the
+  app" link (they have no wallet provider).
+- **Top-level product routes** are `/product`, `/developers`, `/merchants` —
+  static pages that explain the product and link to the working surfaces. They
+  use `components/landing/MarketingShell.tsx` (header + page header + footer).
+  `/product` reuses the shared `Lifecycle` section (`components/landing/HomeSections.tsx`)
+  so the homepage and the product page cannot describe a different lifecycle.
+- **Every advertised route lives in `PUBLIC_ROUTES` (`lib/config/site.ts`).**
+  `app/sitemap.ts` and `tests/metadata.test.ts` read it; a new page must be added
+  there and must resolve to an on-disk `page.tsx`. Regression:
+  `tests/siteNavigation.test.tsx` (primary nav, active-route, mobile menu) and
+  `tests/documentation.test.ts` (routes exist and are discoverable).
+- **Nothing on these pages may over-claim.** A capability is stated only if it
+  exists in the repository; planned work is labelled planned; the payment
+  milestone is described as owner-confirmed (no transaction hash is published).
+
+## Repository documentation & AI discoverability
+
+- `docs/` is the repository-level technical record (`index`, `vision`, `product`,
+  `architecture`, `security`, `developers`, `merchants`, `roadmap`), joined by
+  `CHANGELOG.md` and `CONTRIBUTING.md`. The in-app docs at `/docs` are the
+  user-facing equivalent; the two describe the same system.
+- **`llms.txt` exists in two places and must stay byte-identical**: the
+  repository root (for readers) and `public/llms.txt` (served at `/llms.txt`).
+  `tests/documentation.test.ts` asserts the two copies match and that every
+  relative link in `llms.txt` resolves to a real file. Edit the root copy, then
+  re-copy it to `public/`.
+- `AGENTS.md` remains the place for invariants addressed to any agent or
+  contributor; the `docs/` set is prose for humans and integrators.
+
+
 ## Dependency override (postcss)
 
 - `package.json` pins `overrides.postcss` (and the direct devDependency) to

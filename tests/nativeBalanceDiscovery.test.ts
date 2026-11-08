@@ -162,4 +162,27 @@ describe("native MON discovery", () => {
     // No stale cache: each settled request performs its own read.
     expect(getBalance).toHaveBeenCalledTimes(2);
   });
+
+  it("reports the result as incomplete when the token batch cannot be read", async () => {
+    // Every read of the token batch fails. The wallet's token holdings are then
+    // UNKNOWN, not empty — the API must say so, or a funded wallet is rendered
+    // as "holds nothing" and the payment is blocked.
+    getBalance.mockResolvedValue(MON_WEI);
+    multicall.mockRejectedValue(new Error("HTTP request failed. Status: 429"));
+
+    const { balances, partial } = await discoverWalletBalances(WALLET, "mainnet", priceOf, []);
+
+    expect(partial).toBe(true);
+    // The native read still succeeded and is reported honestly.
+    expect(balances.some((b) => b.token.native)).toBe(true);
+  });
+
+  it("reports a fully-read wallet as complete", async () => {
+    getBalance.mockResolvedValue(MON_WEI);
+    multicall.mockResolvedValue(erc20Hit);
+
+    const { partial } = await discoverWalletBalances(WALLET, "mainnet", priceOf, []);
+
+    expect(partial).toBe(false);
+  });
 });

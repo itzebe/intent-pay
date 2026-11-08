@@ -567,14 +567,18 @@ async function readNativeBalance(
  * The whole batch is a burst of ~120 calls in a single request, which the
  * keyless public Monad RPC can answer with HTTP 429. It is an idempotent read,
  * so a single short retry recovers the holdings instead of silently reporting a
- * wallet as empty of tokens. A genuine failure still yields `[]` (the caller
- * treats a missing result as "not held", never as a fabricated balance).
+ * wallet as empty of tokens.
+ *
+ * Returns `null` when the batch could not be read at all — the caller must then
+ * treat the token side as *unknown*, never as "holds nothing". A successful
+ * batch whose entries are all failures is a real "not held" and yields the
+ * per-entry results.
  */
 async function readErc20Balances(
   client: PublicClient,
   erc20: TokenConfig[],
   address: Address,
-): Promise<unknown[]> {
+): Promise<unknown[] | null> {
   const read = () =>
     client.multicall({
       contracts: erc20.map((t) => ({
@@ -586,16 +590,14 @@ async function readErc20Balances(
       allowFailure: true,
       batchSize: 64,
     });
-  try {
-    return (await read()) as unknown[];
-  } catch {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       return (await read()) as unknown[];
     } catch {
-      return [];
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }
+  return null;
 }
 
 /**
@@ -614,10 +616,19 @@ async function readErc20Balances(
  * user's discovery can never be served to another. The entry is removed as soon
  * as it settles, so the next request always does a fresh on-chain read.
  */
-const inflightDiscovery = new Map<
-  string,
-  Promise<{ balances: (DiscoveredBalance & { usd: number })[] }>
->();
+export type DiscoveryResult = {
+  balances: (DiscoveredBalance & { usd: number })[];
+  /**
+   * True when at least one read (native or token) could not be performed, so the
+   * returned list is a *lower bound*, not the wallet's actual holdings. The API
+   * reports this so a caller never renders "holds nothing" for a read that
+   * simply failed — that misreading is what left a funded wallet looking empty
+   * and blocked the payment.
+   */
+  partial: boolean;
+};
+
+const inflightDiscovery = new Map<string, Promise<DiscoveryResult>>();
 
 /**
  * Find which Monad tokens a wallet actually holds.
@@ -639,7 +650,7 @@ export async function discoverWalletBalances(
   network: MonadNetwork,
   priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,
   externalAssets: TokenConfig[] = [],
-): Promise<{ balances: (DiscoveredBalance & { usd: number })[] }> {
+): Promise<DiscoveryResult> {
   const key = `${network}:${address.toLowerCase()}`;
   const existing = inflightDiscovery.get(key);
   if (existing) return existing;
@@ -657,7 +668,7 @@ async function runDiscovery(
   network: MonadNetwork,
   priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,
   externalAssets: TokenConfig[] = [],
-): Promise<{ balances: (DiscoveredBalance & { usd: number })[] }> {
+): Promise<DiscoveryResult> {
   const client = getPublicClient(network);
 
   const byKey = new Map<string, TokenConfig>();
@@ -699,13 +710,18 @@ async function runDiscovery(
 
   const results = await readErc20Balances(client, erc20, address);
 
-  erc20.forEach((token, i) => {
-    const r = (results as any[])[i];
-    if (!r || r.status !== "success") return;
-    const raw = r.result as bigint;
-    if (raw <= 0n) return;
-    held.push({ token, amount: formatRaw(raw, token.decimals), raw, discovered: !token.seed });
-  });
+  // A null result means the token batch could not be read at all: report the
+  // holdings as *unknown*, never as an empty wallet.
+  const tokenReadFailed = results === null;
+  if (results) {
+    erc20.forEach((token, i) => {
+      const r = (results as any[])[i];
+      if (!r || r.status !== "success") return;
+      const raw = r.result as bigint;
+      if (raw <= 0n) return;
+      held.push({ token, amount: formatRaw(raw, token.decimals), raw, discovered: !token.seed });
+    });
+  }
 
   const priced = await Promise.all(
     held.map(async (b) => {
@@ -719,7 +735,7 @@ async function runDiscovery(
   );
 
   priced.sort((a, b) => b.usd - a.usd);
-  return { balances: priced };
+  return { balances: priced, partial: tokenReadFailed || nativeRaw === null };
 }
 
 function formatRaw(raw: bigint, decimals: number): string {

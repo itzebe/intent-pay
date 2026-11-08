@@ -599,6 +599,27 @@ async function readErc20Balances(
 }
 
 /**
+ * In-flight discovery de-duplication.
+ *
+ * A single page load fires several balance reads for the same address at once
+ * (the composer's `useBalances` and the wallet hook both refresh on mount), and
+ * a burst of visitors hits the same public RPC together. Each discovery is a
+ * `getBalance` plus a ~120-call `balanceOf` multicall against a rate-limited
+ * node; letting every call run in parallel multiplies the RPC load by the
+ * concurrency, which is what made `/api/balances` answer `count: 0` (every read
+ * throttled to a 429) or hang past the serverless timeout — and so what left a
+ * funded wallet looking empty and blocked the checkout.
+ *
+ * The key is the *request identity* (network + address), never a global, so one
+ * user's discovery can never be served to another. The entry is removed as soon
+ * as it settles, so the next request always does a fresh on-chain read.
+ */
+const inflightDiscovery = new Map<
+  string,
+  Promise<{ balances: (DiscoveredBalance & { usd: number })[] }>
+>();
+
+/**
  * Find which Monad tokens a wallet actually holds.
  *
  * The public Monad RPC caps eth_getLogs at a 100-block range, so a
@@ -609,8 +630,29 @@ async function readErc20Balances(
  * On-chain balances are authoritative: a token Zerion lists but the chain says
  * the wallet does not hold is dropped. Zerion widens *which* tokens we look at;
  * the chain decides the amount.
+ *
+ * Concurrent calls for the same address share one on-chain read (see
+ * `inflightDiscovery`); the result is a pure function of the address.
  */
 export async function discoverWalletBalances(
+  address: Address,
+  network: MonadNetwork,
+  priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,
+  externalAssets: TokenConfig[] = [],
+): Promise<{ balances: (DiscoveredBalance & { usd: number })[] }> {
+  const key = `${network}:${address.toLowerCase()}`;
+  const existing = inflightDiscovery.get(key);
+  if (existing) return existing;
+  const run = runDiscovery(address, network, priceOf, externalAssets);
+  inflightDiscovery.set(key, run);
+  try {
+    return await run;
+  } finally {
+    inflightDiscovery.delete(key);
+  }
+}
+
+async function runDiscovery(
   address: Address,
   network: MonadNetwork,
   priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,

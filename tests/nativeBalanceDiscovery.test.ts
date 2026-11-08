@@ -129,4 +129,37 @@ describe("native MON discovery", () => {
     expect(multicall).toHaveBeenCalledTimes(2);
     expect(balances.some((b) => !b.token.native)).toBe(true);
   });
+
+  it("de-duplicates concurrent discovery for the same address into ONE on-chain read", async () => {
+    // A page load fires several balance reads for the same address at once.
+    // Without de-duplication each one re-issues the ~120-call burst, multiplying
+    // the RPC load by the concurrency — which is what made the endpoint answer
+    // `count: 0` (everything throttled) or hang past the serverless timeout.
+    getBalance.mockResolvedValue(MON_WEI);
+    multicall.mockResolvedValue(erc20Hit);
+
+    const [a, b, c] = await Promise.all([
+      discoverWalletBalances(WALLET, "mainnet", priceOf, []),
+      discoverWalletBalances(WALLET, "mainnet", priceOf, []),
+      discoverWalletBalances(WALLET, "mainnet", priceOf, []),
+    ]);
+
+    expect(getBalance).toHaveBeenCalledTimes(1);
+    expect(multicall).toHaveBeenCalledTimes(1);
+    // Every caller gets the same real result.
+    for (const r of [a, b, c]) {
+      expect(r.balances.some((x) => x.token.native)).toBe(true);
+    }
+  });
+
+  it("does a fresh read for the next request after the in-flight one settles", async () => {
+    getBalance.mockResolvedValue(MON_WEI);
+    multicall.mockResolvedValue(erc20Hit);
+
+    await discoverWalletBalances(WALLET, "mainnet", priceOf, []);
+    await discoverWalletBalances(WALLET, "mainnet", priceOf, []);
+
+    // No stale cache: each settled request performs its own read.
+    expect(getBalance).toHaveBeenCalledTimes(2);
+  });
 });

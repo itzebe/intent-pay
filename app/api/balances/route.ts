@@ -47,7 +47,7 @@ export async function GET(req: Request) {
       zerionAssets.map((a) => [a.address.toLowerCase(), a]),
     );
 
-    const { balances } = await discoverWalletBalances(
+    const { balances, partial } = await discoverWalletBalances(
       address as `0x${string}`,
       network,
       (token) => provider.priceUsd(token, network),
@@ -59,6 +59,13 @@ export async function GET(req: Request) {
       address,
       network,
       count: balances.length,
+      /**
+       * False when a read could not be performed, so `balances` is a lower bound
+       * and an empty list must NOT be read as "this wallet holds nothing". The
+       * client shows "unknown" rather than a funded wallet looking empty — that
+       * misreading blocked the payment.
+       */
+      complete: !partial,
       /** Which intelligence sources actually contributed. */
       sources: {
         onchain: true,

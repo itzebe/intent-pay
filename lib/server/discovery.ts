@@ -567,14 +567,18 @@ async function readNativeBalance(
  * The whole batch is a burst of ~120 calls in a single request, which the
  * keyless public Monad RPC can answer with HTTP 429. It is an idempotent read,
  * so a single short retry recovers the holdings instead of silently reporting a
- * wallet as empty of tokens. A genuine failure still yields `[]` (the caller
- * treats a missing result as "not held", never as a fabricated balance).
+ * wallet as empty of tokens.
+ *
+ * Returns `null` when the batch could not be read at all — the caller must then
+ * treat the token side as *unknown*, never as "holds nothing". A successful
+ * batch whose entries are all failures is a real "not held" and yields the
+ * per-entry results.
  */
 async function readErc20Balances(
   client: PublicClient,
   erc20: TokenConfig[],
   address: Address,
-): Promise<unknown[]> {
+): Promise<unknown[] | null> {
   const read = () =>
     client.multicall({
       contracts: erc20.map((t) => ({
@@ -586,17 +590,45 @@ async function readErc20Balances(
       allowFailure: true,
       batchSize: 64,
     });
-  try {
-    return (await read()) as unknown[];
-  } catch {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       return (await read()) as unknown[];
     } catch {
-      return [];
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }
+  return null;
 }
+
+/**
+ * In-flight discovery de-duplication.
+ *
+ * A single page load fires several balance reads for the same address at once
+ * (the composer's `useBalances` and the wallet hook both refresh on mount), and
+ * a burst of visitors hits the same public RPC together. Each discovery is a
+ * `getBalance` plus a ~120-call `balanceOf` multicall against a rate-limited
+ * node; letting every call run in parallel multiplies the RPC load by the
+ * concurrency, which is what made `/api/balances` answer `count: 0` (every read
+ * throttled to a 429) or hang past the serverless timeout — and so what left a
+ * funded wallet looking empty and blocked the checkout.
+ *
+ * The key is the *request identity* (network + address), never a global, so one
+ * user's discovery can never be served to another. The entry is removed as soon
+ * as it settles, so the next request always does a fresh on-chain read.
+ */
+export type DiscoveryResult = {
+  balances: (DiscoveredBalance & { usd: number })[];
+  /**
+   * True when at least one read (native or token) could not be performed, so the
+   * returned list is a *lower bound*, not the wallet's actual holdings. The API
+   * reports this so a caller never renders "holds nothing" for a read that
+   * simply failed — that misreading is what left a funded wallet looking empty
+   * and blocked the payment.
+   */
+  partial: boolean;
+};
+
+const inflightDiscovery = new Map<string, Promise<DiscoveryResult>>();
 
 /**
  * Find which Monad tokens a wallet actually holds.
@@ -609,13 +641,34 @@ async function readErc20Balances(
  * On-chain balances are authoritative: a token Zerion lists but the chain says
  * the wallet does not hold is dropped. Zerion widens *which* tokens we look at;
  * the chain decides the amount.
+ *
+ * Concurrent calls for the same address share one on-chain read (see
+ * `inflightDiscovery`); the result is a pure function of the address.
  */
 export async function discoverWalletBalances(
   address: Address,
   network: MonadNetwork,
   priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,
   externalAssets: TokenConfig[] = [],
-): Promise<{ balances: (DiscoveredBalance & { usd: number })[] }> {
+): Promise<DiscoveryResult> {
+  const key = `${network}:${address.toLowerCase()}`;
+  const existing = inflightDiscovery.get(key);
+  if (existing) return existing;
+  const run = runDiscovery(address, network, priceOf, externalAssets);
+  inflightDiscovery.set(key, run);
+  try {
+    return await run;
+  } finally {
+    inflightDiscovery.delete(key);
+  }
+}
+
+async function runDiscovery(
+  address: Address,
+  network: MonadNetwork,
+  priceOf: (token: TokenConfig) => Promise<{ usd: number; source?: string }>,
+  externalAssets: TokenConfig[] = [],
+): Promise<DiscoveryResult> {
   const client = getPublicClient(network);
 
   const byKey = new Map<string, TokenConfig>();
@@ -657,13 +710,18 @@ export async function discoverWalletBalances(
 
   const results = await readErc20Balances(client, erc20, address);
 
-  erc20.forEach((token, i) => {
-    const r = (results as any[])[i];
-    if (!r || r.status !== "success") return;
-    const raw = r.result as bigint;
-    if (raw <= 0n) return;
-    held.push({ token, amount: formatRaw(raw, token.decimals), raw, discovered: !token.seed });
-  });
+  // A null result means the token batch could not be read at all: report the
+  // holdings as *unknown*, never as an empty wallet.
+  const tokenReadFailed = results === null;
+  if (results) {
+    erc20.forEach((token, i) => {
+      const r = (results as any[])[i];
+      if (!r || r.status !== "success") return;
+      const raw = r.result as bigint;
+      if (raw <= 0n) return;
+      held.push({ token, amount: formatRaw(raw, token.decimals), raw, discovered: !token.seed });
+    });
+  }
 
   const priced = await Promise.all(
     held.map(async (b) => {
@@ -677,7 +735,7 @@ export async function discoverWalletBalances(
   );
 
   priced.sort((a, b) => b.usd - a.usd);
-  return { balances: priced };
+  return { balances: priced, partial: tokenReadFailed || nativeRaw === null };
 }
 
 function formatRaw(raw: bigint, decimals: number): string {

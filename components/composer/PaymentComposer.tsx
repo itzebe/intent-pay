@@ -1479,7 +1479,15 @@ function coversPartialPlan(balances: Balance[], plan: PaymentPlanLike): boolean 
 
 type PaymentPlanLike = { steps: { kind: string; [k: string]: any }[] };
 
-/** Reads live balances for a connected wallet via the balances API. */
+/**
+ * Reads live balances for a connected wallet via the balances API.
+ *
+ * A balance read can fail transiently (the public Monad RPC rate-limits a
+ * burst, `complete: false`). That must not be rendered as "this wallet holds
+ * nothing" — that misreading left a funded wallet looking empty, showed
+ * "No supported balances found", and blocked the payment. So an incomplete or
+ * failed read is retried a couple of times before the result is accepted.
+ */
 function useLiveBalances(address: string | undefined, network: MonadNetwork, tick: number) {
   const [balances, setBalances] = useState<Balance[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1491,21 +1499,36 @@ function useLiveBalances(address: string | undefined, network: MonadNetwork, tic
     }
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/balances?address=${address}&network=${network}`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((json) => {
-        if (cancelled || !json.ok) return;
-        // Balance tokens come from external discovery; normalize every one so a
-        // missing display field can never blank the UI downstream.
-        const list = ((json.balances as { token: Partial<TokenConfig> & { address?: string }; amount: string; usd: number }[]) ?? []).map(
-          (b) => ({ ...b, token: normalizeTokenConfig(b.token) }),
-        );
-        setBalances(list as Balance[]);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+
+    const readOnce = async (): Promise<{ list: Balance[]; complete: boolean } | null> => {
+      const res = await fetch(`/api/balances?address=${address}&network=${network}`, { cache: "no-store" });
+      const json = await res.json();
+      if (!json.ok) return null;
+      const list = ((json.balances as { token: Partial<TokenConfig> & { address?: string }; amount: string; usd: number }[]) ?? []).map(
+        (b) => ({ ...b, token: normalizeTokenConfig(b.token) }),
+      );
+      return { list: list as Balance[], complete: json.complete !== false };
+    };
+
+    (async () => {
+      let result: { list: Balance[]; complete: boolean } | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          result = await readOnce();
+        } catch {
+          result = null;
+        }
+        if (cancelled) return;
+        // A complete read, or a non-empty lower bound, is good enough to use.
+        if (result?.complete || (result && result.list.length > 0)) break;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (cancelled || !result) return;
+      setBalances(result.list);
+    })().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
     return () => {
       cancelled = true;
     };

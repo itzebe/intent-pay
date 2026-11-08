@@ -35,7 +35,7 @@ vi.mock("@/lib/server/rpc", () => ({
   }),
 }));
 
-const { discoverWalletBalances } = await import("@/lib/server/discovery");
+const { discoverWalletBalances, withRateLimitRetry } = await import("@/lib/server/discovery");
 
 const WALLET = "0x3bd359C1119dA7Da1D913D1C4D2B7c461115433A" as Address;
 /** A realistic native holding (a Monad whale). */
@@ -184,5 +184,44 @@ describe("native MON discovery", () => {
     const { partial } = await discoverWalletBalances(WALLET, "mainnet", priceOf, []);
 
     expect(partial).toBe(false);
+  });
+});
+
+describe("rate-limit retry policy", () => {
+  // The public Monad RPC's 429 window is ~2s. A retry that fires sooner than
+  // that re-hits the limit and the read is abandoned — the exact reason a funded
+  // wallet was reported empty. The default backoff must therefore outlast it.
+  it("waits longer than the public RPC's ~2s rate-limit window before giving up", async () => {
+    vi.useFakeTimers();
+    try {
+      const attempts: number[] = [];
+      const read = vi.fn().mockImplementation(async () => {
+        attempts.push(Date.now());
+        throw new Error("HTTP request failed. Status: 429");
+      });
+      const promise = withRateLimitRetry(read);
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toBeNull();
+      expect(attempts).toHaveLength(3);
+      // The last retry must fire after the ~2s window, or it re-hits the limit.
+      const elapsed = attempts[attempts.length - 1] - attempts[0];
+      expect(elapsed).toBeGreaterThanOrEqual(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops as soon as a retry succeeds", async () => {
+    const read = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("429"))
+      .mockResolvedValueOnce(42n);
+
+    const result = await withRateLimitRetry(read, [1]);
+
+    expect(result).toBe(42n);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });

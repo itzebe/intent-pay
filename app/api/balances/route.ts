@@ -7,6 +7,13 @@ import { isEvmAddress } from "@/lib/format";
 import { fetchZerionResult, tokenFromZerion, zerionEnabled } from "@/lib/server/zerion";
 
 export const dynamic = "force-dynamic";
+/**
+ * A discovery is a native read plus a ~120-call `balanceOf` batch, and the
+ * keyless public RPC rate-limits both; the retries that outlast that window add
+ * a few seconds. The default serverless budget can cut the request off
+ * mid-retry and return an empty wallet, so the budget is stated explicitly.
+ */
+export const maxDuration = 30;
 
 /**
  * Real balances for an address on Monad.

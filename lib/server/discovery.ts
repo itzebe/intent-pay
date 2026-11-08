@@ -1,4 +1,4 @@
-import { decodeAbiParameters, parseAbiParameters, type Address } from "viem";
+import { decodeAbiParameters, parseAbiParameters, type Address, type PublicClient } from "viem";
 import { getPublicClient } from "@/lib/server/rpc";
 import type { MonadNetwork } from "@/lib/config/chains";
 import { NATIVE_ADDRESS } from "@/lib/config/chains";
@@ -533,6 +533,72 @@ const ERC20_ABI = [
 ] as const;
 
 /**
+ * Read a wallet's native MON balance, resilient to a transient rate limit.
+ *
+ * Monad's keyless public RPC answers a burst of reads with HTTP 429, and it
+ * clears within about a second; a single read that lands in that window is
+ * retried once before we give up. Returns `null` only when the balance
+ * genuinely could not be read — the caller then omits it (never fabricates a
+ * zero, which would look like an empty wallet).
+ */
+async function readNativeBalance(
+  client: PublicClient,
+  address: Address,
+): Promise<bigint | null> {
+  const started = Date.now();
+  // Two attempts at most: a rate limit clears in well under a second, and the
+  // retry must not add latency to a serverless request whose endpoints are
+  // genuinely unreachable (the transport already fails over between them).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await client.getBalance({ address });
+    } catch {
+      if (attempt === 0 && Date.now() - started < 3_000) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Read every candidate ERC-20 `balanceOf` in one batched multicall.
+ *
+ * The whole batch is a burst of ~120 calls in a single request, which the
+ * keyless public Monad RPC can answer with HTTP 429. It is an idempotent read,
+ * so a single short retry recovers the holdings instead of silently reporting a
+ * wallet as empty of tokens. A genuine failure still yields `[]` (the caller
+ * treats a missing result as "not held", never as a fabricated balance).
+ */
+async function readErc20Balances(
+  client: PublicClient,
+  erc20: TokenConfig[],
+  address: Address,
+): Promise<unknown[]> {
+  const read = () =>
+    client.multicall({
+      contracts: erc20.map((t) => ({
+        address: t.address as Address,
+        abi: ERC20_ABI,
+        functionName: "balanceOf" as const,
+        args: [address] as const,
+      })),
+      allowFailure: true,
+      batchSize: 64,
+    });
+  try {
+    return (await read()) as unknown[];
+  } catch {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      return (await read()) as unknown[];
+    } catch {
+      return [];
+    }
+  }
+}
+
+/**
  * Find which Monad tokens a wallet actually holds.
  *
  * The public Monad RPC caps eth_getLogs at a 100-block range, so a
@@ -565,27 +631,31 @@ export async function discoverWalletBalances(
   const candidates = [...byKey.values()];
   const erc20 = candidates.filter((t) => !t.native);
 
-  const results = await client
-    .multicall({
-      contracts: erc20.map((t) => ({
-        address: t.address as Address,
-        abi: ERC20_ABI,
-        functionName: "balanceOf" as const,
-        args: [address] as const,
-      })),
-      allowFailure: true,
-      batchSize: 64,
-    })
-    .catch(() => [] as Awaited<ReturnType<typeof client.multicall>>);
-
   const held: DiscoveredBalance[] = [];
+
+  // Read the native MON balance FIRST, before the ERC-20 multicall.
+  //
+  // The keyless public Monad RPC (`rpc.monad.xyz`) rate-limits a burst of
+  // reads (HTTP 429). The ~120-call `balanceOf` multicall below is just such a
+  // burst, and reading native MON *after* it was reliably rejected with 429 on
+  // production — a failure the old code swallowed with `catch { /* ignore */ }`,
+  // so a wallet holding 375M MON was reported as holding none. A native MON
+  // payment was then impossible ("no executable payment asset") and a token
+  // payment that needs MON for gas was falsely blocked. Reading native first
+  // enters an empty rate window and succeeds. `readNativeBalance` adds a small
+  // bounded retry because a 429 clears within a second.
   const native = getToken("MON")!;
-  try {
-    const raw = await client.getBalance({ address });
-    held.push({ token: native, amount: formatRaw(raw, native.decimals), raw, discovered: false });
-  } catch {
-    /* ignore */
+  const nativeRaw = await readNativeBalance(client, address);
+  if (nativeRaw !== null) {
+    held.push({
+      token: native,
+      amount: formatRaw(nativeRaw, native.decimals),
+      raw: nativeRaw,
+      discovered: false,
+    });
   }
+
+  const results = await readErc20Balances(client, erc20, address);
 
   erc20.forEach((token, i) => {
     const r = (results as any[])[i];

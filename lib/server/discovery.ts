@@ -533,32 +533,45 @@ const ERC20_ABI = [
 ] as const;
 
 /**
+ * Monad's keyless public RPC answers a burst of reads with HTTP 429, and the
+ * limit takes roughly two seconds to clear. A retry that fires sooner than that
+ * just re-hits the limit and the read is abandoned — which is how a funded
+ * wallet ended up looking empty and the payment was blocked. So a failed read is
+ * retried with a backoff that outlasts the window (~1 s, then ~2.5 s).
+ *
+ * Returns `null` when every attempt failed, so the caller can report the
+ * holdings as *unknown* rather than fabricating an empty wallet.
+ */
+const RATE_LIMIT_BACKOFF_MS = [1_000, 2_500];
+
+export async function withRateLimitRetry<T>(
+  read: () => Promise<T>,
+  backoffMs: readonly number[] = RATE_LIMIT_BACKOFF_MS,
+): Promise<T | null> {
+  for (let attempt = 0; attempt <= backoffMs.length; attempt++) {
+    try {
+      return await read();
+    } catch {
+      const backoff = backoffMs[attempt];
+      if (backoff === undefined) return null;
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
+  }
+  return null;
+}
+
+/**
  * Read a wallet's native MON balance, resilient to a transient rate limit.
  *
- * Monad's keyless public RPC answers a burst of reads with HTTP 429, and it
- * clears within about a second; a single read that lands in that window is
- * retried once before we give up. Returns `null` only when the balance
- * genuinely could not be read — the caller then omits it (never fabricates a
- * zero, which would look like an empty wallet).
+ * Returns `null` only when the balance genuinely could not be read — the caller
+ * then omits it (never fabricates a zero, which would look like an empty
+ * wallet).
  */
 async function readNativeBalance(
   client: PublicClient,
   address: Address,
 ): Promise<bigint | null> {
-  const started = Date.now();
-  // Two attempts at most: a rate limit clears in well under a second, and the
-  // retry must not add latency to a serverless request whose endpoints are
-  // genuinely unreachable (the transport already fails over between them).
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return await client.getBalance({ address });
-    } catch {
-      if (attempt === 0 && Date.now() - started < 3_000) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-    }
-  }
-  return null;
+  return withRateLimitRetry(() => client.getBalance({ address }));
 }
 
 /**
@@ -566,7 +579,7 @@ async function readNativeBalance(
  *
  * The whole batch is a burst of ~120 calls in a single request, which the
  * keyless public Monad RPC can answer with HTTP 429. It is an idempotent read,
- * so a single short retry recovers the holdings instead of silently reporting a
+ * so the retry above recovers the holdings instead of silently reporting a
  * wallet as empty of tokens.
  *
  * Returns `null` when the batch could not be read at all — the caller must then
@@ -579,25 +592,19 @@ async function readErc20Balances(
   erc20: TokenConfig[],
   address: Address,
 ): Promise<unknown[] | null> {
-  const read = () =>
-    client.multicall({
-      contracts: erc20.map((t) => ({
-        address: t.address as Address,
-        abi: ERC20_ABI,
-        functionName: "balanceOf" as const,
-        args: [address] as const,
-      })),
-      allowFailure: true,
-      batchSize: 64,
-    });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      return (await read()) as unknown[];
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    }
-  }
-  return null;
+  return withRateLimitRetry(
+    () =>
+      client.multicall({
+        contracts: erc20.map((t) => ({
+          address: t.address as Address,
+          abi: ERC20_ABI,
+          functionName: "balanceOf" as const,
+          args: [address] as const,
+        })),
+        allowFailure: true,
+        batchSize: 64,
+      }) as Promise<unknown[]>,
+  );
 }
 
 /**

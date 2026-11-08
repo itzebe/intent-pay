@@ -179,6 +179,54 @@ describe("collectLegacyWallets", () => {
     expect(wallets).toHaveLength(1);
   });
 
+  it("resolves a FACTORY-shaped window.trustwallet.ethereum (the shipped provider bundle)", () => {
+    // The provider bundle exposes `window.trustwallet.ethereum` as a factory
+    // function — `ethereum: (config) => new EthereumProvider(config)` — not the
+    // provider itself. A bare `request`-property check missed it, so a wallet
+    // whose ONLY injected surface was that namespace was never discovered. The
+    // factory is called (no config) and the provider it returns is used.
+    const trust = fakeProvider({ isTrust: true });
+    const factory = vi.fn(() => trust);
+    const wallets = collectLegacyWallets({ trustwallet: { ethereum: factory } } as unknown as Window);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(wallets).toHaveLength(1);
+    expect(wallets[0].name).toBe("Trust Wallet");
+    expect(wallets[0].id).toBe("legacy:trust");
+    expect(wallets[0].provider).toBe(trust);
+  });
+
+  it("does not re-invoke a factory on a repeated scan (identity stays stable)", () => {
+    // `collectLegacyWallets` runs on every poll tick; calling the factory each
+    // time would construct a fresh provider and defeat the identity
+    // de-duplication (the picker would gain a row per tick).
+    const trust = fakeProvider({ isTrust: true });
+    const factory = vi.fn(() => trust);
+    const win = { trustwallet: { ethereum: factory } } as unknown as Window;
+    const first = collectLegacyWallets(win);
+    const second = collectLegacyWallets(win);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(second).toHaveLength(1);
+    expect(second[0].provider).toBe(first[0].provider);
+  });
+
+  it("ignores a factory that throws or returns a non-provider", () => {
+    // A namespace whose `ethereum` is a function but is NOT a provider factory
+    // (e.g. an unrelated helper) must be treated as absent, never guessed at.
+    const throwing = collectLegacyWallets({
+      trustwallet: {
+        ethereum: () => {
+          throw new Error("no config");
+        },
+      },
+    } as unknown as Window);
+    expect(throwing).toEqual([]);
+
+    const notAProvider = collectLegacyWallets({
+      trustwallet: { ethereum: () => ({ notRequest: true }) },
+    } as unknown as Window);
+    expect(notAProvider).toEqual([]);
+  });
+
   it("treats a single provider as one legacy wallet", () => {
     const wallets = collectLegacyWallets({
       ethereum: fakeProvider({ isMetaMask: true }),
@@ -385,6 +433,33 @@ describe("watchWallets", () => {
           ethereum: () => provider,
         };
         (win as { ethereum?: Eip1193Provider }).ethereum = provider;
+        vi.advanceTimersByTime(2500);
+
+        expect(seen[seen.length - 1]).toBe(1);
+        destroy();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("discovers a FACTORY-only namespace injected late (no window.ethereum at all)", () => {
+      // The residual defect: the shipped bundle exposes `window.trustwallet.
+      // ethereum` as a factory function and (in some in-app-browser builds)
+      // `window.ethereum` is never set, so the ONLY surface is the factory
+      // namespace. A bare provider check found nothing and the user was told
+      // "no browser wallet detected". Late injection must resolve the factory.
+      vi.useFakeTimers();
+      try {
+        const win = fakeWindow(undefined);
+        const seen: number[] = [];
+        const { destroy } = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+        expect(seen[seen.length - 1]).toBe(0);
+
+        // ~9s later, factory namespace only — window.ethereum is NOT set.
+        vi.advanceTimersByTime(9000);
+        (win as unknown as { trustwallet?: { ethereum: () => Eip1193Provider } }).trustwallet = {
+          ethereum: () => fakeProvider({ isTrust: true, isTrustWallet: true }),
+        };
         vi.advanceTimersByTime(2500);
 
         expect(seen[seen.length - 1]).toBe(1);

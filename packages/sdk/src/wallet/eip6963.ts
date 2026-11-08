@@ -117,6 +117,42 @@ function isProvider(value: unknown): value is Eip1193Provider {
   return Boolean(value) && typeof (value as Eip1193Provider).request === "function";
 }
 
+/**
+ * Memoised results of resolving a `window.trustwallet.ethereum` factory, keyed
+ * by the factory so a repeated poll reuses one provider instance.
+ */
+const trustFactoryCache = new WeakMap<object, Eip1193Provider | null>();
+
+/**
+ * Resolve `window.trustwallet.ethereum` to a provider.
+ *
+ * The documented Android/iOS injection sets this global to the provider object,
+ * but the shipped provider bundle exposes it as a **factory function**
+ * (`ethereum: (config) => new EthereumProvider(config)`). A bare `isProvider()`
+ * check would then miss a namespace-only injection and report "no browser wallet
+ * detected". A function is called once (the factory accepts a missing config)
+ * and only a value with a real `request()` is accepted; a factory that throws or
+ * returns anything else is treated as absent rather than guessed at.
+ */
+function resolveTrustNamespaceProvider(
+  namespace: { ethereum?: unknown } | undefined,
+): Eip1193Provider | undefined {
+  const candidate = namespace?.ethereum;
+  if (isProvider(candidate)) return candidate;
+  if (typeof candidate !== "function") return undefined;
+  const factory = candidate as object;
+  if (trustFactoryCache.has(factory)) return trustFactoryCache.get(factory) ?? undefined;
+  let resolved: Eip1193Provider | null = null;
+  try {
+    const made = (candidate as () => unknown)();
+    if (isProvider(made)) resolved = made;
+  } catch {
+    resolved = null;
+  }
+  trustFactoryCache.set(factory, resolved);
+  return resolved ?? undefined;
+}
+
 /** Friendly name for an EIP-6963 provider, falling back to the announced name. */
 export function walletDisplayName(info: Eip6963ProviderInfo): string {
   return RDNS_NAMES[info.rdns] ?? info.name ?? "Browser wallet";
@@ -141,11 +177,13 @@ export function parseAnnouncement(event: Event): DiscoveredWallet | null {
  * script that can run after the dapp has booted, and exposes the same provider
  * object on `window.trustwallet.ethereum` first. Reading both means a Trust
  * provider is discovered even on the tick where only one is present, and the
- * identity de-duplication keeps it a single entry.
+ * identity de-duplication keeps it a single entry. The namespace may itself be a
+ * factory function (see `resolveTrustNamespaceProvider`), so it is resolved
+ * before use.
  */
 export function collectLegacyWallets(win: Window | undefined): DiscoveredWallet[] {
   const w = win as
-    | { ethereum?: Eip1193Provider; trustwallet?: { ethereum?: Eip1193Provider } }
+    | { ethereum?: Eip1193Provider; trustwallet?: { ethereum?: unknown } }
     | undefined;
   const out: DiscoveredWallet[] = [];
   const seen = new Set<Eip1193Provider>();
@@ -159,9 +197,12 @@ export function collectLegacyWallets(win: Window | undefined): DiscoveredWallet[
   // A Trust Wallet provider surfaced only on `window.trustwallet.ethereum` is
   // recorded first, with its identity taken from where it was found rather than
   // from provider flags (Trust sets `isMetaMask` for dapp compatibility), so its
-  // stable id is used regardless of what `window.ethereum` holds.
-  if (w?.trustwallet?.ethereum) {
-    push(w.trustwallet.ethereum, -1, { id: "legacy:trust", name: "Trust Wallet" });
+  // stable id is used regardless of what `window.ethereum` holds. The namespace
+  // is resolved through `resolveTrustNamespaceProvider` because the shipped
+  // bundle exposes it as a factory function, not the provider itself.
+  const trustNamespaceProvider = resolveTrustNamespaceProvider(w?.trustwallet);
+  if (trustNamespaceProvider) {
+    push(trustNamespaceProvider, -1, { id: "legacy:trust", name: "Trust Wallet" });
   }
 
   const eth = w?.ethereum;

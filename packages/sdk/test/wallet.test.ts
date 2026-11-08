@@ -71,6 +71,55 @@ describe("discovery (EIP-6963 + legacy)", () => {
     expect(wallets[0]!.id).toBe("legacy:trust");
   });
 
+  it("resolves a FACTORY-shaped window.trustwallet.ethereum (the shipped provider bundle)", () => {
+    // The shipped bundle exposes `window.trustwallet.ethereum` as a factory
+    // function (`ethereum: (config) => new EthereumProvider(config)`), not the
+    // provider. A bare `request`-property check missed a namespace-only
+    // injection; the factory is called (no config) and its provider is used.
+    const trust = makeProvider({ isTrust: true });
+    const factory = vi.fn(() => trust);
+    cleanup = installWindow({});
+    (globalThis as unknown as { window: Record<string, unknown> }).window = {
+      ...(globalThis as unknown as { window: Record<string, unknown> }).window,
+      trustwallet: { ethereum: factory },
+    };
+    const wallets = collectLegacyWallets((globalThis as unknown as { window: Window }).window);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(wallets).toHaveLength(1);
+    expect(wallets[0]!.name).toBe("Trust Wallet");
+    expect(wallets[0]!.id).toBe("legacy:trust");
+    expect(wallets[0]!.provider).toBe(trust);
+  });
+
+  it("ignores a factory that throws or returns a non-provider", () => {
+    cleanup = installWindow({});
+    const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
+    win.trustwallet = { ethereum: () => { throw new Error("no config"); } };
+    expect(collectLegacyWallets(win as unknown as Window)).toEqual([]);
+    win.trustwallet = { ethereum: () => ({ notRequest: true }) };
+    expect(collectLegacyWallets(win as unknown as Window)).toEqual([]);
+  });
+
+  it("discovers a FACTORY-only namespace injected late (no window.ethereum at all)", () => {
+    vi.useFakeTimers();
+    try {
+      const trust = makeProvider({ isTrust: true });
+      cleanup = installWindow({});
+      const win = (globalThis as unknown as { window: Record<string, unknown> }).window;
+      const seen: number[] = [];
+      const watcher = watchWallets(win as unknown as Window, (w) => seen.push(w.length));
+      expect(seen[seen.length - 1]).toBe(0);
+      // Factory namespace only; `window.ethereum` is never set. Only the poll can
+      // find it (no `ethereum#initialized` is dispatched).
+      win.trustwallet = { ethereum: () => trust };
+      vi.advanceTimersByTime(LEGACY_SLOW_POLL_MS * 2);
+      expect(seen[seen.length - 1]).toBe(1);
+      watcher.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gives a legacy provider a stable id derived from its identity, not its index", () => {
     const mm = makeProvider({ isMetaMask: true });
     const trust = makeProvider({ isTrust: true });

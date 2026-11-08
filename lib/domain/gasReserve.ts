@@ -15,10 +15,12 @@
  *   - ERC-20 transfer / swap / approve: generous per-step bounds (see
  *     `lib/execution/plan.ts` `STEP_GAS_UNITS`), summed across the plan.
  *
- * The reserve is `planGasUnits × maxFeePerGas`, where `maxFeePerGas` is the
- * higher of 1.2× the live gas price and the Monad base-fee floor + headroom.
- * It is a bounded upper bound, never an arbitrary amount, and never widened to
- * force a transaction through.
+ * The reserve is `signedGasLimit(planGasUnits) × maxFeePerGas`, where
+ * `signedGasLimit` adds the submission headroom (Monad charges the limit the
+ * wallet signs, not the bare plan estimate) and `maxFeePerGas` is the higher of
+ * 1.2× the live gas price and the Monad base-fee floor + headroom. It is a
+ * bounded upper bound, never an arbitrary amount, and never widened to force a
+ * transaction through.
  */
 
 import type { Quote } from "./intent";
@@ -37,6 +39,32 @@ const GAS_PRICE_BUFFER_NUM = 120n;
 const GAS_PRICE_BUFFER_DEN = 100n;
 
 /**
+ * Headroom applied to a plan's gas units to obtain the gas **limit the wallet is
+ * asked to sign**.
+ *
+ * Monad charges the gas *limit*, and the submission path buffers the node's
+ * estimate by 20% (`lib/execution/prepareTx.ts`) so a swap that ticks between
+ * estimate and signature still fits. The reserve must therefore be sized against
+ * that *sent* limit — not the bare plan estimate — or a native MON payment whose
+ * balance covers `amount + estimate×maxFee` but not `amount + 1.2×estimate×maxFee`
+ * passes Review and is then rejected by the node with `insufficient funds for
+ * gas`. The two sites share these constants so they cannot drift.
+ */
+export const SEND_GAS_LIMIT_HEADROOM_NUM = 120n;
+export const SEND_GAS_LIMIT_HEADROOM_DEN = 100n;
+
+/**
+ * The gas limit a plan step of `gasUnits` will actually be signed with: the plan
+ * bound plus the submission headroom. The reserve's gas-limit basis must be this
+ * figure, because Monad charges the limit, not the amount used. A non-positive
+ * input is returned unchanged (never invent a limit).
+ */
+export function signedGasLimit(gasUnits: bigint): bigint {
+  if (gasUnits <= 0n) return gasUnits;
+  return (gasUnits * SEND_GAS_LIMIT_HEADROOM_NUM) / SEND_GAS_LIMIT_HEADROOM_DEN;
+}
+
+/**
  * The max fee per gas a reserve should be sized against. A live gas price is
  * buffered by 20%; an absent/zero price falls back to the Monad floor.
  */
@@ -53,7 +81,9 @@ export function deriveMaxFeePerGasWei(gasPriceWei?: bigint): bigint {
  */
 export function gasReserveWei(gasLimit?: bigint, gasPriceWei?: bigint): bigint {
   const units = gasLimit && gasLimit > 0n ? gasLimit : FALLBACK_GAS_UNITS;
-  return units * deriveMaxFeePerGasWei(gasPriceWei);
+  // The reserve must cover the fee of the limit the wallet is *actually asked to
+  // sign*, which carries the submission headroom — Monad charges the limit.
+  return signedGasLimit(units) * deriveMaxFeePerGasWei(gasPriceWei);
 }
 
 /** Convenience: the reserve for a quote's own gas parameters. */

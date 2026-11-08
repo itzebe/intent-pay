@@ -16,7 +16,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { splitPayment, pickShortfallSource } from "@/lib/domain/partialBalance";
 import { isQuoteStale, QUOTE_REFRESH_AFTER_MS, QUOTE_RETRY_AFTER_MS } from "@/lib/domain/freshness";
 import { applyQuoteFailure, applyQuoteSuccess, shouldRetryQuote } from "@/lib/domain/quoteState";
-import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
+import { quoteGasReserveWei, signedGasLimit } from "@/lib/domain/gasReserve";
 import { withFeeShortfallMessage } from "@/lib/domain/transactionError";
 import {
   initialIntent,
@@ -783,7 +783,12 @@ export function PaymentProvider({ children }: { children: React.ReactNode }) {
       return { status: "unknown" as const, requiredMon: "0", availableMon };
     }
     try {
-      const required = q.gasLimit * q.gasPriceWei;
+      // Monad charges the gas *limit* the wallet signs, which carries the
+      // submission headroom (`prepareTx` buffers the estimate by 20%). Sizing
+      // the gate against the bare estimate let a native payment whose balance
+      // covered `amount + estimate×maxFee` but not `amount + limit×maxFee` pass
+      // Review and then fail on-chain with `insufficient funds for gas`.
+      const required = signedGasLimit(q.gasLimit) * q.gasPriceWei;
       const requiredMon = Number(required) / 1e18;
       const buffered = required + required / 5n;
       const available = parseUnits(availableMon, 18);

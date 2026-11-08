@@ -736,14 +736,15 @@ export function PaymentComposer({ networkLabel }: { networkLabel: string }) {
           { code: info.kind, diagnostic: info.message },
         );
 
-        // The wallet failed AFTER the user authorised it (Trust Wallet's native
-        // layer reporting it could not reach its own node is the reported case).
-        // We cannot prove the transaction was not broadcast, so it is not a plain
-        // failure to retry: preserve every hash we hold and send the user to the
-        // unknown-outcome panel, which only offers a read-only status check and
-        // never resubmits. A definite pre-authorisation failure still returns to
-        // Review with a retry, as before.
-        if (info.kind === "wallet_rpc") {
+        // The wallet was asked to send and failed without a cause we can pin
+        // down (a bare "Transaction error", an unknown provider error) — or it
+        // failed after the user authorised (Trust Wallet's native layer reporting
+        // it could not reach its own node). Neither proves the transaction was
+        // not broadcast, so it is not a plain failure to retry: preserve every
+        // hash we hold and send the user to the unknown-outcome panel, which only
+        // offers a read-only status check and never resubmits. A definite
+        // pre-authorisation failure still returns to Review with a retry.
+        if (info.kind === "wallet_rpc" || info.kind === "unknown_outcome") {
           setUnresolved({
             hashes: attemptHashesRef.current,
             error: info.message,

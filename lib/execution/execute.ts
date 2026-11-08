@@ -78,7 +78,6 @@ async function submitStep(
   step: PlanStep,
   walletClient: WalletClient,
   network: MonadNetwork,
-  opts: { includeNonce?: boolean } = {},
 ): Promise<Hash> {
   const account = walletClient.account!.address;
   // The app owns the calldata (encodeStep) and submits a single raw
@@ -88,12 +87,14 @@ async function submitStep(
   // See `lib/wallet/sendTransaction.ts`.
   const call = encodeStep(step);
   // Fill the envelope (gas / EIP-1559 fees / nonce) from the app's OWN RPC, so a
-  // wallet whose own node is unreachable has nothing left to estimate before it
-  // can sign. Best-effort: an unreadable field is omitted, never fabricated.
+  // wallet whose own node is unreachable has nothing left to estimate or fetch
+  // before it can sign. The nonce is always read, even for a single-step plan: a
+  // wallet asked to supply it does so *after* the user authorises, and a wallet
+  // whose own node is unreachable then fails post-PIN (the reported defect).
+  // Best-effort: an unreadable field is omitted, never fabricated.
   const prepared = await prepareTxFields(getClientPublicClient(network), call, {
     account,
     fallbackGas: stepGasUnits(step),
-    includeNonce: opts.includeNonce,
   });
   const result = await sendTransactionViaWallet(walletClient, account, call, network, prepared);
   if (result.ok) return result.hash;
@@ -135,13 +136,11 @@ export async function executePlan(
     report({ stepId: step.id, label: step.label, status: "pending" });
     let hash: Hash;
     try {
-      // A multi-step plan (approve → swap → unwrap → deliver) sends several
-      // sequential transactions; a fixed nonce read fresh before each send keeps
-      // them in order even if the wallet's own pending count lags. A single-step
-      // plan leaves the nonce to the wallet.
-      hash = await submitStep(step, walletClient, network, {
-        includeNonce: plan.steps.length > 1,
-      });
+      // Every step — including a single-step native transfer — is submitted with
+      // the envelope the app prepared itself (gas, fees and a fresh nonce). A
+      // wallet whose own node is unreachable then has nothing left to read before
+      // it can sign. The nonce is re-read per step so a sequence cannot reorder.
+      hash = await submitStep(step, walletClient, network);
       report({ stepId: step.id, label: step.label, status: "submitted", hash });
       if (step.id === plan.primaryStepId) primaryHash = hash;
     } catch (err) {

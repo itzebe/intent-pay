@@ -145,6 +145,51 @@ describe("classifyTransactionError", () => {
     expect(info.message).not.toMatch(/internal|stack|unexpected/i);
   });
 
+  /**
+   * Mission 25. A submission failure the classifier cannot pin to a cause — the
+   * bare "Transaction error" Trust Wallet's native layer can raise after the user
+   * authorises — must NOT be reported as a definite pre-submission failure with a
+   * plain Retry. The failing step id proves the wallet was asked to send, so the
+   * outcome is unknown: the transaction may be on-chain.
+   */
+  it("treats a step-tagged unrecognised submission failure as an unknown outcome", () => {
+    const stepTagged = Object.assign(new Error("The transaction could not be sent."), {
+      code: "unknown",
+      stepId: "transfer",
+      cause: new Error("Transaction error"),
+    });
+    const info = classifyTransactionError(stepTagged);
+    expect(info.kind).toBe("unknown_outcome");
+    expect(info.mayHaveSubmitted).toBe(true);
+    expect(info.action).toBe("Check status");
+    expect(info.message).not.toMatch(/Transaction error/);
+  });
+
+  it("keeps a step-less unrecognised failure as a definite generic failure", () => {
+    // A failure that never reached a submission step (no step id) is an
+    // application error, not an ambiguous broadcast: it keeps the generic
+    // fallback and does not claim the transaction may be on-chain.
+    const info = classifyTransactionError(new Error("some totally unexpected internal error"));
+    expect(info.kind).toBe("unknown");
+    expect(info.mayHaveSubmitted).toBe(false);
+  });
+
+  it("treats an explicit 'method unsupported' as a definite pre-submission failure", () => {
+    // EIP-1193 4200 / -32601 mean the wallet cannot submit at all: nothing was
+    // broadcast, so this keeps a usable retry — it must not be lumped into the
+    // ambiguous unknown-outcome case.
+    for (const code of [4200, -32601]) {
+      const stepTagged = Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: Object.assign(new Error("Unsupported method"), { code }),
+      });
+      const info = classifyTransactionError(stepTagged);
+      expect(info.kind).toBe("unsupported");
+      expect(info.mayHaveSubmitted).toBe(false);
+    }
+  });
+
   // Regression: the execution layer wraps the wallet/RPC failure in its own
   // ExecutionError. The real cause lives on `.cause` (and, for viem, on a nested
   // cause chain). The classifier must read through it, otherwise a specific

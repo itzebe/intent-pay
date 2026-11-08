@@ -15,8 +15,9 @@ import {
  * sees `Failed to connect to http://monad.twnodes.com/` after Confirm and Send.
  *
  * This module lets the app supply the fields a wallet would otherwise have to
- * fetch: `gas`, `maxFeePerGas`, `maxPriorityFeePerGas` and (optionally) `nonce`.
- * The wallet is then asked only to approve, sign and broadcast.
+ * fetch: `gas`, `maxFeePerGas`, `maxPriorityFeePerGas` and `nonce`. The wallet is
+ * then asked only to approve, sign and broadcast — it has nothing left to read
+ * from its own node.
  *
  * Every read here is best-effort and total: a field whose read fails is
  * **omitted**, never fabricated, so a wallet that genuinely needs to estimate
@@ -68,14 +69,17 @@ export function gasLimitWithBuffer(estimate: bigint): bigint {
  * Prepare the envelope fields for one call using the app's own RPC.
  *
  * `fallbackGas` is the plan's own per-step bound, used only when the live
- * estimate cannot be read. `includeNonce` is set for a sequential multi-call
- * payment, where a single fixed nonce removes any chance of a nonce race while
- * still being re-read fresh before each send.
+ * estimate cannot be read. The nonce is always read (fresh, per call): a wallet
+ * handed a call without one must fetch it itself, and a wallet whose own node is
+ * unreachable — Trust Wallet's in-app browser proxying to `monad.twnodes.com` —
+ * fails *after* the user has authorised, which is exactly the reported
+ * post-PIN "Transaction error". A sequential multi-call plan re-reads it before
+ * each send, so the sequence cannot reorder.
  */
 export async function prepareTxFields(
   client: PublicClient,
   call: PreparedCall,
-  opts: { account: Address; fallbackGas?: bigint; includeNonce?: boolean },
+  opts: { account: Address; fallbackGas?: bigint },
 ): Promise<TxPreparation> {
   // The three reads are independent; run them together so a slow node adds one
   // round-trip, not three, to the time before the wallet's prompt appears. Each
@@ -100,9 +104,7 @@ export async function prepareTxFields(
       }),
     ),
     attempt(() => client.estimateFeesPerGas()),
-    opts.includeNonce
-      ? attempt(() => client.getTransactionCount({ address: opts.account, blockTag: "pending" }))
-      : Promise.resolve(null),
+    attempt(() => client.getTransactionCount({ address: opts.account, blockTag: "pending" })),
   ]);
 
   const prep: TxPreparation = {};
@@ -121,7 +123,7 @@ export async function prepareTxFields(
     }
   }
 
-  if (nonceRes.status === "fulfilled" && nonceRes.value !== null) {
+  if (nonceRes.status === "fulfilled") {
     prep.nonce = BigInt(nonceRes.value);
   }
 

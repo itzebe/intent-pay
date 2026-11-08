@@ -363,7 +363,7 @@ describe("prepareTxFields — never fabricate a field", () => {
   }
 
   it("reads gas, fees and nonce from the app's client", async () => {
-    const prep = await prepareTxFields(fakeClient({}), { to: RECIPIENT }, { account: SENDER, includeNonce: true });
+    const prep = await prepareTxFields(fakeClient({}), { to: RECIPIENT }, { account: SENDER });
     expect(prep).toEqual({
       gas: 25_200n, // 21,000 + 20% buffer
       maxFeePerGas: 122_000_000_000n,
@@ -372,11 +372,30 @@ describe("prepareTxFields — never fabricate a field", () => {
     });
   });
 
+  it("always reads the nonce, so a single-step plan never leaves it to the wallet", async () => {
+    // The reported post-PIN failure: a direct native MON transfer left the nonce
+    // to the wallet, which fetches it from its own node *after* the user
+    // authorises — and a wallet whose node is unreachable then fails. The nonce
+    // must be prepared for every plan, not only a multi-step one.
+    let nonceReads = 0;
+    const client = {
+      estimateGas: async () => 21_000n,
+      estimateFeesPerGas: async () => ({ maxFeePerGas: 122_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n }),
+      getTransactionCount: async () => {
+        nonceReads += 1;
+        return 9;
+      },
+    } as any;
+    const prep = await prepareTxFields(client, { to: RECIPIENT }, { account: SENDER });
+    expect(nonceReads).toBe(1);
+    expect(prep.nonce).toBe(9n);
+  });
+
   it("tolerates a client that lacks the estimate methods entirely", async () => {
     // The hosted checkout page injects a minimal client; preparation must not
     // throw when a method is missing, or the payment would be blocked by an
     // optimisation rather than by the chain.
-    const prep = await prepareTxFields({} as any, { to: RECIPIENT }, { account: SENDER, includeNonce: true });
+    const prep = await prepareTxFields({} as any, { to: RECIPIENT }, { account: SENDER });
     expect(prep).toEqual({});
   });
 
@@ -384,7 +403,7 @@ describe("prepareTxFields — never fabricate a field", () => {
     const prep = await prepareTxFields(
       fakeClient({ gas: true, fees: true, nonce: true }),
       { to: RECIPIENT },
-      { account: SENDER, includeNonce: true },
+      { account: SENDER },
     );
     expect(prep).toEqual({});
   });

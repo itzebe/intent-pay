@@ -264,4 +264,56 @@ describe("executePlan — transaction rejection handling", () => {
       expect(info.message).not.toMatch(/monad\.twnodes/);
     }
   });
+
+  // S. The reported post-PIN defect: a direct native MON transfer left the nonce
+  //    to the wallet. The wallet fetches a missing nonce from its own node
+  //    *after* the user authorises, and a wallet whose own node is unreachable
+  //    (Trust Wallet's in-app browser proxying to `monad.twnodes.com`) then fails
+  //    with a bare error — the "Transaction error" the user saw. Every step, even
+  //    a single one, must be handed a complete envelope.
+  it("hands the wallet a nonce for a single-step plan (S)", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const wallet = walletWith(async (params) => {
+      sent.push(params as Record<string, unknown>);
+      return ("0x" + "ab".repeat(32)) as `0x${string}`;
+    });
+
+    await executePlan(directTransferPlan(), wallet, "mainnet");
+
+    expect(sent).toHaveLength(1);
+    // The app's own nonce (stubAppRpc returns 7) travels with the request, so the
+    // wallet has nothing left to read before it can sign.
+    expect(sent[0].nonce).toBe("0x7");
+    expect(sent[0].gas).toBeTruthy();
+    expect(sent[0].maxFeePerGas).toBeTruthy();
+    expect(sent[0].maxPriorityFeePerGas).toBeTruthy();
+  });
+
+  // T. A submission failure the classifier cannot pin to a specific cause is
+  //    still a *submission* failure: the wallet was asked to send (after the user
+  //    authorised), so it must never be reported as a definite pre-submission
+  //    failure with a plain Retry. It is an unknown outcome — may have submitted,
+  //    status check required.
+  it("reports an unrecognised submission failure as an unknown outcome, never a plain failure (T)", async () => {
+    const wallet = walletWith(async () => {
+      // The shape Trust Wallet's native layer can return: a bare, code-less
+      // error carrying no diagnostic detail.
+      throw new Error("Transaction error");
+    });
+
+    try {
+      await executePlan(directTransferPlan(), wallet, "mainnet");
+      throw new Error("expected executePlan to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExecutionError);
+      expect((err as ExecutionError).stepId).toBeTruthy();
+      const info = classifyTransactionError(err, {
+        source: isWalletTransportFailure(err) ? "wallet" : "app",
+      });
+      expect(info.kind).toBe("unknown_outcome");
+      expect(info.mayHaveSubmitted).toBe(true);
+      expect(info.action).toBe("Check status");
+      expect(info.message).not.toMatch(/Transaction error/);
+    }
+  });
 });

@@ -3,10 +3,12 @@ import {
   gasReserveWei,
   quoteGasReserveWei,
   deriveMaxFeePerGasWei,
+  signedGasLimit,
   FALLBACK_GAS_UNITS,
   FALLBACK_MAX_FEE_PER_GAS_WEI,
 } from "@/lib/domain/gasReserve";
 import { STEP_GAS_UNITS, stepGasUnits, planGasUnits, buildPaymentPlan } from "@/lib/execution/plan";
+import { gasLimitWithBuffer } from "@/lib/execution/prepareTx";
 import { getToken } from "@/lib/config/tokens";
 import { parseUnits } from "@/lib/domain/math";
 import { coversBalance, coversGas } from "@/lib/execution/signGuard";
@@ -80,9 +82,26 @@ describe("gas reserve is derived from gasLimit × maxFeePerGas", () => {
     const oldFlat = 10_000_000_000_000_000n;
     expect(reserve).toBeGreaterThan(0n);
     expect(reserve).toBeLessThan(oldFlat);
-    // 21,000 × (102 gwei × 1.2 = 122.4 gwei) = 2.5704e15 wei (~0.00257 MON),
-    // under the flat 0.01 MON.
-    expect(reserve).toBe(2_570_400_000_000_000n);
+    // The reserve is sized against the limit the wallet is actually asked to
+    // sign (25,200 = 21,000 + 20% submission headroom), because Monad charges
+    // the gas LIMIT, not the amount used:
+    //   25,200 × (102 gwei × 1.2 = 122.4 gwei) = 3.08448e15 wei (~0.00308 MON),
+    // still well under the flat 0.01 MON.
+    expect(reserve).toBe(3_084_480_000_000_000n);
+  });
+
+  it("sizes the reserve against the gas limit the wallet is asked to sign", () => {
+    // The defect: the reserve used the bare plan estimate (21,000) while the
+    // wallet signs a 20%-buffered limit (25,200). A native MON payment whose
+    // balance covered amount + estimate×maxFee but not amount + limit×maxFee
+    // passed Review and then failed on-chain with `insufficient funds for gas`.
+    const maxFeePerGas = deriveMaxFeePerGasWei(LIVE_GAS_PRICE);
+    const reserve = quoteGasReserveWei({ gasLimit: NATIVE_GAS_LIMIT, gasPriceWei: LIVE_GAS_PRICE });
+    expect(signedGasLimit(NATIVE_GAS_LIMIT)).toBe(25_200n);
+    expect(reserve).toBe(signedGasLimit(NATIVE_GAS_LIMIT) * maxFeePerGas);
+    expect(reserve).toBeGreaterThan(NATIVE_GAS_LIMIT * maxFeePerGas);
+    // And the buffer is exactly the submission path's own headroom.
+    expect(gasLimitWithBuffer(NATIVE_GAS_LIMIT)).toBe(signedGasLimit(NATIVE_GAS_LIMIT));
   });
 
   it("buffers a live gas price by 20% and floors it at the Monad base fee", () => {
@@ -95,7 +114,7 @@ describe("gas reserve is derived from gasLimit × maxFeePerGas", () => {
 
   it("never returns zero — a native payment always keeps some gas aside", () => {
     expect(gasReserveWei(undefined, undefined)).toBe(
-      FALLBACK_GAS_UNITS * FALLBACK_MAX_FEE_PER_GAS_WEI,
+      signedGasLimit(FALLBACK_GAS_UNITS) * FALLBACK_MAX_FEE_PER_GAS_WEI,
     );
     expect(quoteGasReserveWei(null)).toBeGreaterThan(0n);
   });
@@ -235,6 +254,19 @@ describe("signing guard reserves real gas for a native MON source", () => {
   it("coversGas still blocks a wallet whose MON cannot cover the fee", () => {
     // The gas fee (21,000 × 102 gwei ≈ 0.00214 MON) exceeds a 0.001 MON balance.
     expect(coversGas(balances("0.001") as any, 21_000n, LIVE_GAS_PRICE)).toBe(false);
+    expect(coversGas(balances("2") as any, 21_000n, LIVE_GAS_PRICE)).toBe(true);
+  });
+
+  it("coversGas sizes the check against the gas limit actually signed, not the estimate", () => {
+    // Monad charges the gas LIMIT, and the submission path signs 25,200 (21,000
+    // + 20%), not the bare 21,000 estimate. The reported defect: a wallet whose
+    // MON covered `amount + 21,000×gasPrice` but not `amount + 25,200×maxFee`
+    // passed the gate and then failed on-chain with `insufficient funds for gas`.
+    // 0.0028 MON sits between the old (0.00257) and the real (0.00307) fee.
+    expect(coversGas(balances("0.0028") as any, 21_000n, LIVE_GAS_PRICE)).toBe(false);
+    // The limit the submission path really signs is the buffered figure.
+    expect(signedGasLimit(21_000n)).toBe(25_200n);
+    // And a wallet that genuinely covers the signed fee still passes.
     expect(coversGas(balances("2") as any, 21_000n, LIVE_GAS_PRICE)).toBe(true);
   });
 });

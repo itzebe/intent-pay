@@ -1,4 +1,8 @@
 import type { Address, Hex, PublicClient } from "viem";
+import {
+  SEND_GAS_LIMIT_HEADROOM_DEN,
+  SEND_GAS_LIMIT_HEADROOM_NUM,
+} from "@/lib/domain/gasReserve";
 
 /**
  * Application-owned transaction preparation.
@@ -43,9 +47,13 @@ export type PreparedCall = { to: Address; data?: Hex; value?: bigint };
  * little more if the route ticks — and the wallet cannot re-estimate when its own
  * node is unreachable. 20% matches the existing `coversGas` reserve, so the
  * signed limit and the readiness gate stay consistent.
+ *
+ * The constants live in `lib/domain/gasReserve.ts` (the native-reserve rule) so
+ * the reserve the readiness gate checks and the limit this path sends cannot
+ * drift: both must describe the SAME limit.
  */
-const GAS_BUFFER_NUM = 120n;
-const GAS_BUFFER_DEN = 100n;
+const GAS_BUFFER_NUM = SEND_GAS_LIMIT_HEADROOM_NUM;
+const GAS_BUFFER_DEN = SEND_GAS_LIMIT_HEADROOM_DEN;
 
 /**
  * A tight, bounded gas limit for an estimated transaction. Zero/unknown stays

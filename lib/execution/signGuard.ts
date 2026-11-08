@@ -5,7 +5,7 @@ import { parseUnits } from "@/lib/domain/math";
 import { displayKey, type CanonicalIntent } from "@/lib/domain/canonicalIntent";
 import { isQuoteStale } from "@/lib/domain/freshness";
 import { assessPriceImpact, DEFAULT_SLIPPAGE_BPS } from "@/lib/domain/protection";
-import { quoteGasReserveWei } from "@/lib/domain/gasReserve";
+import { quoteGasReserveWei, signedGasLimit } from "@/lib/domain/gasReserve";
 import { INSUFFICIENT_MON_FOR_FEES_MESSAGE } from "@/lib/domain/transactionError";
 import { buildPaymentPlan, type PaymentPlan } from "./plan";
 
@@ -391,7 +391,11 @@ export function coversGas(
   if (!native) return false;
   if (!gasLimit || !gasPriceWei) return true;
   try {
-    const required = gasLimit * gasPriceWei;
+    // Monad charges the gas *limit* the wallet signs, which carries the
+    // submission headroom — not the bare estimate. Sizing the check against the
+    // signed limit is what stops a payment that cannot pay its real fee from
+    // passing the gate and then failing on-chain.
+    const required = signedGasLimit(gasLimit) * gasPriceWei;
     const buffered = required + required / 5n;
     const available = parseUnits(native.amount, 18);
     return available >= buffered;

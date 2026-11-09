@@ -285,8 +285,61 @@ describe("executePlan — transaction rejection handling", () => {
     // wallet has nothing left to read before it can sign.
     expect(sent[0].nonce).toBe("0x7");
     expect(sent[0].gas).toBeTruthy();
-    expect(sent[0].maxFeePerGas).toBeTruthy();
-    expect(sent[0].maxPriorityFeePerGas).toBeTruthy();
+    // The fee is the legacy `gasPrice` derived from the live EIP-1559 cap
+    // (stubAppRpc returns maxFeePerGas 122 gwei) — Trust Wallet's dApp contract
+    // reads `gasPrice` and ignores the EIP-1559 fields.
+    expect(sent[0].gasPrice).toBe("0x1c67c44400");
+    // Exactly one fee model: the EIP-1559 pair must NOT also be present, or the
+    // request is a conflicting-fee transaction.
+    expect(sent[0].maxFeePerGas).toBeUndefined();
+    expect(sent[0].maxPriorityFeePerGas).toBeUndefined();
+  });
+
+  // U. The reported Trust Wallet defect: the dApp contract is legacy — it reads
+  //    `gasPrice` and ignores `maxFeePerGas`/`maxPriorityFeePerGas`. The request
+  //    must therefore carry the legacy fee field and must NOT also carry the
+  //    EIP-1559 pair (a conflicting-fee transaction many wallets/nodes reject).
+  it("sends the legacy gasPrice derived from the live maxFeePerGas, and only one fee model (U)", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const wallet = walletWith(async (params) => {
+      sent.push(params as Record<string, unknown>);
+      return ("0x" + "ab".repeat(32)) as `0x${string}`;
+    });
+
+    // The stub returns maxFeePerGas = 122 gwei; the legacy gasPrice must equal it.
+    await executePlan(directTransferPlan(), wallet, "mainnet");
+
+    expect(sent).toHaveLength(1);
+    const p = sent[0];
+    // Exactly the legacy dApp transaction contract's field set (a USDC transfer
+    // carries calldata, so `data` is present and `value` is absent) — nothing the
+    // legacy decoder would ignore, and no second fee model.
+    expect(Object.keys(p).sort()).toEqual(
+      ["chainId", "data", "from", "gas", "gasPrice", "nonce", "to"].sort(),
+    );
+    expect(p.gasPrice).toBe("0x1c67c44400"); // 122_000_000_000
+    expect(p).not.toHaveProperty("maxFeePerGas");
+    expect(p).not.toHaveProperty("maxPriorityFeePerGas");
+    expect(p).not.toHaveProperty("type");
+  });
+
+  // V. An invalid (zero/absent) fee estimate must not be turned into a fabricated
+  //    gasPrice; the request then simply omits a fee and the wallet falls back to
+  //    its own source — never a bogus "0x0" fee.
+  it("omits the fee entirely when the estimate is unusable, never fabricating one (V)", async () => {
+    const rpc2 = stubAppRpc({ estimateFeesPerGas: { maxFeePerGas: 0n, maxPriorityFeePerGas: 0n } });
+    try {
+      const sent: Array<Record<string, unknown>> = [];
+      const wallet = walletWith(async (params) => {
+        sent.push(params as Record<string, unknown>);
+        return ("0x" + "ab".repeat(32)) as `0x${string}`;
+      });
+      await executePlan(directTransferPlan(), wallet, "mainnet");
+      expect(sent[0]).not.toHaveProperty("gasPrice");
+      expect(sent[0]).not.toHaveProperty("maxFeePerGas");
+    } finally {
+      rpc2.restore();
+    }
   });
 
   // T. A submission failure the classifier cannot pin to a specific cause is

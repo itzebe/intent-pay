@@ -246,7 +246,7 @@ describe("application-owned transaction preparation", () => {
   // 10. The composer and the checkout build the SAME send params shape.
   it("builds identical send params for the composer and the checkout", async () => {
     const call = { to: RECIPIENT, data: "0xdeadbeef" as const, value: 1n };
-    const prepared = { gas: 30000n, maxFeePerGas: 122_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n };
+    const prepared = { gas: 30000n, gasPrice: 122_000_000_000n };
 
     // Composer: `executePlan` → `sendTransactionViaWallet` → `buildSendParams`.
     const composerSent: any[] = [];
@@ -290,8 +290,11 @@ describe("application-owned transaction preparation", () => {
       value: "0x1",
       chainId: "0x8f",
       gas: "0x7530",
-      maxFeePerGas: "0x1c67c44400",
+      gasPrice: "0x1c67c44400",
     });
+    // A single fee model only: no EIP-1559 fields alongside the legacy gasPrice.
+    expect(composerSent[0]).not.toHaveProperty("maxFeePerGas");
+    expect(composerSent[0]).not.toHaveProperty("maxPriorityFeePerGas");
   });
 
   // 11. A transport-shaped send failure must be submitted EXACTLY ONCE. viem's
@@ -362,14 +365,18 @@ describe("prepareTxFields — never fabricate a field", () => {
     } as any;
   }
 
-  it("reads gas, fees and nonce from the app's client", async () => {
+  it("reads gas, the legacy fee and nonce from the app's client", async () => {
     const prep = await prepareTxFields(fakeClient({}), { to: RECIPIENT }, { account: SENDER });
+    // The fee is sent as the legacy `gasPrice` (Trust Wallet's dApp contract),
+    // derived from the live EIP-1559 `maxFeePerGas` cap — and NOT also as the
+    // EIP-1559 pair, which would be a conflicting-fee request.
     expect(prep).toEqual({
       gas: 25_200n, // 21,000 + 20% buffer
-      maxFeePerGas: 122_000_000_000n,
-      maxPriorityFeePerGas: 2_000_000_000n,
+      gasPrice: 122_000_000_000n,
       nonce: 3n,
     });
+    expect(prep.maxFeePerGas).toBeUndefined();
+    expect(prep.maxPriorityFeePerGas).toBeUndefined();
   });
 
   it("always reads the nonce, so a single-step plan never leaves it to the wallet", async () => {
@@ -415,15 +422,53 @@ describe("prepareTxFields — never fabricate a field", () => {
       { account: SENDER, fallbackGas: 55_000n },
     );
     expect(prep.gas).toBe(55_000n);
-    expect(prep.maxFeePerGas).toBe(122_000_000_000n);
+    expect(prep.gasPrice).toBe(122_000_000_000n);
   });
 
   it("omits a non-positive or absent field from the RPC params", () => {
-    expect(toRpcFields({ gas: 0n, maxFeePerGas: 0n, maxPriorityFeePerGas: 0n, nonce: 0n })).toEqual({
+    expect(
+      toRpcFields({ gas: 0n, gasPrice: 0n, maxFeePerGas: 0n, maxPriorityFeePerGas: 0n, nonce: 0n }),
+    ).toEqual({
       nonce: "0x0",
     });
     expect(toRpcFields({})).toEqual({});
     expect(toRpcFields({ gas: 21_000n })).toEqual({ gas: "0x5208" });
+  });
+
+  it("emits exactly ONE fee model — legacy gasPrice wins over the EIP-1559 pair", () => {
+    // A transaction that carries both `gasPrice` and `maxFeePerGas` is rejected
+    // as a conflicting-fee request by many wallets and nodes (ethers.js,
+    // thirdweb, Monad's own RPC). The encoder must never emit both.
+    const both = toRpcFields({
+      gas: 21_000n,
+      gasPrice: 122_000_000_000n,
+      maxFeePerGas: 122_000_000_000n,
+      maxPriorityFeePerGas: 2_000_000_000n,
+      nonce: 7n,
+    });
+    expect(both).toEqual({ gas: "0x5208", gasPrice: "0x1c67c44400", nonce: "0x7" });
+    expect(both).not.toHaveProperty("maxFeePerGas");
+    expect(both).not.toHaveProperty("maxPriorityFeePerGas");
+
+    // With no legacy fee, the EIP-1559 pair is sent instead.
+    expect(
+      toRpcFields({ gas: 21_000n, maxFeePerGas: 122_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n }),
+    ).toEqual({ gas: "0x5208", maxFeePerGas: "0x1c67c44400", maxPriorityFeePerGas: "0x77359400" });
+  });
+
+  it("never emits an undefined/null/malformed fee value", () => {
+    const fields = toRpcFields({
+      gas: undefined,
+      gasPrice: undefined,
+      maxFeePerGas: undefined,
+      maxPriorityFeePerGas: undefined,
+      nonce: undefined,
+    });
+    expect(fields).toEqual({});
+    // A zero fee is dropped, not hex-encoded as "0x0" (a zero gasPrice would be
+    // an invalid fee — never fabricate one).
+    expect(toRpcFields({ gasPrice: 0n })).toEqual({});
+    expect(toRpcFields({ maxFeePerGas: 0n })).toEqual({});
   });
 
   it("never shrinks a gas estimate below the node's own figure", () => {

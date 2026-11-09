@@ -15,9 +15,14 @@ import {
  * sees `Failed to connect to http://monad.twnodes.com/` after Confirm and Send.
  *
  * This module lets the app supply the fields a wallet would otherwise have to
- * fetch: `gas`, `maxFeePerGas`, `maxPriorityFeePerGas` and `nonce`. The wallet is
- * then asked only to approve, sign and broadcast — it has nothing left to read
- * from its own node.
+ * fetch: `gas`, a fee, and `nonce`. The wallet is then asked only to approve,
+ * sign and broadcast — it has nothing left to read from its own node.
+ *
+ * The fee is sent as the **legacy `gasPrice`**, derived from the live EIP-1559
+ * `maxFeePerGas` cap, because Trust Wallet's dApp transaction contract is legacy
+ * (it reads `gasPrice` and ignores the EIP-1559 fields). Only one fee model is
+ * ever emitted — a transaction carrying both `gasPrice` and `maxFeePerGas` is
+ * rejected as a conflict by many wallets and nodes.
  *
  * Every read here is best-effort and total: a field whose read fails is
  * **omitted**, never fabricated, so a wallet that genuinely needs to estimate
@@ -31,6 +36,13 @@ import {
 
 export type TxPreparation = {
   gas?: bigint;
+  /**
+   * Legacy fee field. Trust Wallet's dApp transaction contract is legacy: it
+   * reads `gasPrice` and ignores `maxFeePerGas`/`maxPriorityFeePerGas`. When set,
+   * `toRpcFields` sends this **instead of** the EIP-1559 pair (a transaction that
+   * carries both is rejected by many wallets and nodes).
+   */
+  gasPrice?: bigint;
   maxFeePerGas?: bigint;
   maxPriorityFeePerGas?: bigint;
   nonce?: bigint;
@@ -117,10 +129,24 @@ export async function prepareTxFields(
 
   if (feesRes.status === "fulfilled") {
     const fees = feesRes.value;
-    if (fees.maxFeePerGas && fees.maxFeePerGas > 0n) prep.maxFeePerGas = fees.maxFeePerGas;
-    if (fees.maxPriorityFeePerGas && fees.maxPriorityFeePerGas > 0n) {
-      prep.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
-    }
+    // Trust Wallet's dApp transaction contract is LEGACY: its own open-source
+    // dApp layer (iOS `SendTransaction.swift` / `DappAction.makeUnconfirmedTransaction`,
+    // Android `Web3View` `processTransaction`) decodes `gasPrice` and ignores
+    // `maxFeePerGas`/`maxPriorityFeePerGas`, and wallet-core's signer defaults to
+    // `tx_mode = Legacy`, whose only fee field is `gasPrice`. Sending the EIP-1559
+    // pair alone left the wallet's legacy path with no usable fee, and it failed
+    // after the user authorised with a bare "Transaction error".
+    //
+    // `maxFeePerGas` is a valid legacy `gasPrice`: it is the EIP-1559 *cap*
+    // (baseFee×1.2 + tip), so it is always ≥ the base fee and cannot be
+    // underpriced, and it is exactly the figure the readiness reserve already
+    // sizes against (`quoteGasReserveWei`), so the balance gate and the fee the
+    // wallet signs agree. Never hardcoded, never a fallback.
+    //
+    // Only ONE fee model is emitted: a transaction carrying both `gasPrice` and
+    // `maxFeePerGas` is rejected as a conflict by many wallets and nodes, so
+    // `toRpcFields` sends the legacy field instead of the EIP-1559 pair.
+    if (fees.maxFeePerGas && fees.maxFeePerGas > 0n) prep.gasPrice = fees.maxFeePerGas;
   }
 
   if (nonceRes.status === "fulfilled") {
@@ -134,11 +160,19 @@ export async function prepareTxFields(
 export function toRpcFields(prep: TxPreparation): Record<string, string> {
   const out: Record<string, string> = {};
   if (prep.gas && prep.gas > 0n) out.gas = "0x" + prep.gas.toString(16);
-  if (prep.maxFeePerGas && prep.maxFeePerGas > 0n) {
-    out.maxFeePerGas = "0x" + prep.maxFeePerGas.toString(16);
-  }
-  if (prep.maxPriorityFeePerGas && prep.maxPriorityFeePerGas > 0n) {
-    out.maxPriorityFeePerGas = "0x" + prep.maxPriorityFeePerGas.toString(16);
+  // Exactly one fee model is emitted. The legacy `gasPrice` (what Trust Wallet's
+  // dApp contract reads) takes precedence; the EIP-1559 pair is sent only when no
+  // legacy fee is available, so a request never carries both — wallets and nodes
+  // reject a transaction that sets `gasPrice` and `maxFeePerGas` together.
+  if (prep.gasPrice && prep.gasPrice > 0n) {
+    out.gasPrice = "0x" + prep.gasPrice.toString(16);
+  } else {
+    if (prep.maxFeePerGas && prep.maxFeePerGas > 0n) {
+      out.maxFeePerGas = "0x" + prep.maxFeePerGas.toString(16);
+    }
+    if (prep.maxPriorityFeePerGas && prep.maxPriorityFeePerGas > 0n) {
+      out.maxPriorityFeePerGas = "0x" + prep.maxPriorityFeePerGas.toString(16);
+    }
   }
   if (prep.nonce !== undefined && prep.nonce >= 0n) out.nonce = "0x" + prep.nonce.toString(16);
   return out;

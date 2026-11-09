@@ -23,18 +23,31 @@ import {
 /**
  * A prepared call, as returned by `prepareTransaction`.
  *
- * The optional `gas` / `maxFeePerGas` / `maxPriorityFeePerGas` / `nonce` fields
- * let the caller (or the Intent Pay API) fill the transaction envelope with its
- * own RPC reads before the wallet is asked to sign. A wallet whose own node is
- * unreachable — Trust Wallet's in-app browser proxies non-native methods to
- * `monad.twnodes.com` — then has nothing left to estimate before it can sign.
- * Omit a field you could not read; the wallet will fall back to its own source.
+ * The optional `gas` / `gasPrice` / `maxFeePerGas` / `maxPriorityFeePerGas` /
+ * `nonce` fields let the caller (or the Intent Pay API) fill the transaction
+ * envelope with its own RPC reads before the wallet is asked to sign. A wallet
+ * whose own node is unreachable — Trust Wallet's in-app browser proxies
+ * non-native methods to `monad.twnodes.com` — then has nothing left to estimate
+ * before it can sign. Omit a field you could not read; the wallet will fall back
+ * to its own source.
+ *
+ * Prefer `gasPrice` for Trust Wallet: its dApp transaction contract is legacy
+ * (it reads `gasPrice` and ignores the EIP-1559 pair). Supply exactly one fee
+ * model — a request carrying both `gasPrice` and `maxFeePerGas` is rejected as a
+ * conflicting-fee transaction, so `gasPrice` wins when both are present.
+ *
+ * A legacy `gasPrice` you supply must be a positive integer number of wei:
+ * `sendCalls` rejects a zero, negative or non-numeric value with a `WalletError`
+ * rather than dropping it, because a request with no fee would let the wallet
+ * fall back to its own (possibly unreachable) node. A malformed `gas`/`nonce`/
+ * EIP-1559 field is dropped, so the wallet falls back to its own source.
  */
 export type PreparedCall = {
   to: string;
   data: string;
   value: string;
   gas?: string;
+  gasPrice?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
   nonce?: string;
@@ -326,10 +339,14 @@ export class Wallet {
    */
   async sendCalls(calls: PreparedCall[]): Promise<SentTransaction> {
     if (calls.length === 0) throw new WalletError("wallet_no_account", "There is nothing to send.");
+    // Validate the whole batch before sending anything: a caller bug (a zero or
+    // malformed fee) must be rejected up front, never turned into a partial
+    // submission or a silently-dropped field.
+    const prepared = calls.map((call) => ({ call, envelope: normalizePreparedEnvelope(call) }));
     await this.ensureMonadChain();
     const from = this.currentAddress;
     const txHashes: string[] = [];
-    for (const call of calls) {
+    for (const { call, envelope } of prepared) {
       try {
         const hash = await this.provider.request({
           method: "eth_sendTransaction",
@@ -344,7 +361,7 @@ export class Wallet {
             data: call.data && call.data !== "0x" ? call.data : undefined,
             value: normalizeValue(call.value),
             chainId: "0x" + MONAD_CHAIN_ID.toString(16),
-            ...envelopeFields(call),
+            ...envelope,
           }],
         });
         if (typeof hash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(hash)) {
@@ -458,25 +475,75 @@ function normalizeValue(value: string | undefined): string | undefined {
 }
 
 /**
- * The envelope fields a caller may have prepared, as EIP-1193 hex quantities.
- * A value that is absent, malformed or non-positive is dropped rather than
- * forwarded — an invalid field would be worse than none (the wallet must fall
- * back to its own source, not be handed a bad number).
+ * Validate and encode the envelope fields a caller prepared, as EIP-1193 hex
+ * quantities, applying the one-fee-model rule.
+ *
+ * Two different mistakes are treated differently, on purpose:
+ *
+ *  - A **fee** the caller supplied but which is unusable (`gasPrice` zero,
+ *    negative or non-numeric) is a caller bug: it throws a `WalletError` rather
+ *    than being dropped. Dropping it would be worse than a failure — the request
+ *    would then carry no fee and the wallet would silently fall back to its own
+ *    source, which on Trust Wallet is exactly the unreachable node this
+ *    preparation exists to avoid. So a legacy fee must be valid or absent, never
+ *    silently discarded.
+ *  - The **non-fee** envelope fields (`gas`, `nonce`, and the EIP-1559 pair when
+ *    no legacy `gasPrice` is set) stay best-effort: a malformed value is dropped
+ *    so the wallet falls back to its own source. Those fields never change what
+ *    the user pays per unit of gas, and the readiness gate already bounds them.
+ *
+ * Exactly one fee model is emitted: a legacy `gasPrice` wins and the EIP-1559
+ * pair is dropped, since a transaction carrying both is rejected as a
+ * conflicting-fee request. When no `gasPrice` is supplied, a valid EIP-1559 pair
+ * is forwarded unchanged.
  */
-function envelopeFields(call: PreparedCall): Record<string, string> {
+function normalizePreparedEnvelope(call: PreparedCall): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const key of ["gas", "maxFeePerGas", "maxPriorityFeePerGas", "nonce"] as const) {
-    const raw = call[key];
-    if (raw === undefined || raw === null || raw === "") continue;
-    try {
-      const n = BigInt(raw);
-      if (n < 0n) continue;
-      out[key] = "0x" + n.toString(16);
-    } catch {
-      /* drop a malformed value */
+
+  // The legacy fee must be valid or absent — never silently discarded.
+  const rawGasPrice = call.gasPrice;
+  const gasPriceProvided = rawGasPrice !== undefined && rawGasPrice !== null && rawGasPrice !== "";
+  let gasPrice: bigint | undefined;
+  if (gasPriceProvided) {
+    if (!isEnvelopeNumber(rawGasPrice)) {
+      throw new WalletError("wallet_no_account", "The legacy `gasPrice` is not a valid number.");
+    }
+    gasPrice = BigInt(rawGasPrice);
+    if (gasPrice <= 0n) {
+      throw new WalletError(
+        "wallet_no_account",
+        "The legacy `gasPrice` must be a positive integer number of wei. A zero fee would be rejected by the network.",
+      );
     }
   }
+
+  for (const key of ["gas", "maxFeePerGas", "maxPriorityFeePerGas", "nonce"] as const) {
+    const n = parseEnvelopeField(call[key]);
+    if (n !== undefined && n >= 0n) out[key] = "0x" + n.toString(16);
+  }
+
+  if (gasPrice !== undefined) {
+    out.gasPrice = "0x" + gasPrice.toString(16);
+    delete out.maxFeePerGas;
+    delete out.maxPriorityFeePerGas;
+  }
+
   return out;
+}
+
+/** Parse a decimal-wei envelope field to a bigint; `undefined` when unusable. */
+function parseEnvelopeField(raw: string | undefined): bigint | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  try {
+    return BigInt(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A value `BigInt` accepts as a decimal integer (so the error is a caller bug). */
+function isEnvelopeNumber(raw: string | undefined): boolean {
+  return typeof raw === "string" && /^\s*[+-]?\d+\s*$/.test(raw);
 }
 
 /** Re-exported for callers that want to render a chooser. */

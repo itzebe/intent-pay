@@ -301,8 +301,8 @@ export function CheckoutClient({ token }: { token: string }) {
           // Prepare the envelope (gas / EIP-1559 fees / nonce) with Intent Pay's
           // OWN RPC before the wallet sees it, so a wallet whose own node is
           // unreachable (Trust Wallet's in-app browser proxying to
-          // `monad.twnodes.com`) has nothing left to estimate. A multi-call
-          // payment gets a fresh nonce per call so the sequence cannot reorder.
+          // `monad.twnodes.com`) has nothing left to estimate. The nonce is read
+          // fresh per call so the sequence cannot reorder.
           const envelope = await prepareTxFields(
             pub,
             {
@@ -310,10 +310,7 @@ export function CheckoutClient({ token }: { token: string }) {
               data: call.data && call.data !== "0x" ? (call.data as `0x${string}`) : undefined,
               value: call.value && call.value !== "0" ? BigInt(call.value) : undefined,
             },
-            {
-              account: wallet.address as `0x${string}`,
-              includeNonce: prepared.calls.length > 1,
-            },
+            { account: wallet.address as `0x${string}` },
           );
           return wallet.provider!.request({
             method: "eth_sendTransaction",
@@ -345,25 +342,37 @@ export function CheckoutClient({ token }: { token: string }) {
       if (!outcome.ok) {
         // Record whatever already broadcast so the order reflects it, then stop.
         await recordSubmitted(outcome.hashes);
-        // A transport failure the *wallet's* provider hit is not our RPC being
-        // down: say so plainly. But it is NOT proof nothing was sent — the wallet
-        // is asked to send only after the customer authorised, so if it holds no
-        // hash we cannot rule out a broadcast. Mark the outcome unknown and
-        // require a status check before any retry (which could double-pay).
+        // A submission that produced no hash is not proof nothing was sent: the
+        // wallet is asked to send only after the customer authorised, so a
+        // transport failure — or any error we cannot pin down — may already have
+        // been broadcast. Mark the outcome unknown and require a status check
+        // before any retry (which could double-pay). A rejection or an explicit
+        // "method unsupported" is a definite pre-submission failure — nothing was
+        // broadcast — and keeps its own message with Pay still offered.
         const walletTransport = outcome.reason === "send_failed" && isTransportError(outcome.cause);
+        const classified = classifyTransactionError(outcome.cause, {
+          source: walletTransport ? "wallet" : "app",
+        });
+        const definite = classified.kind === "rejected" || classified.kind === "unsupported";
+        const uncertain =
+          !definite &&
+          (outcome.reason === "send_failed" || outcome.reason === "invalid_hash") &&
+          outcome.hashes.length === 0;
         setActionError(
           walletTransport
-            ? classifyTransactionError(outcome.cause, { source: "wallet" }).message
-            : outcome.message,
+            ? classified.message
+            : uncertain
+              ? SUBMISSION_UNKNOWN_MESSAGE
+              : outcome.message,
         );
-        if (walletTransport && outcome.hashes.length === 0) {
+        if (uncertain) {
           setUnknownOutcome(true);
         }
         logCheckoutDiagnostic({
           stage: outcome.reason === "unconfirmed" ? "receipt" : "broadcast",
           walletKind: kind,
           chainId: wallet.chainId,
-          code: walletTransport ? "wallet_rpc" : outcome.reason,
+          code: walletTransport ? "wallet_rpc" : uncertain ? "unknown_outcome" : outcome.reason,
         });
         return;
       }

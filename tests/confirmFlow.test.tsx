@@ -453,6 +453,45 @@ describe("confirmation flow", () => {
     expect(screen.getByText(/Check payment status/)).toBeTruthy();
   });
 
+  it("shows the unknown-outcome panel (never a plain Retry) for a bare post-PIN wallet error", async () => {
+    // The exact reported symptom: a direct native MON transfer, the user enters
+    // their Trust Wallet PIN, and the wallet fails with a bare, code-less
+    // "Transaction error" that carries no cause we can classify. Because the
+    // failing step proves the wallet was asked to send (after authorisation), the
+    // composer must NOT return to Review with a plain Retry — a double-spend
+    // path — but show the unknown-outcome panel with a read-only status check.
+    baseFlow({});
+    prepareSigning.mockResolvedValue({
+      ok: true,
+      plan: {
+        executable: true,
+        primaryStepId: "transfer",
+        slippageBps: 50,
+        steps: [{ id: "transfer", kind: "transfer", label: "Send MON", token: { address: "0x0", symbol: "MON" }, amount: 1_000_000_000_000_000_000n, to: flow.intent.recipient }],
+      },
+    });
+    executePlan.mockRejectedValue(
+      Object.assign(new Error("The transaction could not be sent."), {
+        code: "unknown",
+        stepId: "transfer",
+        cause: new Error("Transaction error"),
+      }),
+    );
+
+    renderComposer();
+    fireEvent.click(screen.getByText("Review Payment"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Confirm & Send/));
+    });
+
+    expect(screen.getByText("Payment status needs checking")).toBeTruthy();
+    const retry = screen.getByText("Retry payment") as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    expect(screen.getByText(/Check payment status/)).toBeTruthy();
+    // The raw wallet string never reaches the user.
+    expect(screen.queryByText(/^Transaction error$/)).toBeNull();
+  });
+
   it("a Trust Wallet post-authorisation failure with no activity stays unknown and keeps Retry disabled", async () => {
     baseFlow({});
     prepareSigning.mockResolvedValue({
@@ -699,11 +738,13 @@ describe("confirmation flow", () => {
       await Promise.resolve();
     });
 
+    // The composer never fell back to the composer's Review CTA, and the
+    // ambiguous post-submission failure is surfaced honestly: the unknown-outcome
+    // panel with a read-only status check — never a plain Retry, which could
+    // double-spend a transaction that may already be on-chain.
     expect(screen.queryByText("Review Payment")).toBeNull();
-    expect(screen.getByText(/Review payment/)).toBeTruthy();
-    // The ambiguous post-submission failure is surfaced as an honest,
-    // actionable message (never the raw provider string).
-    expect(screen.getByText(/could not confirm whether the transaction/i)).toBeTruthy();
+    expect(screen.getByText("Payment status needs checking")).toBeTruthy();
+    expect(screen.getByText(/couldn't confirm whether your wallet submitted/i)).toBeTruthy();
   });
 
   it("submits through the standard EOA path with gas paid in MON", async () => {

@@ -21,6 +21,7 @@ export type TxErrorKind =
   | "reverted" // the transaction reverted on-chain
   | "rpc_unavailable" // the node could not be reached / timed out
   | "wallet_rpc" // the wallet's own provider could not complete its network call
+  | "unsupported" // the wallet cannot submit a transaction from this app
   | "unknown_outcome" // submitted, but the outcome could not be established
   | "unknown"; // any other definite pre-submission failure
 
@@ -205,6 +206,19 @@ export function classifyTransactionError(
     };
   }
 
+  // The wallet cannot submit a transaction at all (EIP-1193 4200 / -32601). This
+  // is a definite pre-submission failure — nothing was broadcast — so it keeps a
+  // usable retry and a specific, honest message rather than the ambiguous
+  // unknown-outcome treatment.
+  if (code === 4200 || code === -32601) {
+    return {
+      kind: "unsupported",
+      message:
+        "This wallet cannot submit a transaction from this app. Try a different wallet, or use the same wallet in a browser.",
+      mayHaveSubmitted: false,
+    };
+  }
+
   // A swap that could not meet its on-chain minimum output (or maximum input)
   // reverts. Getting here without the on-chain revert is usually a simulation-
   // before-send failure, so we map it to a specific, actionable message rather
@@ -323,6 +337,25 @@ export function classifyTransactionError(
       kind: "rpc_unavailable",
       message:
         "We could not verify the transaction status because the network provider is temporarily unavailable. Your transaction may still be processing. Check its status before attempting another payment.",
+      mayHaveSubmitted: true,
+      action: "Check status",
+    };
+  }
+
+  // A submission-step failure we cannot pin to a specific cause. The execution
+  // layer tags it with the failing step id, which proves the wallet WAS asked to
+  // send — and the wallet is asked only after the user authorised. So the raw
+  // message ("Transaction error", "Unknown error", a bare -32603, …) does not
+  // establish that nothing was broadcast. Reporting it as a definite
+  // pre-submission failure (the generic fallback) both hides the real situation
+  // and offers a plain Retry, which can double-spend. Treat it as an unknown
+  // outcome: keep any hash, do not resubmit, and offer a read-only status check.
+  const stepTagged = (err as { stepId?: unknown } | undefined)?.stepId;
+  if (stepTagged) {
+    return {
+      kind: "unknown_outcome",
+      message:
+        "We could not confirm whether the transaction completed. Check the transaction status before submitting another payment.",
       mayHaveSubmitted: true,
       action: "Check status",
     };

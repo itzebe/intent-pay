@@ -418,6 +418,94 @@ describe("sendCalls", () => {
     expect(params).not.toHaveProperty("maxPriorityFeePerGas");
   });
 
+  // ── Mission 22: safe legacy `gasPrice` validation ──────────────────────────
+  // A fee the caller supplied but which is unusable must be rejected, not
+  // silently dropped: a request with no fee lets the wallet fall back to its own
+  // source, which on Trust Wallet is the unreachable node this preparation
+  // exists to avoid. Non-fee envelope fields stay best-effort (dropped).
+  it("forwards a valid positive legacy gasPrice and never both fee models", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await wallet.sendCalls([
+      { to: ADDR, data: "0x", value: "0", gasPrice: "122000000000", maxFeePerGas: "122000000000" },
+    ]);
+    const params = (provider.calls.find((c) => c.method === "eth_sendTransaction")!.params as unknown[])[0] as Record<string, string>;
+    expect(params.gasPrice).toBe("0x1c67c44400");
+    expect(params).not.toHaveProperty("maxFeePerGas");
+  });
+
+  it("rejects a zero legacy gasPrice", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await expect(
+      wallet.sendCalls([{ to: ADDR, data: "0x", value: "0", gasPrice: "0" }]),
+    ).rejects.toMatchObject({ walletCode: "wallet_no_account" });
+    // Nothing was sent.
+    expect(provider.calls.some((c) => c.method === "eth_sendTransaction")).toBe(false);
+  });
+
+  it("rejects a negative legacy gasPrice", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await expect(
+      wallet.sendCalls([{ to: ADDR, data: "0x", value: "0", gasPrice: "-1" }]),
+    ).rejects.toMatchObject({ walletCode: "wallet_no_account" });
+    expect(provider.calls.some((c) => c.method === "eth_sendTransaction")).toBe(false);
+  });
+
+  it("rejects a malformed legacy gasPrice", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await expect(
+      wallet.sendCalls([{ to: ADDR, data: "0x", value: "0", gasPrice: "not-a-number" }]),
+    ).rejects.toMatchObject({ walletCode: "wallet_no_account" });
+    expect(provider.calls.some((c) => c.method === "eth_sendTransaction")).toBe(false);
+  });
+
+  it("accepts an omitted legacy gasPrice and keeps a valid EIP-1559 pair", async () => {
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await wallet.sendCalls([
+      { to: ADDR, data: "0x", value: "0", maxFeePerGas: "122000000000", maxPriorityFeePerGas: "2000000000" },
+    ]);
+    const params = (provider.calls.find((c) => c.method === "eth_sendTransaction")!.params as unknown[])[0] as Record<string, string>;
+    expect(params.maxFeePerGas).toBe("0x1c67c44400");
+    expect(params.maxPriorityFeePerGas).toBe("0x77359400");
+    expect(params).not.toHaveProperty("gasPrice");
+  });
+
+  it("still sends a plain EIP-1559 transaction when no fee is prepared at all", async () => {
+    // No envelope fields at all: the wallet falls back to its own source, which
+    // is correct — validation must never block this path.
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    const result = await wallet.sendCalls([{ to: ADDR, data: "0x", value: "0" }]);
+    expect(result.txHashes).toHaveLength(1);
+    const params = (provider.calls.find((c) => c.method === "eth_sendTransaction")!.params as unknown[])[0] as Record<string, string>;
+    expect(params).not.toHaveProperty("gasPrice");
+    expect(params).not.toHaveProperty("maxFeePerGas");
+  });
+
+  it("rejects the whole batch before sending when any call has a zero gasPrice", async () => {
+    // A later call's bad fee must not leave an earlier call already broadcast.
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await expect(
+      wallet.sendCalls([
+        { to: ADDR, data: "0x", value: "0", gasPrice: "122000000000" },
+        { to: ADDR, data: "0x", value: "0", gasPrice: "0" },
+      ]),
+    ).rejects.toMatchObject({ walletCode: "wallet_no_account" });
+    expect(provider.calls.some((c) => c.method === "eth_sendTransaction")).toBe(false);
+  });
+
   /**
    * Mission 25. The wallet is asked to send only *after* the user authorised, so
    * a transport failure then does not prove nothing was broadcast. Trust Wallet's

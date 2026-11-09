@@ -390,6 +390,34 @@ describe("sendCalls", () => {
     expect(params.chainId).toBe("0x8f");
   });
 
+  it("forwards a legacy gasPrice and never both fee models", async () => {
+    // Trust Wallet's dApp contract is legacy: it reads `gasPrice`. A request that
+    // carries `gasPrice` AND the EIP-1559 pair is a conflicting-fee transaction,
+    // so the legacy field wins and the pair is dropped.
+    const provider = makeProvider();
+    cleanup = installLegacyWindow(provider);
+    const wallet = await Wallet.connect();
+    await wallet.sendCalls([
+      {
+        to: ADDR,
+        data: "0x",
+        value: "0",
+        gas: "21000",
+        gasPrice: "122000000000",
+        maxFeePerGas: "122000000000",
+        maxPriorityFeePerGas: "2000000000",
+        nonce: "7",
+      },
+    ]);
+    const send = provider.calls.find((c) => c.method === "eth_sendTransaction")!;
+    const params = (send.params as unknown[])[0] as Record<string, string>;
+    expect(params.gasPrice).toBe("0x1c67c44400");
+    expect(params.gas).toBe("0x5208");
+    expect(params.nonce).toBe("0x7");
+    expect(params).not.toHaveProperty("maxFeePerGas");
+    expect(params).not.toHaveProperty("maxPriorityFeePerGas");
+  });
+
   /**
    * Mission 25. The wallet is asked to send only *after* the user authorised, so
    * a transport failure then does not prove nothing was broadcast. Trust Wallet's

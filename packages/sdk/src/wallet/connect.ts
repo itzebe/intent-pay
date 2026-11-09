@@ -23,18 +23,25 @@ import {
 /**
  * A prepared call, as returned by `prepareTransaction`.
  *
- * The optional `gas` / `maxFeePerGas` / `maxPriorityFeePerGas` / `nonce` fields
- * let the caller (or the Intent Pay API) fill the transaction envelope with its
- * own RPC reads before the wallet is asked to sign. A wallet whose own node is
- * unreachable — Trust Wallet's in-app browser proxies non-native methods to
- * `monad.twnodes.com` — then has nothing left to estimate before it can sign.
- * Omit a field you could not read; the wallet will fall back to its own source.
+ * The optional `gas` / `gasPrice` / `maxFeePerGas` / `maxPriorityFeePerGas` /
+ * `nonce` fields let the caller (or the Intent Pay API) fill the transaction
+ * envelope with its own RPC reads before the wallet is asked to sign. A wallet
+ * whose own node is unreachable — Trust Wallet's in-app browser proxies
+ * non-native methods to `monad.twnodes.com` — then has nothing left to estimate
+ * before it can sign. Omit a field you could not read; the wallet will fall back
+ * to its own source.
+ *
+ * Prefer `gasPrice` for Trust Wallet: its dApp transaction contract is legacy
+ * (it reads `gasPrice` and ignores the EIP-1559 pair). Supply exactly one fee
+ * model — a request carrying both `gasPrice` and `maxFeePerGas` is rejected as a
+ * conflicting-fee transaction, so `gasPrice` wins when both are present.
  */
 export type PreparedCall = {
   to: string;
   data: string;
   value: string;
   gas?: string;
+  gasPrice?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
   nonce?: string;
@@ -472,6 +479,22 @@ function envelopeFields(call: PreparedCall): Record<string, string> {
       const n = BigInt(raw);
       if (n < 0n) continue;
       out[key] = "0x" + n.toString(16);
+    } catch {
+      /* drop a malformed value */
+    }
+  }
+  // Exactly one fee model. The legacy `gasPrice` (what Trust Wallet's dApp
+  // contract reads) wins; when it is present the EIP-1559 pair is dropped, since
+  // a request carrying both is rejected as a conflicting-fee transaction.
+  const rawGasPrice = call.gasPrice;
+  if (rawGasPrice !== undefined && rawGasPrice !== null && rawGasPrice !== "") {
+    try {
+      const n = BigInt(rawGasPrice);
+      if (n >= 0n) {
+        out.gasPrice = "0x" + n.toString(16);
+        delete out.maxFeePerGas;
+        delete out.maxPriorityFeePerGas;
+      }
     } catch {
       /* drop a malformed value */
     }
